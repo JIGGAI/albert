@@ -52,8 +52,10 @@ from albert.services import (
     create_episode,
     create_memory,
     create_working_memory,
+    delete_episode,
     delete_memory,
     finish_working_memory,
+    get_episode,
     get_memory,
     get_working_memory,
     release_lock,
@@ -82,7 +84,7 @@ app = FastAPI(
 
 
 @app.get("/v1/health/live", response_model=HealthResponse, tags=["health"])
-async def live() -> HealthResponse:
+def live() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(
         status="ok",
@@ -96,7 +98,7 @@ async def live() -> HealthResponse:
 
 
 @app.get("/v1/health/ready", response_model=HealthResponse, tags=["health"])
-async def ready(session: Session = Depends(get_session)) -> HealthResponse:
+def ready(session: Session = Depends(get_session)) -> HealthResponse:
     try:
         session.execute(text("SELECT 1"))
     except Exception as exc:
@@ -114,7 +116,7 @@ async def ready(session: Session = Depends(get_session)) -> HealthResponse:
 
 
 @app.post("/v1/episodes", response_model=EpisodeRead, status_code=201, tags=["episodes"])
-async def post_episode(
+def post_episode(
     data: EpisodeCreate,
     response: Response,
     auth: AuthContext = Depends(authenticate),
@@ -127,29 +129,29 @@ async def post_episode(
 
 
 @app.get("/v1/episodes/{episode_id}", response_model=EpisodeRead, tags=["episodes"])
-async def read_episode(
+def read_episode(
     episode_id: UUID,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ) -> Episode:
-    auth.require("memory.read")
-    statement = select(Episode).where(
-        Episode.id == episode_id, Episode.organization_id == auth.organization_id
-    )
-    if auth.workspace_id is not None:
-        statement = statement.where(Episode.workspace_id == auth.workspace_id)
-    episode = session.scalar(statement)
-    if episode is None:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    if episode.sensitivity not in auth.allowed_sensitivities():
-        raise HTTPException(status_code=404, detail="Episode not found")
+    episode = get_episode(session, auth, episode_id)
     audit(session, auth, "episode.read", resource_type="episode", resource_id=str(episode.id))
     session.commit()
     return episode
 
 
+@app.delete("/v1/episodes/{episode_id}", status_code=204, tags=["episodes"])
+def remove_episode(
+    episode_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> Response:
+    delete_episode(session, auth, episode_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.post("/v1/memories", response_model=MemoryRead, status_code=201, tags=["memories"])
-async def post_memory(
+def post_memory(
     data: MemoryCreate,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -158,7 +160,7 @@ async def post_memory(
 
 
 @app.get("/v1/memories/{memory_id}", response_model=MemoryRead, tags=["memories"])
-async def read_memory(
+def read_memory(
     memory_id: UUID,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -170,7 +172,7 @@ async def read_memory(
 
 
 @app.patch("/v1/memories/{memory_id}", response_model=MemoryRead, tags=["memories"])
-async def patch_memory(
+def patch_memory(
     memory_id: UUID,
     data: MemoryUpdate,
     auth: AuthContext = Depends(authenticate),
@@ -180,7 +182,7 @@ async def patch_memory(
 
 
 @app.delete("/v1/memories/{memory_id}", status_code=204, tags=["memories"])
-async def remove_memory(
+def remove_memory(
     memory_id: UUID,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -190,7 +192,7 @@ async def remove_memory(
 
 
 @app.post("/v1/search", response_model=SearchResponse, tags=["retrieval"])
-async def search_memories(
+def search_memories(
     data: SearchRequest,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -219,7 +221,7 @@ async def search_memories(
 
 
 @app.post("/v1/context/assemble", response_model=ContextResponse, tags=["retrieval"])
-async def assemble_context(
+def assemble_context(
     data: ContextRequest,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -286,7 +288,7 @@ def _relationship_read(relationship: Relationship) -> RelationshipRead:
 
 
 @app.post("/v1/relationships", response_model=RelationshipRead, status_code=201, tags=["graph"])
-async def post_relationship(
+def post_relationship(
     data: RelationshipCreate,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -295,7 +297,7 @@ async def post_relationship(
 
 
 @app.post("/v1/graph/query", response_model=list[RelationshipRead], tags=["graph"])
-async def query_graph(
+def query_graph(
     data: GraphQuery,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -321,7 +323,7 @@ async def query_graph(
     response_model=list[RelationshipRead],
     tags=["graph"],
 )
-async def get_subgraph(
+def get_subgraph(
     entity_id: UUID,
     query: SubgraphQuery = Depends(),
     auth: AuthContext = Depends(authenticate),
@@ -353,7 +355,7 @@ async def get_subgraph(
     status_code=201,
     tags=["working-memory"],
 )
-async def post_working_memory(
+def post_working_memory(
     data: WorkingMemoryCreate,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -380,7 +382,7 @@ async def post_working_memory(
     response_model=WorkingMemoryRead,
     tags=["working-memory"],
 )
-async def patch_working_memory(
+def patch_working_memory(
     working_id: UUID,
     data: WorkingMemoryUpdate,
     auth: AuthContext = Depends(authenticate),
@@ -394,7 +396,7 @@ async def patch_working_memory(
     response_model=WorkingMemoryRead,
     tags=["working-memory"],
 )
-async def read_working_memory(
+def read_working_memory(
     working_id: UUID,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -409,7 +411,7 @@ async def read_working_memory(
     response_model=WorkingMemoryRead,
     tags=["working-memory"],
 )
-async def complete_working_memory(
+def complete_working_memory(
     working_id: UUID,
     data: WorkingMemoryFinish,
     auth: AuthContext = Depends(authenticate),
@@ -423,7 +425,7 @@ async def complete_working_memory(
     response_model=WorkingMemoryRead,
     tags=["working-memory"],
 )
-async def fail_working_memory(
+def fail_working_memory(
     working_id: UUID,
     data: WorkingMemoryFinish,
     auth: AuthContext = Depends(authenticate),
@@ -433,7 +435,7 @@ async def fail_working_memory(
 
 
 @app.post("/v1/locks/acquire", response_model=LockRead, status_code=201, tags=["locks"])
-async def post_lock(
+def post_lock(
     data: LockAcquire,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -450,7 +452,7 @@ async def post_lock(
 
 
 @app.get("/v1/export", response_model=ExportBundle, tags=["portability"])
-async def get_export(
+def get_export(
     workspace_id: UUID | None = None,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -459,7 +461,7 @@ async def get_export(
 
 
 @app.post("/v1/import", response_model=ImportResult, tags=["portability"])
-async def post_import(
+def post_import(
     data: ImportRequest,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
@@ -468,7 +470,7 @@ async def post_import(
 
 
 @app.post("/v1/locks/{lock_id}/renew", response_model=LockRead, tags=["locks"])
-async def post_lock_renew(
+def post_lock_renew(
     lock_id: UUID,
     data: LockRenew,
     auth: AuthContext = Depends(authenticate),
@@ -492,7 +494,7 @@ async def post_lock_renew(
 
 
 @app.post("/v1/locks/{lock_id}/release", status_code=204, tags=["locks"])
-async def post_lock_release(
+def post_lock_release(
     lock_id: UUID,
     data: LockRelease,
     auth: AuthContext = Depends(authenticate),

@@ -75,7 +75,7 @@ def parse_api_key(value: str) -> tuple[str, str] | None:
     return parts[1], value
 
 
-async def authenticate(
+def authenticate(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     session: Session = Depends(get_session),
 ) -> AuthContext:
@@ -108,7 +108,7 @@ async def authenticate(
 
 
 def require_capability(capability: str):  # type: ignore[no-untyped-def]
-    async def dependency(auth: AuthContext = Depends(authenticate)) -> AuthContext:
+    def dependency(auth: AuthContext = Depends(authenticate)) -> AuthContext:
         auth.require(capability)
         return auth
 

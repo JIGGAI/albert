@@ -116,6 +116,7 @@ class Episode(Base, TimestampMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     enrichment_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     enrichment_error: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 

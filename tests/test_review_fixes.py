@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import httpx
 import pytest
@@ -136,3 +137,143 @@ async def test_api_key_last_used_is_throttled(client: httpx.AsyncClient, identit
     with SessionLocal() as session:
         record = session.scalar(select(APIKey).where(APIKey.prefix == prefix))
         assert record.last_used_at.replace(tzinfo=UTC) > stale
+
+
+def test_heuristic_extractor_produces_bounded_entity_names() -> None:
+    from albert.classifier import heuristic_classify
+
+    result = heuristic_classify(
+        "Deployment architecture\n"
+        "Albert uses PostgreSQL and depends on pgvector. The worker runs on Linux."
+    )
+    names = {entity.name for entity in result.entities}
+    assert ("Albert", "uses", "PostgreSQL") in {
+        (r.source.name, r.relation_type, r.target.name) for r in result.relationships
+    }
+    assert ("worker", "runs_on", "Linux") in {
+        (r.source.name, r.relation_type, r.target.name) for r in result.relationships
+    }
+    for name in names:
+        assert len(name.split()) <= 4, name
+        assert " uses " not in f" {name} " and " depends " not in f" {name} ", name
+
+
+async def test_vector_search_ignores_embeddings_from_other_models(
+    client: httpx.AsyncClient,
+) -> None:
+    from albert.models import Memory
+
+    created = await client.post(
+        "/v1/memories", json={"subject": "Stale vector", "content": "Stale vector marker text"}
+    )
+    memory_id = created.json()["id"]
+    drain_jobs()
+    with SessionLocal() as session:
+        memory = session.get(Memory, UUID(memory_id))
+        memory.embedding_model = "some-other-model-v9"
+        session.commit()
+    result = await client.post(
+        "/v1/search", json={"query": "Stale vector marker text", "include_graph": False}
+    )
+    hit = next(h for h in result.json()["hits"] if h["memory_id"] == memory_id)
+    assert hit["backends"] == ["lexical"]
+
+
+async def test_classifier_sensitivity_escalates_memory(
+    client: httpx.AsyncClient, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    from albert import services
+    from albert.classifier import Classification
+
+    monkeypatch.setattr(
+        services,
+        "classify",
+        lambda text: Classification(memory_type="fact", sensitivity="confidential", confidence=0.9),
+    )
+    created = await client.post("/v1/memories", json={"content": "Escalation candidate"})
+    memory_id = created.json()["id"]
+    drain_jobs()
+    hidden = await client.get(f"/v1/memories/{memory_id}")
+    assert hidden.status_code == 404
+    with SessionLocal() as session:
+        from albert.models import Memory
+
+        memory = session.get(Memory, UUID(memory_id))
+        assert memory.sensitivity == "confidential"
+        assert memory.metadata_["classification"]["original_sensitivity"] == "internal"
+
+
+async def test_classifier_never_lowers_sensitivity(
+    client: httpx.AsyncClient, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    from albert import services
+    from albert.classifier import Classification
+    from albert.models import Memory
+
+    monkeypatch.setattr(
+        services,
+        "classify",
+        lambda text: Classification(memory_type="fact", sensitivity="public", confidence=0.9),
+    )
+    created = await client.post("/v1/memories", json={"content": "Stays internal"})
+    drain_jobs()
+    with SessionLocal() as session:
+        memory = session.get(Memory, UUID(created.json()["id"]))
+        assert memory.sensitivity == "internal"
+
+
+async def test_delete_scrubs_memory_content(client: httpx.AsyncClient) -> None:
+    from albert.models import Memory
+
+    created = await client.post(
+        "/v1/memories", json={"subject": "Scrub me", "content": "Scrub this content"}
+    )
+    memory_id = created.json()["id"]
+    drain_jobs()
+    assert (await client.delete(f"/v1/memories/{memory_id}")).status_code == 204
+    with SessionLocal() as session:
+        memory = session.get(Memory, UUID(memory_id))
+        assert memory.status == "deleted"
+        assert memory.content == ""
+        assert memory.subject == ""
+
+
+async def test_delete_episode_removes_derived_memory_and_edges(
+    client: httpx.AsyncClient,
+) -> None:
+    from albert.models import Episode, Memory
+
+    created = await client.post(
+        "/v1/episodes", json={"content": "Episode Service uses Episode Store."}
+    )
+    episode_id = created.json()["id"]
+    drain_jobs()
+    assert (await client.post("/v1/graph/query", json={"query": "Episode Store"})).json()
+    with SessionLocal() as session:
+        derived = session.scalar(select(Memory).where(Memory.episode_id == UUID(episode_id)))
+        assert derived is not None
+        derived_id = derived.id
+    response = await client.delete(f"/v1/episodes/{episode_id}")
+    assert response.status_code == 204, response.text
+    assert (await client.get(f"/v1/episodes/{episode_id}")).status_code == 404
+    assert (await client.get(f"/v1/memories/{derived_id}")).status_code == 404
+    assert (await client.post("/v1/graph/query", json={"query": "Episode Store"})).json() == []
+    with SessionLocal() as session:
+        episode = session.get(Episode, UUID(episode_id))
+        assert episode is not None and episode.content == ""
+
+
+def test_endpoints_do_not_run_blocking_io_on_the_event_loop() -> None:
+    import inspect
+
+    from fastapi.routing import APIRoute
+
+    offenders = [
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute) and inspect.iscoroutinefunction(route.endpoint)
+    ]
+    assert offenders == []
+    from albert.db import get_session
+
+    assert not inspect.isasyncgenfunction(get_session)

@@ -50,6 +50,7 @@ class EpisodeRead(ORMModel):
     occurred_at: datetime
     enrichment_status: str
     enrichment_error: str | None
+    deleted_at: datetime | None
     extra: dict[str, Any]
     created_at: datetime
 

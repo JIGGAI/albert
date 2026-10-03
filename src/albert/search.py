@@ -99,11 +99,15 @@ def _vector_search(
     workspace_id: UUID | None,
     request: SearchRequest,
 ) -> list[tuple[Memory, float]]:
-    query_vector = get_embedder().embed(request.query)
+    embedder = get_embedder()
+    query_vector = embedder.embed(request.query)
     conditions = _scope_conditions(
         organization_id=organization_id, workspace_id=workspace_id, request=request
     )
+    # Vectors from another model live in a different space; comparing them to
+    # this query would rank noise. They are re-embedded by reindex-memories.
     conditions.append(Memory.embedding.is_not(None))
+    conditions.append(Memory.embedding_model == embedder.name)
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         distance = cast(Memory.embedding.op("<=>")(query_vector), Float)
         rows = session.execute(
