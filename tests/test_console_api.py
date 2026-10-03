@@ -104,3 +104,59 @@ async def test_operator_detail_reads_truncate_content(
         detail = await console.get(f"/v1/console/memories/{created.json()['id']}")
         assert detail.status_code == 200
         assert len(detail.json()["content"]) == 500
+
+
+async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-untyped-def]
+    """Drive the endpoint's generator directly: the in-memory ASGI transport
+    buffers whole responses, so an endless event stream can never complete there."""
+    import json
+    from datetime import UTC, datetime
+
+    from albert.console import stream
+    from albert.db import SessionLocal
+    from albert.models import Trace
+    from albert.security import AuthContext
+
+    _key, organization, _workspace = identity
+    with SessionLocal() as session:
+        trace = Trace(
+            kind="request",
+            name="POST /v1/search",
+            organization_id=organization.id,
+            status="ok",
+            started_at=datetime.now(UTC),
+            duration_ms=1,
+            summary={"query": "stream probe"},
+            spans=[],
+        )
+        session.add(trace)
+        session.commit()
+        trace_id = str(trace.id)
+
+    epoch = "1970-01-01T00:00:00+00:00|00000000-0000-0000-0000-000000000000"
+
+    class FakeRequest:
+        headers = {"last-event-id": epoch}
+
+    auth = AuthContext(
+        principal_id=organization.id,
+        organization_id=organization.id,
+        workspace_id=None,
+        capabilities=frozenset({"console.read"}),
+    )
+    response = stream(FakeRequest(), auth)  # type: ignore[arg-type]
+    assert response.media_type == "text/event-stream"
+    body = response.body_iterator
+    first = ""
+    async for chunk in body:
+        if not str(chunk).startswith(":"):
+            first = str(chunk)
+            break
+    await body.aclose()
+    assert first.startswith("id: ")
+    assert "\nevent: trace\ndata: {" in first
+    payload = json.loads(first.split("data: ", 1)[1].strip())
+    # From the epoch cursor the first event is the oldest trace, so only the
+    # envelope is asserted; the feed tests cover cursor semantics.
+    assert {"id", "name", "status", "started_at", "summary"} <= set(payload)
+    assert trace_id  # created above so the table is never empty here

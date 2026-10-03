@@ -7,20 +7,25 @@ the explicit detail endpoints, truncated and audited.
 
 from __future__ import annotations
 
+import json
+import threading
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.db import get_session
+from albert.db import SessionLocal, engine, get_session
 from albert.models import Entity, Job, Memory, Relationship, Trace
 from albert.security import AuthContext, authenticate
 from albert.services import audit
+from albert.trace_feed import TraceFeed, parse_event_id, trace_summary
 from albert.trace_writer import get_trace_writer
 
 router = APIRouter(prefix="/v1/console", tags=["console"])
@@ -41,19 +46,9 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _trace_summary(trace: Trace) -> dict[str, Any]:
-    return {
-        "id": str(trace.id),
-        "kind": trace.kind,
-        "name": trace.name,
-        "organization_id": _opt(trace.organization_id),
-        "principal_id": _opt(trace.principal_id),
-        "status": trace.status,
-        "http_status": trace.http_status,
-        "started_at": trace.started_at.isoformat(),
-        "duration_ms": trace.duration_ms,
-        "summary": trace.summary,
-    }
+_trace_summary = trace_summary
+_feed = TraceFeed(SessionLocal, engine)
+KEEPALIVE_SECONDS = 15
 
 
 def _parse_cursor(cursor: str) -> tuple[datetime, UUID]:
@@ -117,6 +112,33 @@ def list_traces(
         f"{items[-1].started_at.isoformat()}|{items[-1].id}" if len(rows) > limit else None
     )
     return {"items": [_trace_summary(t) for t in items], "next_cursor": next_cursor}
+
+
+@router.get("/stream")
+def stream(request: Request, _auth: AuthContext = Depends(_operator)) -> StreamingResponse:
+    """Server-sent events: one `trace` event per recorded trace, newest last."""
+    after = parse_event_id(request.headers.get("last-event-id"))
+    stop = threading.Event()
+
+    def body() -> Iterator[str]:
+        last_keepalive = time.monotonic()
+        try:
+            for event in _feed.events(after, stop):
+                if event is None:
+                    if time.monotonic() - last_keepalive >= KEEPALIVE_SECONDS:
+                        last_keepalive = time.monotonic()
+                        yield ": keepalive\n\n"
+                    continue
+                payload = json.dumps(event["data"])
+                yield f"id: {event['id']}\nevent: trace\ndata: {payload}\n\n"
+        finally:
+            stop.set()
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/traces/{trace_id}")
