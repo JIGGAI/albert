@@ -41,6 +41,11 @@ Implemented and tested:
 - Portable memory/explicit-graph export and transactional import
 - Per-caller bearer identity forwarding for HTTP MCP, verified end to end
   through the MCP session manager
+- Flight recorder: every request and worker job traced with retrieval
+  candidates and fusion math, off-thread writes, sampling and retention
+- Live trace feed over server-sent events
+- Operator console (Next.js): Live feed, trace Replay, 3D memory Explorer with
+  a time slider and retrieval-path highlighting; Playwright-covered
 - Workspace, principal, API-key listing, issuance, and revocation commands
 - Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
   ingestion, deletion, and locks

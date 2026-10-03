@@ -35,6 +35,8 @@ services:
       ALBERT_OPENAI_API_KEY: ${ALBERT_OPENAI_API_KEY:-}
       ALBERT_CLASSIFICATION_MODEL: ${ALBERT_CLASSIFICATION_MODEL:-}
       ALBERT_MIN_VECTOR_SIMILARITY: ${ALBERT_MIN_VECTOR_SIMILARITY:-0.2}
+      ALBERT_TRACE_SAMPLE_RATE: ${ALBERT_TRACE_SAMPLE_RATE:-1.0}
+      ALBERT_TRACE_RETENTION_DAYS: ${ALBERT_TRACE_RETENTION_DAYS:-14}
       HF_HOME: /var/cache/albert-models
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -88,6 +90,18 @@ services:
     command: ["albert-mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8081"]
     ports:
       - "${ALBERT_MCP_BIND:-127.0.0.1}:${ALBERT_MCP_PORT:-8081}:8081"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  console:
+    build: ./console
+    environment:
+      ALBERT_API_URL: http://api:8080
+      ALBERT_CONSOLE_API_KEY: ${ALBERT_CONSOLE_API_KEY:?set ALBERT_CONSOLE_API_KEY (albert-admin create-key --capabilities console.read,memory.read)}
+    ports:
+      - "${ALBERT_CONSOLE_BIND:-127.0.0.1}:${ALBERT_CONSOLE_PORT:-8082}:8082"
     depends_on:
       api:
         condition: service_healthy
