@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Float, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
@@ -105,7 +105,7 @@ def _vector_search(
     )
     conditions.append(Memory.embedding.is_not(None))
     if session.bind is not None and session.bind.dialect.name == "postgresql":
-        distance = Memory.embedding.op("<=>")(query_vector)
+        distance = cast(Memory.embedding.op("<=>")(query_vector), Float)
         rows = session.execute(
             select(Memory, distance.label("vector_distance"))
             .where(*conditions)
