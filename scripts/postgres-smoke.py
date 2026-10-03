@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -95,4 +96,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        message = str(exc).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(
+            f"::error title=PostgreSQL vector and graph smoke test failed::"
+            f"{type(exc).__name__}: {message}",
+            file=sys.stderr,
+        )
+        raise
