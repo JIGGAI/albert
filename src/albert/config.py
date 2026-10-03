@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     chunk_characters: int = Field(default=1500, ge=200, le=20_000)
     chunk_overlap_characters: int = Field(default=200, ge=0, le=5_000)
     max_chunks_per_memory: int = Field(default=200, ge=1, le=5_000)
+    trace_sample_rate: float = Field(default=1.0, ge=0, le=1)
+    trace_retention_days: int = Field(default=14, ge=1, le=365)
+    trace_queue_size: int = Field(default=1000, ge=10, le=100_000)
+    console_graph_cache_seconds: int = Field(default=30, ge=0, le=3600)
 
     @field_validator("api_key_pepper")
     @classmethod
