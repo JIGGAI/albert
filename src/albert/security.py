@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -17,6 +17,8 @@ from albert.db import get_session
 from albert.models import APIKey, Principal
 
 bearer = HTTPBearer(auto_error=False)
+# Writing last_used_at on every request turns a shared agent key into a hot row.
+LAST_USED_WRITE_INTERVAL = timedelta(seconds=60)
 
 
 @dataclass(frozen=True)
@@ -73,7 +75,7 @@ def parse_api_key(value: str) -> tuple[str, str] | None:
     return parts[1], value
 
 
-async def authenticate(
+def authenticate(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     session: Session = Depends(get_session),
 ) -> AuthContext:
@@ -92,8 +94,10 @@ async def authenticate(
         or not record.principal.active
     ):
         raise HTTPException(status_code=401, detail="Invalid or expired API key")
-    record.last_used_at = now
-    session.commit()
+    last_used = record.last_used_at
+    if last_used is None or now - _as_utc(last_used) >= LAST_USED_WRITE_INTERVAL:
+        record.last_used_at = now
+        session.commit()
     principal: Principal = record.principal
     return AuthContext(
         principal_id=principal.id,
@@ -104,7 +108,7 @@ async def authenticate(
 
 
 def require_capability(capability: str):  # type: ignore[no-untyped-def]
-    async def dependency(auth: AuthContext = Depends(authenticate)) -> AuthContext:
+    def dependency(auth: AuthContext = Depends(authenticate)) -> AuthContext:
         auth.require(capability)
         return auth
 

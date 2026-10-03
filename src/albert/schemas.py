@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -9,6 +10,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+def _require_visible_text(value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError("content must contain visible text")
+    return value
+
+
+MAX_JSON_FIELD_CHARACTERS = 64_000
+
+
+def _bounded_json(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is not None and len(json.dumps(value, default=str)) > MAX_JSON_FIELD_CHARACTERS:
+        raise ValueError(f"JSON field exceeds {MAX_JSON_FIELD_CHARACTERS} serialized characters")
+    return value
 
 
 class ScopeFields(BaseModel):
@@ -26,6 +42,9 @@ class EpisodeCreate(ScopeFields):
     occurred_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
 
 class EpisodeRead(ORMModel):
     id: UUID
@@ -42,6 +61,7 @@ class EpisodeRead(ORMModel):
     occurred_at: datetime
     enrichment_status: str
     enrichment_error: str | None
+    deleted_at: datetime | None
     extra: dict[str, Any]
     created_at: datetime
 
@@ -55,6 +75,9 @@ class MemoryCreate(ScopeFields):
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
     @field_validator("valid_until")
     @classmethod
@@ -73,6 +96,9 @@ class MemoryUpdate(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     valid_until: datetime | None = None
     metadata: dict[str, Any] | None = None
+
+    _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
 class MemoryRead(ORMModel):
@@ -152,6 +178,8 @@ class RelationshipCreate(BaseModel):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
     @model_validator(mode="after")
     def validate_interval(self):  # type: ignore[no-untyped-def]
         if (
@@ -187,6 +215,12 @@ class GraphQuery(BaseModel):
     temporal_as_of: datetime | None = None
 
 
+class SubgraphQuery(BaseModel):
+    hops: int = Field(default=2, ge=1, le=5)
+    limit: int = Field(default=50, ge=1, le=200)
+    temporal_as_of: datetime | None = None
+
+
 class WorkingMemoryCreate(BaseModel):
     task_id: str = Field(min_length=1, max_length=300)
     description: str = Field(min_length=1, max_length=50_000)
@@ -200,6 +234,8 @@ class WorkingMemoryCreate(BaseModel):
 class WorkingMemoryUpdate(BaseModel):
     progress: dict[str, Any] | None = None
     expires_in_seconds: int | None = Field(default=None, ge=60, le=604800)
+
+    _bounded_progress = field_validator("progress")(_bounded_json)
 
 
 class WorkingMemoryFinish(BaseModel):
@@ -271,6 +307,8 @@ class MemoryExport(BaseModel):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
 
 class RelationshipExport(BaseModel):
     workspace_ref: UUID | None = None
@@ -283,6 +321,8 @@ class RelationshipExport(BaseModel):
     valid_from: datetime
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
 class ExportBundle(BaseModel):
@@ -301,6 +341,7 @@ class ImportRequest(BaseModel):
 
 class ImportResult(BaseModel):
     memories_created: int
+    memories_skipped: int = 0
     relationships_created: int
     workspaces_created: int
 

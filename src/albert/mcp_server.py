@@ -209,6 +209,13 @@ async def memory_forget(memory_id: str) -> dict[str, bool]:
 
 
 @mcp.tool()
+async def memory_forget_episode(episode_id: str) -> dict[str, bool]:
+    """Delete a canonical episode together with every memory and edge derived from it."""
+    await _request("DELETE", f"/v1/episodes/{episode_id}")
+    return {"deleted": True}
+
+
+@mcp.tool()
 async def memory_query_graph(query: str, limit: int = 50) -> list[dict[str, Any]]:
     """Search temporally valid entity relationships."""
     return await _request("POST", "/v1/graph/query", {"query": query, "limit": limit})

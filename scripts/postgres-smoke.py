@@ -27,11 +27,19 @@ def main() -> None:
         hnsw = session.scalar(
             text(
                 "SELECT EXISTS (SELECT 1 FROM pg_indexes "
-                "WHERE indexname = 'ix_memories_embedding_hnsw')"
+                "WHERE indexname = 'ix_memory_chunks_embedding_hnsw')"
             )
         )
         if not extension or not hnsw:
             raise RuntimeError("pgvector extension or HNSW index is unavailable")
+        fts_index = session.scalar(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes "
+                "WHERE indexname = 'ix_memories_search_vector')"
+            )
+        )
+        if not fts_index:
+            raise RuntimeError("stored full-text search index is missing")
         nulls_not_distinct = session.scalar(
             text(
                 "SELECT index.indnullsnotdistinct FROM pg_index AS index "
@@ -72,7 +80,7 @@ def main() -> None:
         second_workspace = Workspace(organization_id=organization.id, name="Second")
         session.add(second_workspace)
         session.commit()
-        first_episode = create_episode(
+        first_episode, _ = create_episode(
             session,
             organization_auth,
             EpisodeCreate(
@@ -81,7 +89,7 @@ def main() -> None:
                 source_uri="smoke://shared",
             ),
         )
-        second_episode = create_episode(
+        second_episode, _ = create_episode(
             session,
             organization_auth,
             EpisodeCreate(

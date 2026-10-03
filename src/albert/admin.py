@@ -3,14 +3,30 @@ from __future__ import annotations
 from uuid import UUID
 
 import typer
-from sqlalchemy import select, text
+from sqlalchemy import Engine, inspect, or_, select, text
 
-from albert.db import SessionLocal, initialize_database
+from albert.db import SessionLocal, engine, initialize_database
 from albert.embeddings import get_embedder
 from albert.models import APIKey, Job, Memory, Organization, Principal, Workspace
 from albert.security import issue_api_key
 
 app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
+
+
+class SchemaNotReady(RuntimeError):
+    pass
+
+
+def ensure_schema_ready(engine: Engine) -> None:
+    """Refuse to run against a database Alembic has not built.
+
+    Creating tables here would leave no alembic_version row and make the next
+    `alembic upgrade head` fail on tables that already exist.
+    """
+    if not inspect(engine).has_table("memories"):
+        raise SchemaNotReady(
+            "Database schema is missing; run `alembic upgrade head` before this command"
+        )
 
 ALL_CAPABILITIES = [
     "memory.read",
@@ -20,6 +36,7 @@ ALL_CAPABILITIES = [
     "memory.import",
     "graph.query",
     "graph.write",
+    "working_memory.read",
     "working_memory.write",
     "locks.acquire",
     "admin",
@@ -28,9 +45,13 @@ ALL_CAPABILITIES = [
 
 @app.command("init-db")
 def init_db() -> None:
-    """Create database extensions and tables for development."""
+    """Create tables directly for throwaway development databases only.
+
+    Deployed databases must use `alembic upgrade head`; this command records no
+    migration version.
+    """
     initialize_database()
-    typer.echo("Database initialized")
+    typer.echo("Database initialized (development only; no Alembic version recorded)")
 
 
 @app.command()
@@ -40,7 +61,10 @@ def bootstrap(
     principal: str = typer.Option("Administrator", help="Administrator display name"),
 ) -> None:
     """Create the first tenant and print its administrator key exactly once."""
-    initialize_database()
+    try:
+        ensure_schema_ready(engine)
+    except SchemaNotReady as exc:
+        raise typer.BadParameter(str(exc)) from exc
     with SessionLocal() as session:
         org = session.scalar(select(Organization).where(Organization.name == organization))
         if org is None:
@@ -249,7 +273,7 @@ def validate_runtime(
                     "SELECT format_type(attribute.atttypid, attribute.atttypmod) "
                     "FROM pg_attribute AS attribute "
                     "JOIN pg_class AS relation ON relation.oid = attribute.attrelid "
-                    "WHERE relation.relname = 'memories' "
+                    "WHERE relation.relname = 'memory_chunks' "
                     "AND attribute.attname = 'embedding' "
                     "AND NOT attribute.attisdropped"
                 )
@@ -264,7 +288,7 @@ def validate_runtime(
             hnsw_exists = session.scalar(
                 text(
                     "SELECT EXISTS (SELECT 1 FROM pg_indexes "
-                    "WHERE indexname = 'ix_memories_embedding_hnsw')"
+                    "WHERE indexname = 'ix_memory_chunks_embedding_hnsw')"
                 )
             )
             if not hnsw_exists:
@@ -285,16 +309,15 @@ def reindex_memories(
         False, "--all", help="Re-enrich every active memory, including current embeddings"
     ),
 ) -> None:
-    """Queue active memories whose embedding is absent or uses another model."""
+    """Queue active memories whose chunks are absent or embedded by another model."""
     embedder = get_embedder()
     with SessionLocal() as session:
         statement = select(Memory).where(Memory.status == "active")
-        memories = list(session.scalars(statement))
-        selected = [
-            memory
-            for memory in memories
-            if all_memories or memory.embedding is None or memory.embedding_model != embedder.name
-        ]
+        if not all_memories:
+            statement = statement.where(
+                or_(Memory.embedding_model.is_(None), Memory.embedding_model != embedder.name)
+            )
+        selected = list(session.scalars(statement))
         for memory in selected:
             session.add(
                 Job(

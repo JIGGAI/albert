@@ -67,6 +67,23 @@ dimensions requires a deliberate database migration before use. Albert caps
 embeddings at 2,000 dimensions because pgvector's HNSW `vector` operator class
 has that limit.
 
+## Chunking
+
+Every memory is embedded as a sequence of overlapping chunks, so long episodes
+are neither rejected by remote embedders with input limits nor silently
+truncated by local models:
+
+```dotenv
+ALBERT_CHUNK_CHARACTERS=1500
+ALBERT_CHUNK_OVERLAP_CHARACTERS=200
+ALBERT_MAX_CHUNKS_PER_MEMORY=200
+```
+
+Chunks follow paragraph and sentence boundaries where possible. A memory that
+exceeds the chunk cap is indexed up to the cap and marked
+`metadata.embedding.truncated = true`. Vector search returns the best-matching
+chunk per memory and reports its `chunk_index`.
+
 `ALBERT_MIN_VECTOR_SIMILARITY` defaults to `0.2`. Results below the threshold
 are omitted instead of presenting an unrelated nearest neighbor as relevant.
 Tune it with a representative evaluation corpus when changing embedding models.
@@ -102,7 +119,10 @@ docker compose run --rm api albert-admin reindex-memories
 
 Use `--all` to force complete graph and embedding regeneration. The worker
 processes queued jobs and expires extracted graph edges that are no longer
-present.
+present. Until a memory is re-embedded, vector search skips its old chunks:
+vectors from a different model are never compared with the active model's
+query vector, so results degrade to lexical and graph for those memories
+rather than ranking noise.
 
 Changing vector dimensions changes the PostgreSQL column type and HNSW index.
 Do not change `ALBERT_EMBEDDING_DIMENSIONS` on an existing database without a

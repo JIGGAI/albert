@@ -92,6 +92,7 @@ class Episode(Base, TimestampMixin):
             "uq_episodes_scope_content_source",
             "organization_id",
             "workspace_id",
+            "owner_principal_id",
             "content_hash",
             "source_uri",
             unique=True,
@@ -115,6 +116,7 @@ class Episode(Base, TimestampMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     enrichment_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     enrichment_error: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
@@ -143,11 +145,38 @@ class Memory(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Model that produced this memory's chunk embeddings; None until enriched.
+    embedding_model: Mapped[str | None] = mapped_column(String(300))
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class MemoryChunk(Base):
+    """A retrievable slice of a memory with its embedding.
+
+    Derived and rebuildable: enrichment replaces a memory's chunks wholesale.
+    organization_id and workspace_id are denormalized so the vector index can
+    be filtered without a join.
+    """
+
+    __tablename__ = "memory_chunks"
+    __table_args__ = (
+        UniqueConstraint("memory_id", "chunk_index", name="uq_memory_chunks_memory_index"),
+        Index("ix_memory_chunks_scope_model", "organization_id", "embedding_model"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float] | None] = mapped_column(
         VectorOrJSON(get_settings().embedding_dimensions)
     )
-    embedding_model: Mapped[str | None] = mapped_column(String(300))
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    embedding_model: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Entity(Base, TimestampMixin):

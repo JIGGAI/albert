@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     lock_default_ttl_seconds: int = Field(default=900, ge=10, le=86400)
     max_search_limit: int = Field(default=100, ge=1, le=500)
     min_vector_similarity: float = Field(default=0.2, ge=-1, le=1)
+    chunk_characters: int = Field(default=1500, ge=200, le=20_000)
+    chunk_overlap_characters: int = Field(default=200, ge=0, le=5_000)
+    max_chunks_per_memory: int = Field(default=200, ge=1, le=5_000)
 
     @field_validator("api_key_pepper")
     @classmethod

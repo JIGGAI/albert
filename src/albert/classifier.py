@@ -46,25 +46,46 @@ def contains_likely_secret(text: str) -> bool:
     return any(pattern.search(text) for pattern in _SECRET_PATTERNS)
 
 
-_RELATION_PATTERNS = (
-    (re.compile(r"\b(.{1,80}?)\s+depends on\s+(.{1,80}?)(?:[.;]|$)", re.I), "depends_on"),
-    (re.compile(r"\b(.{1,80}?)\s+integrates with\s+(.{1,80}?)(?:[.;]|$)", re.I), "integrates_with"),
-    (re.compile(r"\b(.{1,80}?)\s+runs on\s+(.{1,80}?)(?:[.;]|$)", re.I), "runs_on"),
-    (re.compile(r"\b(.{1,80}?)\s+belongs to\s+(.{1,80}?)(?:[.;]|$)", re.I), "belongs_to"),
-    (re.compile(r"\b(.{1,80}?)\s+is owned by\s+(.{1,80}?)(?:[.;]|$)", re.I), "owned_by"),
-    (re.compile(r"\b(.{1,80}?)\s+uses\s+(.{1,80}?)(?:[.;]|$)", re.I), "uses"),
-    (re.compile(r"\b(.{1,80}?)\s+owns\s+(.{1,80}?)(?:[.;]|$)", re.I), "owns"),
-    (re.compile(r"\b(.{1,80}?)\s+manages\s+(.{1,80}?)(?:[.;]|$)", re.I), "manages"),
-    (re.compile(r"\b(.{1,80}?)\s+supports\s+(.{1,80}?)(?:[.;]|$)", re.I), "supports"),
-    (re.compile(r"\b(.{1,80}?)\s+prefers\s+(.{1,80}?)(?:[.;]|$)", re.I), "prefers"),
-    (re.compile(r"\b(.{1,80}?)\s+works on\s+(.{1,80}?)(?:[.;]|$)", re.I), "works_on"),
+_RELATION_PHRASES = (
+    ("depends on", "depends_on"),
+    ("integrates with", "integrates_with"),
+    ("runs on", "runs_on"),
+    ("belongs to", "belongs_to"),
+    ("is owned by", "owned_by"),
+    ("uses", "uses"),
+    ("owns", "owns"),
+    ("manages", "manages"),
+    ("supports", "supports"),
+    ("prefers", "prefers"),
+    ("works on", "works_on"),
 )
+# An entity is one to four bare tokens. Clauses are split on punctuation and
+# coordinating conjunctions first so one clause carries at most one relation and
+# the captured names cannot swallow neighbouring clauses.
+_ENTITY = r"((?:[\w.-]+\s+){0,3}[\w.-]+?)"
+_DETERMINER = r"(?:(?:the|a|an|our|their|its)\s+)?"
+_TRAILER = r"(?:\s+(?:for|to|in|on|with|as|at|by|since|because|when|via)\b.*)?"
+_RELATION_PATTERNS = tuple(
+    (
+        re.compile(
+            rf"^{_DETERMINER}{_ENTITY}\s+{phrase}\s+{_DETERMINER}{_ENTITY}{_TRAILER}$", re.I
+        ),
+        relation_type,
+    )
+    for phrase, relation_type in _RELATION_PHRASES
+)
+_CLAUSE_SPLIT = re.compile(r"[.;:!?\n]+|,\s+|\s+(?:and|but|while|whereas)\s+", re.I)
+_MAX_ENTITY_WORDS = 4
 
 
 def _clean_entity(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" \t\n\r,:()[]{}\"'")
     words = value.split()
-    return " ".join(words[-10:])[:500]
+    return " ".join(words[:_MAX_ENTITY_WORDS])[:500]
+
+
+def _clauses(text: str) -> list[str]:
+    return [clause.strip() for clause in _CLAUSE_SPLIT.split(text) if clause and clause.strip()]
 
 
 def heuristic_classify(text: str) -> Classification:
@@ -82,16 +103,22 @@ def heuristic_classify(text: str) -> Classification:
 
     relationships: list[ExtractedRelationship] = []
     entities: dict[str, ExtractedEntity] = {}
-    for pattern, relation_type in _RELATION_PATTERNS:
-        for match in pattern.finditer(text):
+    for clause in _clauses(text):
+        for pattern, relation_type in _RELATION_PATTERNS:
+            match = pattern.match(clause)
+            if match is None:
+                continue
             source_name, target_name = (_clean_entity(value) for value in match.groups())
             if not source_name or not target_name:
+                continue
+            if source_name.casefold() == target_name.casefold():
                 continue
             source = entities.setdefault(source_name.casefold(), ExtractedEntity(source_name))
             target = entities.setdefault(target_name.casefold(), ExtractedEntity(target_name))
             relationships.append(
                 ExtractedRelationship(source, relation_type, target, confidence=0.65)
             )
+            break
     return Classification(
         memory_type=memory_type,
         sensitivity="internal",

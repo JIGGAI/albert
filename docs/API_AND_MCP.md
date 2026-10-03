@@ -37,7 +37,29 @@ curl --fail-with-body \
 ```
 
 Search responses identify the contributing backends and disclose degradation.
-Context assembly returns a bounded text block plus structured citations.
+A vector hit also reports `metadata.chunk_index`, the chunk of the memory that
+matched best. Context assembly returns a bounded text block plus structured
+citations.
+
+## Episodes and deletion
+
+`POST /v1/episodes` is idempotent per principal: re-posting the same content
+and `source_uri` from the same API key returns the existing episode with
+status `200` instead of `201`. Another principal posting identical text gets its
+own episode; nothing about other principals' episodes is disclosed.
+
+`DELETE /v1/memories/{id}` scrubs the memory's subject, content, metadata and
+chunks and closes its extracted relationships. `DELETE /v1/episodes/{id}` does
+the same for the episode and every memory derived from it. Both need
+`memory.delete`.
+
+## Capabilities
+
+`memory.read`, `memory.write`, `memory.delete`, `memory.export`,
+`memory.import`, `graph.query`, `graph.write`, `working_memory.read`,
+`working_memory.write`, `locks.acquire`, `memory.confidential`,
+`memory.restricted`, and `admin`. Reading working memory needs
+`working_memory.read` or `working_memory.write`.
 
 ## Portability
 
@@ -46,8 +68,10 @@ explicit graph relationships in the versioned `albert-export-v1` format. Derived
 relationships and embeddings are intentionally omitted and rebuilt by the
 destination worker.
 
-`POST /v1/import` accepts that bundle transactionally. An optional
-`workspace_id` flattens the bundle into one destination workspace; an
+`POST /v1/import` accepts that bundle transactionally and is idempotent: a
+memory already imported from the same source organization and `ref` is reused
+rather than duplicated, and the result reports it under `memories_skipped`. An
+optional `workspace_id` flattens the bundle into one destination workspace; an
 organization-scoped importer can omit it to recreate or match workspaces by
 name. Export and import require `memory.export` and `memory.import`
 respectively.
@@ -74,6 +98,7 @@ Tools include:
 - `memory_get`
 - `memory_update`
 - `memory_get_episode`
+- `memory_forget_episode`
 - `memory_search`
 - `memory_assemble_context`
 - `memory_forget`

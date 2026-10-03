@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import Generator
 
 from sqlalchemy import JSON, Engine, create_engine, event, text
 from sqlalchemy.engine import Dialect
@@ -52,7 +52,9 @@ engine = _make_engine()
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 
 
-async def get_session() -> AsyncGenerator[Session, None]:
+def get_session() -> Generator[Session, None, None]:
+    """Sync session dependency: FastAPI runs sync dependencies and handlers in
+    its threadpool, so blocking database and provider I/O never stalls the loop."""
     with SessionLocal() as session:
         yield session
 

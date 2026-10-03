@@ -63,6 +63,19 @@ Endpoints:
 - OpenAPI UI: `http://127.0.0.1:8080/docs`
 - MCP streamable HTTP: `http://127.0.0.1:8081/mcp`
 
+## Upgrading to 0.3
+
+Migration `0003` moves embeddings from `memories` to a `memory_chunks` table and
+clears every memory's `embedding_model`. After `alembic upgrade head`, queue the
+re-embedding once:
+
+```bash
+docker compose run --rm api albert-admin reindex-memories
+```
+
+Lexical and graph retrieval work immediately; vector results return as the
+worker processes the queue.
+
 ## Semantic embeddings
 
 The dependency-free `hashing` provider is suitable for development and exact
