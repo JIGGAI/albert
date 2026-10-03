@@ -8,8 +8,16 @@ import pytest
 from albert.db import SessionLocal, engine
 from albert.models import Trace
 from albert.trace_feed import TraceFeed
+from albert.trace_writer import get_trace_writer
 
 pytestmark = pytest.mark.anyio
+
+
+def _feed() -> TraceFeed:
+    # Other tests leave traces queued in the shared background writer; drain
+    # them first so nothing lands between subscribing and the inserts below.
+    get_trace_writer().flush()
+    return TraceFeed(SessionLocal, engine, "sqlite://")
 
 
 def _insert(name: str, started_at: datetime | None = None) -> Trace:
@@ -36,7 +44,7 @@ async def _next_event(events):  # type: ignore[no-untyped-def]
 
 
 async def test_feed_delivers_traces_inserted_after_subscription() -> None:
-    feed = TraceFeed(SessionLocal, engine, "sqlite://")
+    feed = _feed()
     before = _insert("before-subscribe")
     events = feed.events(after=(before.written_at, before.id), poll_seconds=0.05)
     inserted = _insert("after-subscribe")
@@ -47,7 +55,7 @@ async def test_feed_delivers_traces_inserted_after_subscription() -> None:
 
 
 async def test_feed_backfills_from_last_event_id() -> None:
-    feed = TraceFeed(SessionLocal, engine, "sqlite://")
+    feed = _feed()
     first = _insert("backfill-1")
     second = _insert("backfill-2")
     events = feed.events(after=(first.written_at, first.id), poll_seconds=0.05)
@@ -58,7 +66,7 @@ async def test_feed_backfills_from_last_event_id() -> None:
 
 
 async def test_feed_without_cursor_starts_at_now() -> None:
-    feed = TraceFeed(SessionLocal, engine, "sqlite://")
+    feed = _feed()
     _insert("historic")
     events = feed.events(after=None, poll_seconds=0.05)
     fresh = _insert("live")
@@ -71,7 +79,7 @@ async def test_feed_without_cursor_starts_at_now() -> None:
 async def test_feed_delivers_a_slow_trace_that_started_before_a_delivered_one() -> None:
     """Rows land in completion order; a request that started earlier but finished
     later must still reach the feed (worker jobs and slow searches depend on it)."""
-    feed = TraceFeed(SessionLocal, engine, "sqlite://")
+    feed = _feed()
     _insert("fast", started_at=datetime.now(UTC))
     events = feed.events(after=None, poll_seconds=0.05)
     slow = _insert("slow", started_at=datetime.now(UTC) - timedelta(seconds=30))
