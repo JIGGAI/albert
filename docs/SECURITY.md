@@ -22,6 +22,8 @@ make supplied memory content trustworthy.
 - Only a peppered HMAC-SHA256 digest is stored.
 - Keys are displayed once, scoped to capabilities, revocable, and optionally
   expiring.
+- Streamable HTTP MCP requires a caller bearer key and forwards that same
+  identity to REST; stdio uses its process-local `ALBERT_MCP_API_KEY`.
 - Lock tokens are stored using the same one-way construction.
 - Secrets belong in environment-backed secret management, never memory.
 
@@ -51,4 +53,3 @@ resources.
 - Signed container images and an SBOM
 - Tamper-evident external audit retention
 - Formal content scanning and customer-managed encryption keys
-

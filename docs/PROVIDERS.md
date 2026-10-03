@@ -51,8 +51,8 @@ Use any endpoint implementing the OpenAI embeddings contract:
 ALBERT_INSTALL_SEMANTIC=false
 ALBERT_EMBEDDING_PROVIDER=openai-compatible
 ALBERT_EMBEDDING_MODEL=text-embedding-3-small
-ALBERT_EMBEDDING_DIMENSIONS=1536
-ALBERT_EMBEDDING_REQUEST_DIMENSIONS=false
+ALBERT_EMBEDDING_DIMENSIONS=384
+ALBERT_EMBEDDING_REQUEST_DIMENSIONS=true
 ALBERT_OPENAI_BASE_URL=https://api.openai.com/v1
 ALBERT_OPENAI_API_KEY=<secret-store value>
 ```
@@ -60,10 +60,16 @@ ALBERT_OPENAI_API_KEY=<secret-store value>
 The startup probe performs one embedding request and refuses to start if the
 provider fails or returns the wrong number of dimensions.
 
-Set `ALBERT_EMBEDDING_REQUEST_DIMENSIONS=true` only when the provider supports
-the optional OpenAI `dimensions` request field and the model should emit a
-non-default size. Albert caps embeddings at 2,000 dimensions because pgvector's
-HNSW `vector` operator class has that limit.
+The immutable Albert schema uses 384 dimensions. Set
+`ALBERT_EMBEDDING_REQUEST_DIMENSIONS=true` only when the provider supports the
+optional OpenAI `dimensions` request field. A provider that cannot emit 384
+dimensions requires a deliberate database migration before use. Albert caps
+embeddings at 2,000 dimensions because pgvector's HNSW `vector` operator class
+has that limit.
+
+`ALBERT_MIN_VECTOR_SIMILARITY` defaults to `0.2`. Results below the threshold
+are omitted instead of presenting an unrelated nearest neighbor as relevant.
+Tune it with a representative evaluation corpus when changing embedding models.
 
 ## Model-based classification and graph extraction
 

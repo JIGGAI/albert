@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS runtime
+FROM python:3.12.15-slim-bookworm AS runtime
 
 ARG ALBERT_INSTALL_SEMANTIC=false
 
@@ -9,14 +9,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd --system albert && useradd --system --gid albert --home /app albert
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml constraints.txt README.md ./
 COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
 RUN if [ "$ALBERT_INSTALL_SEMANTIC" = "true" ]; then \
-      pip install '.[semantic]'; \
+      pip install --constraint constraints.txt '.[semantic]'; \
     else \
-      pip install .; \
+      pip install --constraint constraints.txt .; \
     fi
 
 USER albert

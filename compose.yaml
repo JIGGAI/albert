@@ -7,11 +7,11 @@ x-albert-build: &albert-build
 
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:0.8.6-pg17-bookworm
     environment:
       POSTGRES_DB: albert
       POSTGRES_USER: albert
-      POSTGRES_PASSWORD: ${ALBERT_POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${ALBERT_POSTGRES_PASSWORD:?set ALBERT_POSTGRES_PASSWORD}
     volumes:
       - albert-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
   migrate:
     build: *albert-build
     environment: &albert-env
-      ALBERT_DATABASE_URL: postgresql+psycopg://albert:${ALBERT_POSTGRES_PASSWORD:-change-me}@db:5432/albert
+      ALBERT_DATABASE_URL: postgresql+psycopg://albert:${ALBERT_POSTGRES_PASSWORD:?set ALBERT_POSTGRES_PASSWORD}@db:5432/albert
       ALBERT_API_KEY_PEPPER: ${ALBERT_API_KEY_PEPPER:?set ALBERT_API_KEY_PEPPER}
       ALBERT_EMBEDDING_PROVIDER: ${ALBERT_EMBEDDING_PROVIDER:-hashing}
       ALBERT_EMBEDDING_DIMENSIONS: ${ALBERT_EMBEDDING_DIMENSIONS:-384}
@@ -34,6 +34,7 @@ services:
       ALBERT_OPENAI_BASE_URL: ${ALBERT_OPENAI_BASE_URL:-https://api.openai.com/v1}
       ALBERT_OPENAI_API_KEY: ${ALBERT_OPENAI_API_KEY:-}
       ALBERT_CLASSIFICATION_MODEL: ${ALBERT_CLASSIFICATION_MODEL:-}
+      ALBERT_MIN_VECTOR_SIMILARITY: ${ALBERT_MIN_VECTOR_SIMILARITY:-0.2}
       HF_HOME: /var/cache/albert-models
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -58,7 +59,7 @@ services:
     volumes:
       - albert-model-cache:/var/cache/albert-models
     ports:
-      - "${ALBERT_API_PORT:-8080}:8080"
+      - "${ALBERT_API_BIND:-127.0.0.1}:${ALBERT_API_PORT:-8080}:8080"
     depends_on:
       runtime-check:
         condition: service_completed_successfully
@@ -83,12 +84,10 @@ services:
   mcp:
     build: *albert-build
     environment:
-      <<: *albert-env
       ALBERT_API_URL: http://api:8080
-      ALBERT_MCP_API_KEY: ${ALBERT_MCP_API_KEY:-}
     command: ["albert-mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8081"]
     ports:
-      - "${ALBERT_MCP_PORT:-8081}:8081"
+      - "${ALBERT_MCP_BIND:-127.0.0.1}:${ALBERT_MCP_PORT:-8081}:8081"
     depends_on:
       api:
         condition: service_healthy

@@ -39,12 +39,25 @@ curl --fail-with-body \
 Search responses identify the contributing backends and disclose degradation.
 Context assembly returns a bounded text block plus structured citations.
 
+## Portability
+
+`GET /v1/export` returns authorized active memories, workspace names, and
+explicit graph relationships in the versioned `albert-export-v1` format. Derived
+relationships and embeddings are intentionally omitted and rebuilt by the
+destination worker.
+
+`POST /v1/import` accepts that bundle transactionally. An optional
+`workspace_id` flattens the bundle into one destination workspace; an
+organization-scoped importer can omit it to recreate or match workspaces by
+name. Export and import require `memory.export` and `memory.import`
+respectively.
+
 ## MCP
 
 The deployed MCP endpoint is `/mcp` using streamable HTTP. Configure a compatible
-client with the URL exposed by your TLS reverse proxy. The gateway authenticates
-to Albert using `ALBERT_MCP_API_KEY`; use a dedicated principal rather than a
-human administrator key.
+client with the URL exposed by your TLS reverse proxy and send that client's
+Albert API key as the HTTP bearer credential. The gateway forwards the key to
+REST, preserving caller capability scope, revocation, and audit identity.
 
 For local stdio operation:
 
@@ -75,6 +88,8 @@ Tools include:
 - `memory_lock_acquire`
 - `memory_lock_renew`
 - `memory_lock_release`
+- `memory_export`
+- `memory_import`
 
 The MCP implementation is a client of the REST service; it has no independent
 database or authorization rules.
@@ -94,6 +109,6 @@ and operating guidance:
 - [multi-agent handoffs](integrations/multi-agent-handoffs.md)
 - [troubleshooting](integrations/troubleshooting.md)
 
-The current streamable-HTTP MCP gateway uses one server-side Albert credential
-for all callers and does not authenticate individual remote clients. Use stdio
-or a protected private endpoint until per-request identity is implemented.
+HTTP MCP rejects anonymous requests. Keep API keys in the client's secret store,
+use one principal per independently trusted caller, and require TLS for every
+non-loopback connection.

@@ -12,9 +12,9 @@ Give each independently trusted automation its own Albert principal or key when
 possible. This improves revocation, capability scoping, and audit attribution.
 Do not share a human administrator key.
 
-The current HTTP MCP gateway collapses all callers behind its single
-`ALBERT_MCP_API_KEY`. For distinct audit identity, use separate gateway
-instances and keys, or connect each agent through local stdio with its own key.
+HTTP MCP forwards each caller's bearer key to Albert. Assign separate principals
+or keys to independently trusted agents so audit identity and revocation remain
+distinct. Local stdio clients supply their key through `ALBERT_MCP_API_KEY`.
 
 ## Starting work
 
@@ -24,9 +24,9 @@ Use a globally recognizable task id such as:
 <agent>-<UTC timestamp>-<short task name>
 ```
 
-Start working memory with the intended resource. Acquire the lock separately
-and associate `working_memory_id` when the caller needs the returned token for
-renewal. Keep the token and fence in ephemeral process state only.
+Start working memory with the intended resource and `acquire_lock: true` when an
+atomic lease is required. The response includes the token and fence. Keep both
+in ephemeral process state only.
 
 ## Progress payload
 

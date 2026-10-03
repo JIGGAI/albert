@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import os
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
+import uvicorn
 from mcp.server import MCPServer
+from starlette.responses import JSONResponse
 
 from albert import __version__
 
@@ -15,12 +18,44 @@ mcp = MCPServer(
     version=__version__,
 )
 
+_request_api_key: ContextVar[str | None] = ContextVar("albert_mcp_request_api_key", default=None)
+
+
+class ForwardBearerAuth:
+    """Require an Albert bearer key and make it available to the REST adapter."""
+
+    def __init__(self, app):  # type: ignore[no-untyped-def]
+        self.app = app
+
+    async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        authorization = headers.get(b"authorization", b"").decode("latin-1")
+        scheme, _, value = authorization.partition(" ")
+        if scheme.casefold() != "bearer" or not value:
+            response = JSONResponse(
+                {"detail": "Bearer API key required"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await response(scope, receive, send)
+            return
+        token = _request_api_key.set(value)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request_api_key.reset(token)
+
 
 def _settings() -> tuple[str, str]:
     url = os.environ.get("ALBERT_API_URL", "http://127.0.0.1:8080").rstrip("/")
-    key = os.environ.get("ALBERT_MCP_API_KEY", "")
+    key = _request_api_key.get() or os.environ.get("ALBERT_MCP_API_KEY", "")
     if not key:
-        raise RuntimeError("ALBERT_MCP_API_KEY is required")
+        raise RuntimeError(
+            "An HTTP Authorization bearer key or ALBERT_MCP_API_KEY for stdio is required"
+        )
     return url, key
 
 
@@ -220,6 +255,7 @@ async def working_memory_start(
     resource_type: str | None = None,
     resource_ref: str | None = None,
     expires_in_seconds: int = 7200,
+    acquire_lock: bool = False,
 ) -> dict[str, Any]:
     """Start mutable task coordination state."""
     return await _request(
@@ -231,8 +267,22 @@ async def working_memory_start(
             "resource_type": resource_type,
             "resource_ref": resource_ref,
             "expires_in_seconds": expires_in_seconds,
+            "acquire_lock": acquire_lock,
         },
     )
+
+
+@mcp.tool()
+async def memory_export(workspace_id: str | None = None) -> dict[str, Any]:
+    """Export authorized durable memories and explicit graph relationships."""
+    suffix = f"?workspace_id={workspace_id}" if workspace_id else ""
+    return await _request("GET", f"/v1/export{suffix}")
+
+
+@mcp.tool()
+async def memory_import(bundle: dict[str, Any], workspace_id: str | None = None) -> dict[str, Any]:
+    """Import an Albert export bundle, optionally flattening it into one workspace."""
+    return await _request("POST", "/v1/import", {"bundle": bundle, "workspace_id": workspace_id})
 
 
 @mcp.tool()
@@ -254,9 +304,7 @@ async def working_memory_get(working_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def working_memory_complete(
-    working_id: str, consolidation_notes: str = ""
-) -> dict[str, Any]:
+async def working_memory_complete(working_id: str, consolidation_notes: str = "") -> dict[str, Any]:
     """Complete task coordination state and release associated locks."""
     return await _request(
         "POST",
@@ -266,9 +314,7 @@ async def working_memory_complete(
 
 
 @mcp.tool()
-async def working_memory_fail(
-    working_id: str, consolidation_notes: str = ""
-) -> dict[str, Any]:
+async def working_memory_fail(working_id: str, consolidation_notes: str = "") -> dict[str, Any]:
     """Mark task coordination state failed and release associated locks."""
     return await _request(
         "POST",
@@ -312,9 +358,7 @@ async def memory_lock_renew(
 @mcp.tool()
 async def memory_lock_release(lock_id: str, token: str, fence: int) -> dict[str, bool]:
     """Release a resource lease."""
-    await _request(
-        "POST", f"/v1/locks/{lock_id}/release", {"token": token, "fence": fence}
-    )
+    await _request("POST", f"/v1/locks/{lock_id}/release", {"token": token, "fence": fence})
     return {"released": True}
 
 
@@ -327,7 +371,11 @@ def run() -> None:
     if args.transport == "stdio":
         mcp.run("stdio")
     else:
-        mcp.run(args.transport, host=args.host, port=args.port)
+        if args.transport == "sse":
+            app = mcp.sse_app(host=args.host)
+        else:
+            app = mcp.streamable_http_app(host=args.host)
+        uvicorn.run(ForwardBearerAuth(app), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

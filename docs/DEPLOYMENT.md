@@ -24,7 +24,9 @@ ALBERT_API_KEY_PEPPER=<at least 32 random characters>
 
 Select the embedding and optional model-classification mode described in
 [Embedding and classification providers](PROVIDERS.md) before the first start.
-The chosen embedding dimensions become part of the PostgreSQL schema.
+Albert's immutable initial migration uses 384 embedding dimensions. Keep
+`ALBERT_EMBEDDING_DIMENSIONS=384` unless you add and test a deliberate schema
+migration for another dimension.
 
 Do not reuse the database password as the API-key pepper. Start the database,
 migration, provider validation, API, and worker first:
@@ -44,13 +46,16 @@ docker compose exec api albert-admin bootstrap \
   --principal "Administrator"
 ```
 
-The API key is printed once. Store it in a password manager or secret manager.
-To give the MCP gateway that identity, set `ALBERT_MCP_API_KEY` in `.env` and
-start the gateway:
+The API key is printed once. Store it in a password manager or secret manager,
+then start the HTTP MCP gateway:
 
 ```bash
 docker compose up -d mcp
 ```
+
+Each HTTP MCP client sends its own Albert API key in the `Authorization: Bearer`
+header. `ALBERT_MCP_API_KEY` is used only when launching a local stdio MCP
+process, where there is no HTTP request carrying caller identity.
 
 Endpoints:
 
@@ -113,7 +118,7 @@ Never configure an untrusted endpoint for confidential memories.
 
 ## TLS and network exposure
 
-The Compose ports are intended for loopback development. Before exposing Albert:
+Compose binds REST and MCP to `127.0.0.1` by default. Before exposing Albert:
 
 - Bind container ports to loopback or an internal network.
 - Put REST and MCP behind a TLS reverse proxy.
@@ -121,6 +126,8 @@ The Compose ports are intended for loopback development. Before exposing Albert:
 - Apply network rate limiting and connection limits.
 - Do not expose PostgreSQL publicly.
 - Store `.env` outside source control with mode `0600`.
+- Set `ALBERT_API_BIND` or `ALBERT_MCP_BIND` only when the reverse proxy or
+  private network requires a non-loopback listener.
 
 ## Upgrades
 
@@ -135,6 +142,13 @@ curl --fail http://127.0.0.1:8080/v1/health/ready
 
 Review release notes and migrations before every upgrade. Test restores on a
 separate environment periodically.
+
+## Identity administration
+
+Use `albert-admin create-workspace`, `create-principal`, `list-principals`,
+`create-key`, `list-keys`, and `revoke-key` inside the API container. Prefer
+workspace-scoped principals for ordinary agents and organization-scoped
+principals only for administration, cross-workspace retrieval, and imports.
 
 ## Backups and restores
 

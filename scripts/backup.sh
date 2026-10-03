@@ -15,8 +15,14 @@ case "$output" in
 esac
 
 umask 077
-mkdir -p "$(dirname "$output")"
-docker compose exec -T db pg_dump -U albert -d albert --format=custom > "$output"
-test -s "$output"
+output_dir=$(dirname "$output")
+output_name=$(basename "$output")
+mkdir -p "$output_dir"
+temporary=$(mktemp "$output_dir/.${output_name}.tmp.XXXXXX")
+trap 'rm -f "$temporary"' EXIT HUP INT TERM
+docker compose exec -T db pg_dump -U albert -d albert --format=custom > "$temporary"
+test -s "$temporary"
+docker compose exec -T db pg_restore --list < "$temporary" > /dev/null
+mv "$temporary" "$output"
+trap - EXIT HUP INT TERM
 echo "backup written to $output"
-

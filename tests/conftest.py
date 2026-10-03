@@ -47,6 +47,8 @@ def create_identity(
                     "memory.read",
                     "memory.write",
                     "memory.delete",
+                    "memory.export",
+                    "memory.import",
                     "graph.query",
                     "graph.write",
                     "working_memory.write",

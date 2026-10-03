@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal
-from albert.models import Episode, Job, WorkingMemory, utcnow
+from albert.models import Episode, Job, ResourceLock, WorkingMemory, utcnow
 from albert.services import enrich_episode, enrich_memory
 
 logger = logging.getLogger("albert.worker")
@@ -80,9 +80,21 @@ def process_job(session: Session, job: Job) -> None:
 
 def housekeeping(session: Session) -> None:
     now = utcnow()
+    expired_ids = list(
+        session.scalars(
+            select(WorkingMemory.id).where(
+                WorkingMemory.status == "active", WorkingMemory.expires_at <= now
+            )
+        )
+    )
     session.query(WorkingMemory).filter(
         WorkingMemory.status == "active", WorkingMemory.expires_at <= now
     ).update({WorkingMemory.status: "expired", WorkingMemory.completed_at: now})
+    if expired_ids:
+        session.query(ResourceLock).filter(
+            ResourceLock.working_memory_id.in_(expired_ids),
+            ResourceLock.released_at.is_(None),
+        ).update({ResourceLock.released_at: now}, synchronize_session=False)
     session.query(Job).filter(
         Job.status == "running", Job.locked_at < now - timedelta(minutes=15)
     ).update({Job.status: "pending", Job.locked_at: None, Job.locked_by: None})
@@ -112,4 +124,3 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
-

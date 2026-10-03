@@ -10,10 +10,10 @@ from sqlalchemy import text
 from albert.db import SessionLocal, engine
 from albert.graph import query_relationships
 from albert.models import Organization, Principal, Workspace
-from albert.schemas import MemoryCreate, SearchRequest
+from albert.schemas import EpisodeCreate, MemoryCreate, SearchRequest
 from albert.search import hybrid_search
 from albert.security import AuthContext
-from albert.services import create_memory, enrich_memory
+from albert.services import create_episode, create_memory, enrich_memory
 
 
 def main() -> None:
@@ -32,6 +32,15 @@ def main() -> None:
         )
         if not extension or not hnsw:
             raise RuntimeError("pgvector extension or HNSW index is unavailable")
+        nulls_not_distinct = session.scalar(
+            text(
+                "SELECT index.indnullsnotdistinct FROM pg_index AS index "
+                "JOIN pg_class AS relation ON relation.oid = index.indexrelid "
+                "WHERE relation.relname = 'uq_entities_scope_name_type'"
+            )
+        )
+        if nulls_not_distinct is not True:
+            raise RuntimeError("entity uniqueness does not treat NULL workspaces consistently")
 
         suffix = uuid4().hex
         organization = Organization(name=f"PostgreSQL smoke {suffix}")
@@ -54,6 +63,35 @@ def main() -> None:
             workspace_id=workspace.id,
             capabilities=frozenset({"memory.read", "memory.write", "graph.query"}),
         )
+        organization_auth = AuthContext(
+            principal_id=principal.id,
+            organization_id=organization.id,
+            workspace_id=None,
+            capabilities=auth.capabilities,
+        )
+        second_workspace = Workspace(organization_id=organization.id, name="Second")
+        session.add(second_workspace)
+        session.commit()
+        first_episode = create_episode(
+            session,
+            organization_auth,
+            EpisodeCreate(
+                workspace_id=workspace.id,
+                content="Workspace-specific canonical episode",
+                source_uri="smoke://shared",
+            ),
+        )
+        second_episode = create_episode(
+            session,
+            organization_auth,
+            EpisodeCreate(
+                workspace_id=second_workspace.id,
+                content="Workspace-specific canonical episode",
+                source_uri="smoke://shared",
+            ),
+        )
+        if first_episode.id == second_episode.id:
+            raise RuntimeError("episode deduplication crossed workspace boundaries")
         memory = create_memory(
             session,
             auth,

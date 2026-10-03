@@ -2,7 +2,7 @@
 
 ## Ready now
 
-Albert 0.1 is ready for an isolated self-hosted deployment and integration
+Albert 0.2 is ready for an isolated self-hosted deployment and integration
 testing through REST and MCP.
 
 Implemented and tested:
@@ -25,6 +25,7 @@ Implemented and tested:
 - Stale extracted-edge invalidation when memories are edited and re-enriched
 - Sensitivity enforcement across memories, episodes, vector results, and graph edges
 - Bounded context assembly with citations
+- Configurable minimum vector similarity with raw backend scores
 - Working memory, expiration, completion/failure, and progress state
 - Exclusive lease locks with secret tokens and monotonic fencing values
 - Audit events without raw memory bodies
@@ -33,6 +34,9 @@ Implemented and tested:
 - Docker image and Docker Compose deployment
 - Readiness/liveness endpoints
 - Backup and guarded restore scripts
+- Portable memory/explicit-graph export and transactional import
+- Per-caller bearer identity forwarding for HTTP MCP
+- Workspace, principal, API-key listing, issuance, and revocation commands
 - Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
   ingestion, deletion, and locks
 - Integration handbook covering Codex, Claude Desktop/Code, Cursor, OpenClaw,

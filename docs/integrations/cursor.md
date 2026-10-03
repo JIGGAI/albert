@@ -26,15 +26,18 @@ Cursor reads MCP definitions from `.cursor/mcp.json` for one project or
 {
   "mcpServers": {
     "albert": {
-      "url": "https://memory.internal.example/mcp"
+      "url": "https://memory.internal.example/mcp",
+      "headers": {
+        "Authorization": "Bearer REPLACE_FROM_SECRET_STORE"
+      }
     }
   }
 }
 ```
 
-Do not commit a project-level file containing a credential. Albert's current
-remote MCP gateway uses one upstream service identity for all connected clients,
-so expose it only through a private, authenticated network boundary.
+Do not commit a project-level file containing a credential. Prefer Cursor's
+secret-backed environment substitution when available; the gateway forwards
+the bearer key so each client keeps its own Albert principal and audit identity.
 
 After saving the configuration, open Cursor's MCP settings and verify that the
 Albert tools appear. Add the contents of

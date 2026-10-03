@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from albert.classifier import ExtractedEntity, ExtractedRelationship
@@ -46,9 +47,23 @@ def upsert_entity(
         description=entity.description,
         confidence=entity.confidence,
     )
-    session.add(record)
-    session.flush()
-    return record
+    try:
+        with session.begin_nested():
+            session.add(record)
+            session.flush()
+        return record
+    except IntegrityError:
+        existing = session.scalar(
+            select(Entity).where(
+                Entity.organization_id == organization_id,
+                Entity.workspace_id == workspace_id,
+                Entity.canonical_name == canonical,
+                Entity.entity_type == entity.entity_type,
+            )
+        )
+        if existing is None:
+            raise
+        return existing
 
 
 def add_relationship(
@@ -136,18 +151,19 @@ def query_relationships(
         .where(*conditions)
     )
     terms = [term for term in re.findall(r"[\w.-]+", query.casefold()) if len(term) > 1]
-    if terms:
-        clauses = []
-        for term in terms[:10]:
-            pattern = f"%{term}%"
-            clauses.extend(
-                [
-                    source.canonical_name.ilike(pattern),
-                    target.canonical_name.ilike(pattern),
-                    Relationship.relation_type.ilike(pattern),
-                ]
-            )
-        statement = statement.where(or_(*clauses))
+    if not terms:
+        return []
+    clauses = []
+    for term in terms[:10]:
+        pattern = f"%{term}%"
+        clauses.extend(
+            [
+                source.canonical_name.ilike(pattern),
+                target.canonical_name.ilike(pattern),
+                Relationship.relation_type.ilike(pattern),
+            ]
+        )
+    statement = statement.where(or_(*clauses))
     rows = session.execute(statement.order_by(Relationship.confidence.desc()).limit(limit)).all()
     return [
         RelationshipRead(

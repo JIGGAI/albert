@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 import typer
 from sqlalchemy import select, text
 
@@ -15,6 +17,7 @@ ALL_CAPABILITIES = [
     "memory.write",
     "memory.delete",
     "memory.export",
+    "memory.import",
     "graph.query",
     "graph.write",
     "working_memory.write",
@@ -53,14 +56,22 @@ def bootstrap(
             work = Workspace(organization_id=org.id, name=workspace)
             session.add(work)
             session.flush()
-        actor = Principal(
-            organization_id=org.id,
-            workspace_id=work.id,
-            name=principal,
-            principal_type="human",
+        actor = session.scalar(
+            select(Principal).where(
+                Principal.organization_id == org.id,
+                Principal.workspace_id == work.id,
+                Principal.name == principal,
+            )
         )
-        session.add(actor)
-        session.flush()
+        if actor is None:
+            actor = Principal(
+                organization_id=org.id,
+                workspace_id=work.id,
+                name=principal,
+                principal_type="human",
+            )
+            session.add(actor)
+            session.flush()
         raw, prefix, digest = issue_api_key()
         session.add(
             APIKey(
@@ -83,8 +94,11 @@ def create_key(
     capabilities: str = typer.Option("memory.read,memory.write,graph.query"),
 ) -> None:
     """Issue an additional API key for an existing principal."""
-    from uuid import UUID
-
+    requested_capabilities = [item.strip() for item in capabilities.split(",") if item.strip()]
+    known_capabilities = {*ALL_CAPABILITIES, "memory.confidential", "memory.restricted"}
+    unknown = sorted(set(requested_capabilities) - known_capabilities)
+    if unknown:
+        raise typer.BadParameter(f"Unknown capabilities: {', '.join(unknown)}")
     with SessionLocal() as session:
         actor = session.get(Principal, UUID(principal_id))
         if actor is None:
@@ -96,11 +110,122 @@ def create_key(
                 prefix=prefix,
                 key_hash=digest,
                 name=name,
-                capabilities=[item.strip() for item in capabilities.split(",") if item.strip()],
+                capabilities=requested_capabilities,
             )
         )
         session.commit()
     typer.echo(raw)
+
+
+@app.command("create-workspace")
+def create_workspace(
+    organization: str = typer.Option(..., help="Organization name"),
+    name: str = typer.Option(..., help="Workspace name"),
+) -> None:
+    """Create a workspace in an existing organization."""
+    with SessionLocal() as session:
+        org = session.scalar(select(Organization).where(Organization.name == organization))
+        if org is None:
+            raise typer.BadParameter("Organization not found")
+        existing = session.scalar(
+            select(Workspace).where(
+                Workspace.organization_id == org.id,
+                Workspace.name == name,
+            )
+        )
+        if existing is not None:
+            typer.echo(str(existing.id))
+            return
+        workspace = Workspace(organization_id=org.id, name=name)
+        session.add(workspace)
+        session.commit()
+        session.refresh(workspace)
+        typer.echo(str(workspace.id))
+
+
+@app.command("create-principal")
+def create_principal(
+    organization: str = typer.Option(..., help="Organization name"),
+    name: str = typer.Option(..., help="Principal display name"),
+    workspace: str | None = typer.Option(None, help="Optional workspace name"),
+    principal_type: str = typer.Option("agent", help="agent, human, or service"),
+) -> None:
+    """Create an organization- or workspace-scoped principal."""
+    if principal_type not in {"agent", "human", "service"}:
+        raise typer.BadParameter("principal-type must be agent, human, or service")
+    with SessionLocal() as session:
+        org = session.scalar(select(Organization).where(Organization.name == organization))
+        if org is None:
+            raise typer.BadParameter("Organization not found")
+        workspace_id = None
+        if workspace is not None:
+            record = session.scalar(
+                select(Workspace).where(
+                    Workspace.organization_id == org.id,
+                    Workspace.name == workspace,
+                )
+            )
+            if record is None:
+                raise typer.BadParameter("Workspace not found")
+            workspace_id = record.id
+        principal = Principal(
+            organization_id=org.id,
+            workspace_id=workspace_id,
+            name=name,
+            principal_type=principal_type,
+        )
+        session.add(principal)
+        session.commit()
+        session.refresh(principal)
+        typer.echo(str(principal.id))
+
+
+@app.command("list-principals")
+def list_principals(
+    organization: str = typer.Option(..., help="Organization name"),
+) -> None:
+    """List principals and their workspace scope."""
+    with SessionLocal() as session:
+        org = session.scalar(select(Organization).where(Organization.name == organization))
+        if org is None:
+            raise typer.BadParameter("Organization not found")
+        principals = session.scalars(
+            select(Principal).where(Principal.organization_id == org.id).order_by(Principal.name)
+        )
+        for principal in principals:
+            typer.echo(
+                f"{principal.id}\t{principal.name}\t{principal.principal_type}\t"
+                f"workspace={principal.workspace_id or '*'}\tactive={principal.active}"
+            )
+
+
+@app.command("list-keys")
+def list_keys(principal_id: str = typer.Option(...)) -> None:
+    """List non-secret API-key metadata for one principal."""
+    with SessionLocal() as session:
+        actor = session.get(Principal, UUID(principal_id))
+        if actor is None:
+            raise typer.BadParameter("Principal not found")
+        keys = session.scalars(
+            select(APIKey).where(APIKey.principal_id == actor.id).order_by(APIKey.created_at)
+        )
+        for key in keys:
+            typer.echo(
+                f"{key.id}\t{key.name}\tprefix={key.prefix}\tactive={key.active}\t"
+                f"expires={key.expires_at or '-'}"
+            )
+
+
+@app.command("revoke-key")
+def revoke_key(key_id: str = typer.Option(...)) -> None:
+    """Revoke an API key without deleting its audit identity."""
+    with SessionLocal() as session:
+        key = session.get(APIKey, UUID(key_id))
+        if key is None:
+            raise typer.BadParameter("API key not found")
+        key.active = False
+        session.commit()
+    typer.echo("API key revoked")
 
 
 @app.command("validate-runtime")
@@ -168,9 +293,7 @@ def reindex_memories(
         selected = [
             memory
             for memory in memories
-            if all_memories
-            or memory.embedding is None
-            or memory.embedding_model != embedder.name
+            if all_memories or memory.embedding is None or memory.embedding_model != embedder.name
         ]
         for memory in selected:
             session.add(

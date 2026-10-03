@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
         env:
           POSTGRES_DB: albert
           POSTGRES_USER: albert
@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e '.[dev]'
+      - run: pip install --constraint constraints.txt -e '.[dev]'
       - run: ruff check .
       - run: pytest --cov=albert --cov-report=term-missing
       - name: Validate Compose configuration

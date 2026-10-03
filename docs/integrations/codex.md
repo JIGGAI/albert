@@ -32,11 +32,13 @@ Equivalent configuration:
 ```toml
 [mcp_servers.albert]
 url = "https://memory.internal.example/mcp"
+bearer_token_env_var = "ALBERT_API_KEY"
 ```
 
-The current Albert HTTP gateway authenticates upstream with its own
-`ALBERT_MCP_API_KEY`; it does not identify the Codex caller. Keep the URL on a
-private network or behind a trusted access layer.
+Set `ALBERT_API_KEY` in Codex's environment through your secret manager. Codex
+sends its value as the HTTP bearer token, and Albert retains that principal's
+identity and capabilities. This setting follows the
+[official OpenAI MCP credential guidance](https://developers.openai.com/api/docs/guides/agents-api/tools/plugins#authenticate-mcp-servers).
 
 ## Project instructions
 

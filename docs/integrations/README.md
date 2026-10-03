@@ -30,17 +30,24 @@ to use memory safely in day-to-day work.
 Both interfaces reach the same FastAPI service and authorization rules. The MCP
 server is a thin REST client and has no separate database.
 
+## Organizations and workspaces
+
+An organization is the hard tenant boundary. A workspace is an optional team,
+client, or project partition inside that organization. Workspace-scoped keys
+are confined automatically; organization-scoped keys can select one workspace
+per request or omit it for cross-workspace operations. Records whose
+`workspace_id` is `null` are organization-wide. Prefer workspace-scoped keys
+for ordinary agents and reserve organization-wide identities for trusted
+administration and portability operations.
+Workspace-filtered retrieval returns only that workspace; organization-wide
+records are returned when an organization-scoped caller omits the workspace.
+
 ## Important deployment boundary
 
-Albert's current streamable-HTTP MCP process uses one server-side
-`ALBERT_MCP_API_KEY` for all callers. It does not authenticate individual MCP
-callers. Therefore:
+Streamable HTTP requires an Albert API key in the caller's bearer header and
+forwards that identity to REST. Give independently trusted agents separate keys
+so capability checks, audit attribution, and revocation remain distinct.
 
-- use stdio for a single local client; or
-- expose `/mcp` only inside a private, authenticated network boundary; and
-- run separate gateways with separate Albert principals when caller-level
-  isolation is required.
-
-Do not place the current `/mcp` endpoint directly on the public internet. A
-public multi-user service needs OAuth or per-request identity forwarding before
-the MCP gateway can enforce caller-specific authorization.
+The bearer scheme is appropriate for controlled self-hosting behind TLS. A
+public human-facing service still needs OAuth/OIDC, rate limits, abuse controls,
+and the additional protections listed in [Security](../SECURITY.md).

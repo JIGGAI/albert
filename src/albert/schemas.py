@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ORMModel(BaseModel):
@@ -152,6 +152,16 @@ class RelationshipCreate(BaseModel):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_interval(self):  # type: ignore[no-untyped-def]
+        if (
+            self.valid_from is not None
+            and self.valid_until is not None
+            and self.valid_until <= self.valid_from
+        ):
+            raise ValueError("valid_until must be after valid_from")
+        return self
+
 
 class RelationshipRead(BaseModel):
     id: UUID
@@ -235,6 +245,64 @@ class LockRead(BaseModel):
     fence: int
     expires_at: datetime
     token: str | None = None
+
+
+class WorkingMemoryCreateRead(WorkingMemoryRead):
+    lock: LockRead | None = None
+
+
+class WorkspaceExport(BaseModel):
+    ref: UUID
+    name: str
+
+
+class MemoryExport(BaseModel):
+    ref: UUID
+    workspace_ref: UUID | None = None
+    project_ref: str | None = None
+    task_ref: str | None = None
+    run_ref: str | None = None
+    subject: str
+    content: str
+    memory_type: str
+    sensitivity: Literal["public", "internal", "confidential", "restricted"]
+    confidence: float
+    valid_from: datetime
+    valid_until: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RelationshipExport(BaseModel):
+    workspace_ref: UUID | None = None
+    source: EntityInput
+    relation_type: str
+    target: EntityInput
+    sensitivity: Literal["public", "internal", "confidential", "restricted"]
+    source_memory_ref: UUID | None = None
+    confidence: float
+    valid_from: datetime
+    valid_until: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExportBundle(BaseModel):
+    format_version: Literal["albert-export-v1"] = "albert-export-v1"
+    exported_at: datetime
+    organization_name: str
+    workspaces: list[WorkspaceExport]
+    memories: list[MemoryExport]
+    relationships: list[RelationshipExport]
+
+
+class ImportRequest(BaseModel):
+    bundle: ExportBundle
+    workspace_id: UUID | None = None
+
+
+class ImportResult(BaseModel):
+    memories_created: int
+    relationships_created: int
+    workspaces_created: int
 
 
 class HealthResponse(BaseModel):

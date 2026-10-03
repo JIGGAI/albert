@@ -26,7 +26,8 @@ The default MCP URL is `http://127.0.0.1:8081/mcp`.
 - Confirm the MCP server name and transport.
 - For stdio, use an absolute executable path and confirm the client process can
   see `ALBERT_API_URL` and `ALBERT_MCP_API_KEY`.
-- For HTTP, confirm the URL ends in `/mcp` and is reachable from the client.
+- For HTTP, confirm the URL ends in `/mcp`, is reachable, and sends the caller's
+  Albert key as its bearer credential.
 - Restart the client or reload its MCP catalog after configuration changes.
 - Codex: run `codex mcp list`.
 - Claude Code: run `claude mcp list` and inspect `/mcp`.
@@ -34,7 +35,7 @@ The default MCP URL is `http://127.0.0.1:8081/mcp`.
 
 ## MCP starts and immediately exits
 
-`ALBERT_MCP_API_KEY` is required. With stdio, protocol messages use stdout, so
+`ALBERT_MCP_API_KEY` is required for stdio. With stdio, protocol messages use stdout, so
 diagnostics or wrappers must not print banners to stdout. Ensure the command
 runs in an environment where the installed `albert-mcp` version matches the
 deployed API.
@@ -46,8 +47,8 @@ deployed API.
 - `404` on a known id can intentionally hide a resource outside the caller's
   organization, workspace, or sensitivity access.
 
-The remote MCP gateway's upstream key is set on the gateway host, not sent by
-the connecting MCP client.
+For HTTP MCP, the connecting client sends its own Albert API key. For stdio,
+the local MCP process reads `ALBERT_MCP_API_KEY` from its environment.
 
 ## Search returns weak matches
 
@@ -77,11 +78,9 @@ Episode enrichment is asynchronous. Check the worker and the episode's
 
 ## HTTP MCP is reachable by unintended users
 
-Disconnect or firewall it immediately. The current gateway does not authenticate
-individual MCP callers. Bind it to loopback for local use, place it on a private
-network, or add a trusted access proxy. A generic proxy can restrict network
-access, but caller-specific Albert authorization requires per-request identity
-forwarding or separate gateway identities.
+The gateway rejects requests without a bearer key and binds to loopback by
+default. If it is unexpectedly reachable, restore the loopback/firewall policy,
+confirm TLS termination, rotate any exposed keys, and review audit events.
 
 ## Deeper checks
 

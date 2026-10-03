@@ -38,6 +38,9 @@ claude mcp add --transport http --scope user \
 claude mcp list
 ```
 
+Configure Claude Code's supported authorization-header or secret mechanism to
+send the agent's Albert API key as `Authorization: Bearer <key>`.
+
 For local stdio, register the command through JSON:
 
 ```bash
@@ -46,9 +49,8 @@ claude mcp add-json --scope user albert \
 claude mcp get albert
 ```
 
-Use `/mcp` inside Claude Code to inspect connection status. The HTTP endpoint
-has the shared-gateway identity limitation described in the
-[integration overview](README.md#important-deployment-boundary).
+Use `/mcp` inside Claude Code to inspect connection status. Each remote caller's
+bearer key is forwarded to Albert for capability checks and audit attribution.
 
 Put the operating rules from [AGENTS.example.md](AGENTS.example.md) into the
 instruction file used by the project so tool use is consistent.

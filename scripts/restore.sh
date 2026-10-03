@@ -15,7 +15,10 @@ if [ ! -f "$input" ] || [ ! -s "$input" ]; then
   exit 2
 fi
 
+docker compose exec -T db pg_restore --list < "$input" > /dev/null
 docker compose exec -T db pg_restore \
-  -U albert -d albert --clean --if-exists --no-owner < "$input"
+  -U albert -d albert --clean --if-exists --no-owner \
+  --exit-on-error --single-transaction < "$input"
+docker compose exec -T db psql -U albert -d albert -v ON_ERROR_STOP=1 \
+  -c 'SELECT version_num FROM alembic_version' > /dev/null
 echo "restore completed from $input"
-

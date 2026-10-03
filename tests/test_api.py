@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
 import httpx
 import pytest
 
 from albert.api import app
 from albert.db import SessionLocal
-from albert.worker import claim_job, process_job
+from albert.models import APIKey, Principal, ResourceLock, WorkingMemory, Workspace
+from albert.security import issue_api_key
+from albert.worker import claim_job, housekeeping, process_job
 
 from .conftest import create_identity
 
@@ -50,9 +55,7 @@ async def test_memory_enrichment_and_hybrid_search(client: httpx.AsyncClient) ->
     assert retrieved.status_code == 200
     assert retrieved.json()["embedding_model"].startswith("hashing-v1")
 
-    search = await client.post(
-        "/v1/search", json={"query": "PostgreSQL pgvector", "limit": 10}
-    )
+    search = await client.post("/v1/search", json={"query": "PostgreSQL pgvector", "limit": 10})
     assert search.status_code == 200, search.text
     payload = search.json()
     memory_hit = next(hit for hit in payload["hits"] if hit["memory_id"] == memory_id)
@@ -241,3 +244,227 @@ async def test_delete_invalidates_memory(client: httpx.AsyncClient) -> None:
     assert (await client.get(f"/v1/memories/{memory_id}")).status_code == 404
     result = await client.post("/v1/search", json={"query": "Disposable memory marker"})
     assert all(hit["memory_id"] != memory_id for hit in result.json()["hits"])
+
+
+async def test_episode_deduplication_is_scoped_to_workspace() -> None:
+    key, organization, first_workspace = create_identity(
+        "Organization Agent", workspace_scoped=False
+    )
+    with SessionLocal() as session:
+        second_workspace = Workspace(organization_id=organization.id, name="Second")
+        session.add(second_workspace)
+        session.commit()
+        session.refresh(second_workspace)
+        second_workspace_id = second_workspace.id
+    headers = {"Authorization": f"Bearer {key}"}
+    payload = {
+        "content": "The same source can be ingested in separate workspaces.",
+        "source_uri": "test://shared-source",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=headers
+    ) as organization_client:
+        first = await organization_client.post(
+            "/v1/episodes", json={**payload, "workspace_id": str(first_workspace.id)}
+        )
+        second = await organization_client.post(
+            "/v1/episodes", json={**payload, "workspace_id": str(second_workspace_id)}
+        )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] != second.json()["id"]
+
+
+async def test_organization_key_rejects_foreign_workspace() -> None:
+    key, _organization, _workspace = create_identity("Organization", workspace_scoped=False)
+    _other_key, _other_organization, other_workspace = create_identity("Foreign")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as organization_client:
+        response = await organization_client.post(
+            "/v1/memories",
+            json={"content": "Invalid workspace", "workspace_id": str(other_workspace.id)},
+        )
+    assert response.status_code == 404
+
+
+async def test_sensitivity_and_validity_updates_immediately_invalidate_graph(
+    client: httpx.AsyncClient,
+) -> None:
+    valid_from = datetime.now(UTC) - timedelta(days=2)
+    created = await client.post(
+        "/v1/memories",
+        json={
+            "content": "Runtime uses Database Alpha.",
+            "valid_from": valid_from.isoformat(),
+        },
+    )
+    memory_id = created.json()["id"]
+    drain_jobs()
+    assert (await client.post("/v1/graph/query", json={"query": "Alpha"})).json()
+
+    restricted = await client.patch(f"/v1/memories/{memory_id}", json={"sensitivity": "restricted"})
+    assert restricted.status_code == 200
+    assert (await client.post("/v1/graph/query", json={"query": "Alpha"})).json() == []
+    drain_jobs()
+    assert (await client.post("/v1/graph/query", json={"query": "Alpha"})).json() == []
+
+    second = await client.post(
+        "/v1/memories",
+        json={
+            "content": "Runtime uses Database Beta.",
+            "valid_from": valid_from.isoformat(),
+        },
+    )
+    drain_jobs()
+    expired = await client.patch(
+        f"/v1/memories/{second.json()['id']}",
+        json={"valid_until": (datetime.now(UTC) - timedelta(days=1)).isoformat()},
+    )
+    assert expired.status_code == 200, expired.text
+    assert (await client.post("/v1/graph/query", json={"query": "Beta"})).json() == []
+    drain_jobs()
+    assert (await client.post("/v1/graph/query", json={"query": "Beta"})).json() == []
+
+
+async def test_working_memory_atomic_lock_returns_renewable_token(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/v1/working-memory",
+        json={
+            "task_id": f"atomic-{uuid4()}",
+            "description": "Atomic lease",
+            "resource_type": "repository",
+            "resource_ref": f"repo-{uuid4()}",
+            "acquire_lock": True,
+        },
+    )
+    assert response.status_code == 201, response.text
+    lock = response.json()["lock"]
+    assert lock["token"]
+    renewed = await client.post(
+        f"/v1/locks/{lock['id']}/renew",
+        json={"token": lock["token"], "fence": lock["fence"], "ttl_seconds": 120},
+    )
+    assert renewed.status_code == 200, renewed.text
+
+
+async def test_lock_rejects_another_principals_working_memory(
+    client: httpx.AsyncClient, identity
+) -> None:  # type: ignore[no-untyped-def]
+    _key, organization, workspace = identity
+    with SessionLocal() as session:
+        principal = Principal(
+            organization_id=organization.id,
+            workspace_id=workspace.id,
+            name="Other Principal",
+            principal_type="agent",
+        )
+        session.add(principal)
+        session.flush()
+        raw, prefix, digest = issue_api_key()
+        session.add(
+            APIKey(
+                principal_id=principal.id,
+                prefix=prefix,
+                key_hash=digest,
+                capabilities=["working_memory.write", "locks.acquire"],
+            )
+        )
+        session.commit()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {raw}"},
+    ) as other_client:
+        working = await other_client.post(
+            "/v1/working-memory",
+            json={"task_id": f"other-{uuid4()}", "description": "Owned elsewhere"},
+        )
+    response = await client.post(
+        "/v1/locks/acquire",
+        json={
+            "working_memory_id": working.json()["id"],
+            "resource_type": "repository",
+            "resource_ref": f"forbidden-{uuid4()}",
+        },
+    )
+    assert response.status_code == 403
+
+
+async def test_housekeeping_releases_expired_working_memory_lock(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/v1/working-memory",
+        json={
+            "task_id": f"expires-{uuid4()}",
+            "description": "Expiring lease",
+            "resource_type": "repository",
+            "resource_ref": f"expires-{uuid4()}",
+            "acquire_lock": True,
+        },
+    )
+    working_id = response.json()["id"]
+    lock_id = response.json()["lock"]["id"]
+    with SessionLocal() as session:
+        working = session.get(WorkingMemory, UUID(working_id))
+        assert working is not None
+        working.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+        housekeeping(session)
+        lock = session.get(ResourceLock, UUID(lock_id))
+        assert lock is not None and lock.released_at is not None
+
+
+async def test_irrelevant_vectors_and_empty_graph_terms_return_no_hits(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await client.post(
+        "/v1/memories", json={"content": "alpha beta gamma", "subject": "Greek letters"}
+    )
+    assert created.status_code == 201
+    drain_jobs()
+    result = await client.post(
+        "/v1/search", json={"query": "zzzz qqqq xxxx", "include_graph": False}
+    )
+    assert result.json()["hits"] == []
+    graph = await client.post("/v1/graph/query", json={"query": "."})
+    assert graph.status_code == 200
+    assert graph.json() == []
+
+
+async def test_export_import_round_trip(client: httpx.AsyncClient) -> None:
+    memory = await client.post(
+        "/v1/memories",
+        json={"subject": "Portable record", "content": "Albert supports portable exports."},
+    )
+    relationship = await client.post(
+        "/v1/relationships",
+        json={
+            "source": {"name": "Albert", "entity_type": "project"},
+            "relation_type": "supports",
+            "target": {"name": "Portability", "entity_type": "feature"},
+            "source_memory_id": memory.json()["id"],
+        },
+    )
+    assert relationship.status_code == 201
+    exported = await client.get("/v1/export")
+    assert exported.status_code == 200, exported.text
+    assert any(item["subject"] == "Portable record" for item in exported.json()["memories"])
+
+    target_key, _target_org, _target_workspace = create_identity("Import Target")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {target_key}"},
+    ) as target_client:
+        imported = await target_client.post("/v1/import", json={"bundle": exported.json()})
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["memories_created"] >= 1
+        assert imported.json()["relationships_created"] >= 1
+        found = await target_client.post("/v1/search", json={"query": "Portable record"})
+        assert any(hit["subject"] == "Portable record" for hit in found.json()["hits"])

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import defaultdict
@@ -10,12 +11,14 @@ from uuid import UUID
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import query_relationships
 from albert.models import Memory
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
 
 RRF_K = 60
+logger = logging.getLogger("albert.search")
 
 
 def _scope_conditions(
@@ -53,7 +56,7 @@ def _lexical_search(
     organization_id: UUID,
     workspace_id: UUID | None,
     request: SearchRequest,
-) -> list[Memory]:
+) -> list[tuple[Memory, float]]:
     conditions = _scope_conditions(
         organization_id=organization_id, workspace_id=workspace_id, request=request
     )
@@ -64,12 +67,12 @@ def _lexical_search(
         query = func.plainto_tsquery("english", request.query)
         rank = func.ts_rank_cd(document, query)
         statement = (
-            select(Memory)
+            select(Memory, rank.label("lexical_rank"))
             .where(*conditions, document.op("@@")(query))
             .order_by(rank.desc())
             .limit(request.limit * 3)
         )
-        return list(session.scalars(statement))
+        return [(memory, float(score)) for memory, score in session.execute(statement)]
 
     terms = [term for term in re.findall(r"[\w.-]+", request.query.casefold()) if term]
     rows = list(session.scalars(select(Memory).where(*conditions)))
@@ -78,9 +81,8 @@ def _lexical_search(
         text = f"{memory.subject} {memory.content}".casefold()
         return sum(text.count(term) for term in terms)
 
-    return [row for row in sorted(rows, key=score, reverse=True) if score(row) > 0][
-        : request.limit * 3
-    ]
+    ranked = [(row, float(score(row))) for row in rows if score(row) > 0]
+    return sorted(ranked, key=lambda item: item[1], reverse=True)[: request.limit * 3]
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
@@ -96,7 +98,7 @@ def _vector_search(
     organization_id: UUID,
     workspace_id: UUID | None,
     request: SearchRequest,
-) -> list[Memory]:
+) -> list[tuple[Memory, float]]:
     query_vector = get_embedder().embed(request.query)
     conditions = _scope_conditions(
         organization_id=organization_id, workspace_id=workspace_id, request=request
@@ -104,17 +106,18 @@ def _vector_search(
     conditions.append(Memory.embedding.is_not(None))
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         distance = Memory.embedding.op("<=>")(query_vector)
-        return list(
-            session.scalars(
-                select(Memory)
-                .where(*conditions)
-                .order_by(distance)
-                .limit(request.limit * 3)
-            )
+        rows = session.execute(
+            select(Memory, distance.label("vector_distance"))
+            .where(*conditions)
+            .order_by(distance)
+            .limit(request.limit * 3)
         )
+        candidates = [(memory, 1.0 - float(value)) for memory, value in rows]
+        return [item for item in candidates if item[1] >= get_settings().min_vector_similarity]
     rows = list(session.scalars(select(Memory).where(*conditions)))
-    rows.sort(key=lambda memory: _cosine(memory.embedding or [], query_vector), reverse=True)
-    return rows[: request.limit * 3]
+    candidates = [(memory, _cosine(memory.embedding or [], query_vector)) for memory in rows]
+    candidates = [item for item in candidates if item[1] >= get_settings().min_vector_similarity]
+    return sorted(candidates, key=lambda item: item[1], reverse=True)[: request.limit * 3]
 
 
 def hybrid_search(
@@ -149,10 +152,11 @@ def hybrid_search(
                             "memory_type": memory.memory_type,
                             "sensitivity": memory.sensitivity,
                             "confidence": memory.confidence,
+                            "backend_scores": {"lexical": lexical_score},
                         },
                     ),
                 )
-                for memory in lexical
+                for memory, lexical_score in lexical
             ],
         )
     )
@@ -179,14 +183,16 @@ def hybrid_search(
                                 "memory_type": memory.memory_type,
                                 "sensitivity": memory.sensitivity,
                                 "confidence": memory.confidence,
+                                "backend_scores": {"vector": vector_similarity},
                             },
                         ),
                     )
-                    for memory in vectors
+                    for memory, vector_similarity in vectors
                 ],
             )
         )
     except Exception as exc:
+        logger.exception("Vector retrieval failed")
         degraded.append(f"vector retrieval unavailable: {type(exc).__name__}")
 
     if request.include_graph:
@@ -224,6 +230,7 @@ def hybrid_search(
                                     "source_entity_id": str(relationship.source_entity_id),
                                     "target_entity_id": str(relationship.target_entity_id),
                                     "confidence": relationship.confidence,
+                                    "backend_scores": {"graph": relationship.confidence},
                                 },
                             ),
                         )
@@ -232,6 +239,7 @@ def hybrid_search(
                 )
             )
         except Exception as exc:
+            logger.exception("Graph retrieval failed")
             degraded.append(f"graph retrieval unavailable: {type(exc).__name__}")
 
     scores: dict[str, float] = defaultdict(float)
@@ -240,7 +248,11 @@ def hybrid_search(
     for backend, backend_hits in ranked:
         for rank, (key, hit) in enumerate(backend_hits, start=1):
             scores[key] += 1.0 / (RRF_K + rank)
-            hits.setdefault(key, hit)
+            if key in hits:
+                existing_scores = hits[key].metadata.setdefault("backend_scores", {})
+                existing_scores.update(hit.metadata.get("backend_scores", {}))
+            else:
+                hits[key] = hit
             backend_names[key].append(backend)
     ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
     result = []

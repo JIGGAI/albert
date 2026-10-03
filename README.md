@@ -28,7 +28,8 @@ docker compose exec api albert-admin bootstrap \
 The command prints the API key once. Store it securely.
 
 REST documentation is available at `http://localhost:8080/docs` and MCP uses
-streamable HTTP at `http://localhost:8081/mcp`.
+streamable HTTP at `http://localhost:8081/mcp`. HTTP MCP clients authenticate
+with their own Albert API key as a bearer credential.
 
 For client setup, drop-in agent instructions, ordinary workflows, multi-agent
 handoffs, REST recipes, and troubleshooting, see the

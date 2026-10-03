@@ -14,13 +14,17 @@ from albert.config import get_settings
 from albert.db import get_session
 from albert.graph import query_relationships, subgraph
 from albert.models import Entity, Episode, Relationship
+from albert.portability import export_bundle, import_bundle
 from albert.schemas import (
     ContextRequest,
     ContextResponse,
     EpisodeCreate,
     EpisodeRead,
+    ExportBundle,
     GraphQuery,
     HealthResponse,
+    ImportRequest,
+    ImportResult,
     LockAcquire,
     LockRead,
     LockRelease,
@@ -33,6 +37,7 @@ from albert.schemas import (
     SearchRequest,
     SearchResponse,
     WorkingMemoryCreate,
+    WorkingMemoryCreateRead,
     WorkingMemoryFinish,
     WorkingMemoryRead,
     WorkingMemoryUpdate,
@@ -186,13 +191,11 @@ async def search_memories(
     session: Session = Depends(get_session),
 ) -> SearchResponse:
     auth.require("memory.read")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     allowed_sensitivities = auth.allowed_sensitivities()
     if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
         raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
-    effective = data.model_copy(
-        update={"sensitivity": data.sensitivity or allowed_sensitivities}
-    )
+    effective = data.model_copy(update={"sensitivity": data.sensitivity or allowed_sensitivities})
     result = hybrid_search(
         session,
         organization_id=auth.organization_id,
@@ -217,13 +220,11 @@ async def assemble_context(
     session: Session = Depends(get_session),
 ) -> ContextResponse:
     auth.require("memory.read")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     allowed_sensitivities = auth.allowed_sensitivities()
     if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
         raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
-    effective = data.model_copy(
-        update={"sensitivity": data.sensitivity or allowed_sensitivities}
-    )
+    effective = data.model_copy(update={"sensitivity": data.sensitivity or allowed_sensitivities})
     result = hybrid_search(
         session,
         organization_id=auth.organization_id,
@@ -295,7 +296,7 @@ async def query_graph(
     session: Session = Depends(get_session),
 ) -> list[RelationshipRead]:
     auth.require("graph.query")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     result = query_relationships(
         session,
         organization_id=auth.organization_id,
@@ -324,9 +325,7 @@ async def get_subgraph(
 ) -> list[RelationshipRead]:
     auth.require("graph.query")
     entity = session.scalar(
-        select(Entity).where(
-            Entity.id == entity_id, Entity.organization_id == auth.organization_id
-        )
+        select(Entity).where(Entity.id == entity_id, Entity.organization_id == auth.organization_id)
     )
     if entity is None or (
         auth.workspace_id is not None and entity.workspace_id != auth.workspace_id
@@ -346,7 +345,7 @@ async def get_subgraph(
 
 @app.post(
     "/v1/working-memory",
-    response_model=WorkingMemoryRead,
+    response_model=WorkingMemoryCreateRead,
     status_code=201,
     tags=["working-memory"],
 )
@@ -355,8 +354,21 @@ async def post_working_memory(
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ):  # type: ignore[no-untyped-def]
-    working, _lock = create_working_memory(session, auth, data)
-    return working
+    working, lock_result = create_working_memory(session, auth, data)
+    lock_read = None
+    if lock_result is not None:
+        lock, token = lock_result
+        lock_read = LockRead(
+            id=lock.id,
+            resource_type=lock.resource_type,
+            resource_ref=lock.resource_ref,
+            fence=lock.fence,
+            expires_at=lock.expires_at,
+            token=token,
+        )
+    return WorkingMemoryCreateRead(
+        **WorkingMemoryRead.model_validate(working).model_dump(), lock=lock_read
+    )
 
 
 @app.patch(
@@ -430,6 +442,24 @@ async def post_lock(
         expires_at=lock.expires_at,
         token=token,
     )
+
+
+@app.get("/v1/export", response_model=ExportBundle, tags=["portability"])
+async def get_export(
+    workspace_id: UUID | None = None,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ExportBundle:
+    return export_bundle(session, auth, workspace_id)
+
+
+@app.post("/v1/import", response_model=ImportResult, tags=["portability"])
+async def post_import(
+    data: ImportRequest,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ImportResult:
+    return import_bundle(session, auth, data)
 
 
 @app.post("/v1/locks/{lock_id}/renew", response_model=LockRead, tags=["locks"])

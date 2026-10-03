@@ -27,6 +27,7 @@ from albert.models import (
     Relationship,
     ResourceLock,
     WorkingMemory,
+    Workspace,
     utcnow,
 )
 from albert.schemas import (
@@ -46,10 +47,20 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def resolve_workspace(auth: AuthContext, requested: UUID | None) -> UUID | None:
+def resolve_workspace(session: Session, auth: AuthContext, requested: UUID | None) -> UUID | None:
     if auth.workspace_id is not None and requested not in (None, auth.workspace_id):
         raise HTTPException(status_code=403, detail="Workspace is outside the API key scope")
-    return requested if requested is not None else auth.workspace_id
+    workspace_id = requested if requested is not None else auth.workspace_id
+    if workspace_id is not None:
+        exists = session.scalar(
+            select(Workspace.id).where(
+                Workspace.id == workspace_id,
+                Workspace.organization_id == auth.organization_id,
+            )
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+    return workspace_id
 
 
 def audit(
@@ -86,7 +97,7 @@ def create_episode(session: Session, auth: AuthContext, data: EpisodeCreate) -> 
         raise HTTPException(
             status_code=422, detail="Content appears to contain a credential or secret"
         )
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     digest = hashlib.sha256(data.content.encode()).hexdigest()
     existing = session.scalar(
         select(Episode).where(
@@ -114,7 +125,21 @@ def create_episode(session: Session, auth: AuthContext, data: EpisodeCreate) -> 
         extra=data.metadata,
     )
     session.add(episode)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        existing = session.scalar(
+            select(Episode).where(
+                Episode.organization_id == auth.organization_id,
+                Episode.workspace_id == workspace_id,
+                Episode.content_hash == digest,
+                Episode.source_uri == data.source_uri,
+            )
+        )
+        if existing is not None:
+            return existing
+        raise HTTPException(status_code=409, detail="Episode was concurrently ingested") from exc
     enqueue(session, auth.organization_id, "enrich_episode", {"episode_id": str(episode.id)})
     audit(session, auth, "episode.created", resource_type="episode", resource_id=str(episode.id))
     session.commit()
@@ -128,7 +153,7 @@ def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Me
         raise HTTPException(
             status_code=422, detail="Content appears to contain a credential or secret"
         )
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     memory = Memory(
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -177,17 +202,37 @@ def update_memory(
     auth.require("memory.write")
     memory = get_memory(session, auth, memory_id)
     changes = data.model_dump(exclude_unset=True)
+    if "valid_until" in changes:
+        valid_until = changes["valid_until"]
+        if valid_until is not None and _as_utc(valid_until) <= _as_utc(memory.valid_from):
+            raise HTTPException(status_code=422, detail="valid_until must be after valid_from")
     metadata = changes.pop("metadata", None)
     for name, value in changes.items():
         setattr(memory, name, value)
     if metadata is not None:
         memory.metadata_ = metadata
+    derived_fields_changed = bool(
+        {"content", "subject", "sensitivity", "valid_until"}.intersection(changes)
+    )
     if data.content is not None or data.subject is not None:
         if contains_likely_secret(f"{memory.subject}\n{memory.content}"):
             raise HTTPException(
                 status_code=422, detail="Content appears to contain a credential or secret"
             )
         memory.embedding = None
+        memory.embedding_model = None
+    if derived_fields_changed:
+        now = utcnow()
+        for relationship in session.scalars(
+            select(Relationship).where(
+                Relationship.organization_id == auth.organization_id,
+                Relationship.source_memory_id == memory.id,
+            )
+        ):
+            if (relationship.metadata_ or {}).get("extracted") and (
+                relationship.valid_until is None or _as_utc(relationship.valid_until) > now
+            ):
+                relationship.valid_until = now
         enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
     audit(session, auth, "memory.updated", resource_type="memory", resource_id=str(memory.id))
     session.commit()
@@ -214,7 +259,7 @@ def add_explicit_relationship(
     session: Session, auth: AuthContext, data: RelationshipCreate
 ) -> Relationship:
     auth.require("graph.write")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     if data.source_memory_id is not None:
         get_memory(session, auth, data.source_memory_id)
     extracted = ExtractedRelationship(
@@ -260,7 +305,7 @@ def create_working_memory(
     session: Session, auth: AuthContext, data: WorkingMemoryCreate
 ) -> tuple[WorkingMemory, tuple[ResourceLock, str] | None]:
     auth.require("working_memory.write")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
     working = WorkingMemory(
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -374,7 +419,34 @@ def acquire_lock(
     session: Session, auth: AuthContext, data: LockAcquire, *, commit: bool = True
 ) -> tuple[ResourceLock, str]:
     auth.require("locks.acquire")
-    workspace_id = resolve_workspace(auth, data.workspace_id)
+    working = None
+    if data.working_memory_id is not None:
+        working = session.scalar(
+            select(WorkingMemory).where(
+                WorkingMemory.id == data.working_memory_id,
+                WorkingMemory.organization_id == auth.organization_id,
+            )
+        )
+        if working is None:
+            raise HTTPException(status_code=404, detail="Working memory not found")
+        if working.owner_principal_id != auth.principal_id and "admin" not in auth.capabilities:
+            raise HTTPException(
+                status_code=403, detail="Working memory is owned by another principal"
+            )
+        if working.status != "active" or _as_utc(working.expires_at) <= utcnow():
+            raise HTTPException(status_code=409, detail="Working memory is not active")
+        if working.resource_type and working.resource_type != data.resource_type:
+            raise HTTPException(status_code=409, detail="Lock resource type does not match task")
+        if working.resource_ref and working.resource_ref != data.resource_ref:
+            raise HTTPException(
+                status_code=409, detail="Lock resource reference does not match task"
+            )
+    requested_workspace = data.workspace_id
+    if requested_workspace is None and working is not None:
+        requested_workspace = working.workspace_id
+    workspace_id = resolve_workspace(session, auth, requested_workspace)
+    if working is not None and working.workspace_id != workspace_id:
+        raise HTTPException(status_code=409, detail="Lock workspace does not match task")
     now = utcnow()
     statement = select(ResourceLock).where(
         ResourceLock.organization_id == auth.organization_id,
@@ -384,11 +456,7 @@ def acquire_lock(
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         statement = statement.with_for_update()
     existing = session.scalar(statement)
-    if (
-        existing is not None
-        and existing.released_at is None
-        and _as_utc(existing.expires_at) > now
-    ):
+    if existing is not None and existing.released_at is None and _as_utc(existing.expires_at) > now:
         raise HTTPException(
             status_code=409,
             detail={
@@ -488,7 +556,7 @@ def release_lock(
 
 
 def enrich_memory(session: Session, memory_id: UUID) -> None:
-    memory = session.get(Memory, memory_id)
+    memory = session.get(Memory, memory_id, with_for_update=True)
     if memory is None or memory.status != "active":
         return
     result = classify(f"{memory.subject}\n{memory.content}")
@@ -505,32 +573,29 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
             "suggested_sensitivity": result.sensitivity,
         },
     }
-    retained_relationship_ids = set()
-    for relationship in result.relationships:
-        retained_relationship_ids.add(
-            add_relationship(
-                session,
-                organization_id=memory.organization_id,
-                workspace_id=memory.workspace_id,
-                extracted=relationship,
-                source_memory_id=memory.id,
-                sensitivity=memory.sensitivity,
-                valid_from=memory.valid_from,
-                valid_until=memory.valid_until,
-                metadata={"extracted": True},
-            ).id
-        )
     now = utcnow()
     for existing in session.scalars(
         select(Relationship).where(
             Relationship.organization_id == memory.organization_id,
             Relationship.source_memory_id == memory.id,
-            Relationship.valid_until.is_(None),
         )
     ):
-        is_extracted = (existing.metadata_ or {}).get("extracted")
-        if is_extracted and existing.id not in retained_relationship_ids:
+        if (existing.metadata_ or {}).get("extracted") and (
+            existing.valid_until is None or _as_utc(existing.valid_until) > now
+        ):
             existing.valid_until = now
+    for relationship in result.relationships:
+        add_relationship(
+            session,
+            organization_id=memory.organization_id,
+            workspace_id=memory.workspace_id,
+            extracted=relationship,
+            source_memory_id=memory.id,
+            sensitivity=memory.sensitivity,
+            valid_from=memory.valid_from,
+            valid_until=memory.valid_until,
+            metadata={"extracted": True},
+        )
 
 
 def enrich_episode(session: Session, episode_id: UUID) -> None:

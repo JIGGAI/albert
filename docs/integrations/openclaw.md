@@ -16,6 +16,9 @@ openclaw mcp add albert \
 openclaw mcp doctor albert --probe
 ```
 
+Configure OpenClaw's secret-backed HTTP authorization setting to send the
+caller's Albert API key as `Authorization: Bearer <key>`.
+
 Prefer an OpenClaw-supported secret reference over a literal key when managing
 the production configuration.
 
@@ -47,8 +50,8 @@ Equivalent direct configuration:
 
 Use `openclaw mcp status --verbose` for a configuration summary and
 `openclaw mcp reload` after a change when the active runtime owns the
-connection. The remote gateway currently shares one Albert identity across its
-callers; keep it private or deploy one gateway per security boundary.
+connection. The remote gateway forwards each caller's bearer key, preserving
+its Albert principal, capabilities, and audit identity.
 
 Apply [AGENTS.example.md](AGENTS.example.md) as the durable operating policy for
 agents that receive these tools.

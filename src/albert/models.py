@@ -88,7 +88,15 @@ class APIKey(Base, TimestampMixin):
 class Episode(Base, TimestampMixin):
     __tablename__ = "episodes"
     __table_args__ = (
-        UniqueConstraint("organization_id", "content_hash", "source_uri"),
+        Index(
+            "uq_episodes_scope_content_source",
+            "organization_id",
+            "workspace_id",
+            "content_hash",
+            "source_uri",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
         Index("ix_episodes_scope", "organization_id", "workspace_id", "project_ref"),
     )
 
@@ -145,7 +153,15 @@ class Memory(Base, TimestampMixin):
 class Entity(Base, TimestampMixin):
     __tablename__ = "entities"
     __table_args__ = (
-        UniqueConstraint("organization_id", "workspace_id", "canonical_name", "entity_type"),
+        Index(
+            "uq_entities_scope_name_type",
+            "organization_id",
+            "workspace_id",
+            "canonical_name",
+            "entity_type",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
         Index("ix_entities_scope", "organization_id", "workspace_id"),
     )
 

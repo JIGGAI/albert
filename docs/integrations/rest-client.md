@@ -106,10 +106,11 @@ curl --fail-with-body -sS -X POST \
   "$ALBERT_API_URL/v1/working-memory"
 ```
 
-The working-memory response does not return the atomically acquired lock token.
-When a client must renew or explicitly release a lease, start the working record
-with `acquire_lock: false`, then call `POST /v1/locks/acquire` with its
-`working_memory_id` and retain the returned token only in ephemeral task state.
+When `acquire_lock` succeeds, the working-memory response includes a `lock`
+object with its secret token and monotonic fence. Retain both only in ephemeral
+task state for renewal or explicit release. A client may still create working
+memory first and call `POST /v1/locks/acquire` separately when that better fits
+its workflow.
 
 Read state with `GET /v1/working-memory/{id}` and update progress with
 `PATCH /v1/working-memory/{id}`. Finish with
