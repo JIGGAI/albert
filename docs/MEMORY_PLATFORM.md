@@ -25,11 +25,10 @@ database with an MCP wrapper.
 
 Albert must be built and operated completely independently.
 
-- Do not access, call, modify, deploy to, synchronize with, or depend on any
-  TenHost system.
-- Do not copy TenHost source code, configuration, databases, credentials,
-  memories, or proprietary implementation details.
-- Do not deploy Albert on an existing TenHost host.
+- Do not access, copy, synchronize with, or depend on proprietary third-party
+  memory systems or their source code, configuration, databases, credentials,
+  memories, or implementation details.
+- Deploy Albert on dedicated infrastructure under its operator's control.
 - Use synthetic fixtures and independently created test data.
 - Give Albert its own repository, infrastructure, credentials, databases,
   monitoring, backups, documentation, and product identity.

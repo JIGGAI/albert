@@ -7,8 +7,6 @@
 - A DNS name and TLS reverse proxy for any non-loopback deployment
 - Random database and API-key-pepper secrets
 
-Albert does not require or connect to TenHost.
-
 ## First deployment
 
 ```bash
@@ -152,4 +150,3 @@ docker compose up -d api worker mcp
 
 The restore script replaces database contents. Back up external object storage
 separately when that optional backend is introduced.
-

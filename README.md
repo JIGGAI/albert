@@ -33,5 +33,5 @@ handoffs, REST recipes, and troubleshooting, see the
 
 ## Independence
 
-Albert is a clean, standalone system. It does not access, depend on, synchronize
-with, or deploy to TenHost.
+Albert is a clean, standalone system with its own infrastructure, credentials,
+database, and product identity.
