@@ -38,6 +38,7 @@ jobs:
         env:
           ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
           ALBERT_POSTGRES_PASSWORD: ci-database-password
+          ALBERT_CONSOLE_API_KEY: ci-console-key-placeholder
         run: docker compose config --quiet
       - name: Build production image
         run: docker build --tag albert-memory:ci .
