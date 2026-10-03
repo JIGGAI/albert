@@ -99,7 +99,10 @@ services:
     build: ./console
     environment:
       ALBERT_API_URL: http://api:8080
-      ALBERT_CONSOLE_API_KEY: ${ALBERT_CONSOLE_API_KEY:?set ALBERT_CONSOLE_API_KEY (albert-admin create-key --capabilities console.read,memory.read)}
+      # Optional at parse time: the key can only be issued once the API is up, so a
+      # first `docker compose up` must work without it. The console shows an
+      # authentication error until the key is set and the service is recreated.
+      ALBERT_CONSOLE_API_KEY: ${ALBERT_CONSOLE_API_KEY:-}
     ports:
       - "${ALBERT_CONSOLE_BIND:-127.0.0.1}:${ALBERT_CONSOLE_PORT:-8082}:8082"
     depends_on:

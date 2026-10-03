@@ -82,6 +82,14 @@ docker compose exec api albert-admin create-key \
 docker compose up -d console
 ```
 
+The key is optional when Compose parses the file, so the first
+`docker compose up` works before any key exists. After changing it, recreate the
+service so it picks up the new value:
+
+```bash
+docker compose up -d --force-recreate console
+```
+
 Open `http://127.0.0.1:8082`. The key stays inside the console container; the
 browser only ever talks to the console. Like the API and MCP, the console binds
 to loopback by default; put it behind the same TLS reverse proxy before exposing
