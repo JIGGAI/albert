@@ -33,7 +33,11 @@ export function Feed() {
 
   useEffect(() => {
     const close = openTraceStream((trace) => {
-      setFresh((current) => new Set(current).add(trace.id));
+      setFresh((current) => {
+        const next = new Set(current).add(trace.id);
+        if (next.size > MAX_ROWS) next.delete(next.values().next().value as string);
+        return next;
+      });
       setLive(true);
       setTraces((current) => {
         if (current.some((t) => t.id === trace.id)) return current;

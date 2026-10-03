@@ -3,11 +3,19 @@
 import type { Candidate, FusedHit, Span } from "@/lib/types";
 
 function isCandidates(value: unknown): value is Candidate[] {
-  return Array.isArray(value) && value.every((item) => item && typeof item === "object" && "rank" in item && "score" in item);
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => item && typeof item === "object" && "rank" in item && "score" in item)
+  );
 }
 
 function isHits(value: unknown): value is FusedHit[] {
-  return Array.isArray(value) && value.every((item) => item && typeof item === "object" && "rrf" in item);
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => item && typeof item === "object" && "rrf" in item)
+  );
 }
 
 export function SpanDetail({ span }: { span: Span }) {

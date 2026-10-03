@@ -313,6 +313,7 @@ class Trace(Base):
     __tablename__ = "traces"
     __table_args__ = (
         Index("ix_traces_started", "started_at", "id"),
+        Index("ix_traces_written", "written_at", "id"),
         Index("ix_traces_org_started", "organization_id", "started_at"),
     )
 
@@ -324,6 +325,9 @@ class Trace(Base):
     status: Mapped[str] = mapped_column(String(16), index=True)
     http_status: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Insertion time: rows land in completion order, so the live feed and
+    # Last-Event-ID cursor key on this, never on started_at.
+    written_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     spans: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)

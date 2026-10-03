@@ -66,6 +66,7 @@ from albert.services import (
     update_memory,
     update_working_memory,
 )
+from albert.trace_writer import get_trace_writer
 from albert.tracing import RecordingMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -75,7 +76,10 @@ logger = logging.getLogger("albert.api")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     logger.info("Albert API starting", extra={"version": __version__})
+    writer = get_trace_writer()
+    writer.start()
     yield
+    writer.stop()
 
 
 app = FastAPI(

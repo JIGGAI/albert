@@ -90,8 +90,8 @@ it, and treat anyone who can reach it as an operator.
 Traces hold ids, scores, timings and the search query text, never memory
 subjects or content. `ALBERT_TRACE_SAMPLE_RATE` (default `1.0`) is the dial
 for busy installs; error and degraded traces are always kept.
-`ALBERT_TRACE_RETENTION_DAYS` (default `14`) bounds the table; the worker prunes
-nightly.
+`ALBERT_TRACE_RETENTION_DAYS` (default `14`) bounds the table; the worker's
+housekeeping pass prunes older traces about once a minute.
 
 ## Upgrading to 0.3
 

@@ -12,6 +12,7 @@ import queue
 import random
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -55,13 +56,19 @@ class TraceWriter:
             self.dropped += 1
             return False
 
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
-        if self._thread is not None:
+        if self.running:
             return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="albert-trace-writer", daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
+        """Stop the thread and flush whatever is queued; safe to call twice."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout)
@@ -89,8 +96,9 @@ class TraceWriter:
     def _write(self, batch: list[dict[str, Any]]) -> None:
         with self._lock:
             try:
+                written_at = datetime.now(UTC)
                 with self._sessions() as session:
-                    session.add_all(Trace(**row) for row in batch)
+                    session.add_all(Trace(**row, written_at=written_at) for row in batch)
                     session.flush()
                     if session.bind is not None and session.bind.dialect.name == "postgresql":
                         for row in batch:

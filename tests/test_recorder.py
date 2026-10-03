@@ -34,7 +34,7 @@ def test_exception_marks_span_error_and_reraises() -> None:
             raise ValueError("boom")
     row = r.finish()
     assert row["spans"][0]["status"] == "error"
-    assert row["spans"][0]["detail"]["error"] == "ValueError: boom"
+    assert row["spans"][0]["detail"]["error"] == "ValueError"
     assert row["status"] == "error"
 
 
@@ -69,3 +69,14 @@ def test_summary_query_is_capped_and_identity_recorded() -> None:
     assert row["summary"]["hits"] == 3
     assert row["organization_id"] == "org"
     assert row["status"] == "degraded"
+
+
+def test_exception_detail_never_carries_the_message() -> None:
+    """Exception text can embed SQL parameters or constraint values; keep the type only."""
+    r = rec.Recorder("job", "enrich_memory")
+    with rec.activate(r), pytest.raises(RuntimeError):
+        with rec.span("write_edges"):
+            raise RuntimeError("DETAIL: Key (canonical_name)=(secret-content-marker)")
+    detail = r.finish()["spans"][0]["detail"]
+    assert detail["error"] == "RuntimeError"
+    assert "secret-content-marker" not in str(detail)

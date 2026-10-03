@@ -15,6 +15,7 @@ from albert.config import get_settings
 from albert.db import SessionLocal
 from albert.models import Episode, Job, ResourceLock, Trace, WorkingMemory, utcnow
 from albert.services import enrich_episode, enrich_memory
+from albert.trace_writer import get_trace_writer
 from albert.tracing import traced_job
 
 logger = logging.getLogger("albert.worker")
@@ -125,6 +126,7 @@ def run() -> None:
                 process_job(session, job)
                 continue
         time.sleep(get_settings().worker_poll_seconds)
+    get_trace_writer().stop()
     logger.info("Albert worker stopped")
 
 

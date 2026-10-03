@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ForceGraphMethods } from "react-force-graph-3d";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Highlight } from "@/lib/highlight";
 import type { GraphEdge, GraphNode, GraphSnapshot } from "@/lib/types";
 
@@ -49,8 +50,8 @@ export function Graph3D({
   onSelect: (node: GraphNode) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const graph = useRef<ForceGraphMethods | undefined>(undefined);
   const [size, setSize] = useState({ width: 600, height: 480 });
-  const [pulse, setPulse] = useState(0);
 
   useEffect(() => {
     const element = host.current;
@@ -62,13 +63,8 @@ export function Graph3D({
     return () => observer.disconnect();
   }, []);
 
-  const animate = !!highlight && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  useEffect(() => {
-    if (!animate) return;
-    const timer = setInterval(() => setPulse((p) => (p + 1) % 60), 100);
-    return () => clearInterval(timer);
-  }, [animate]);
-
+  // Accessors are memoized so the force graph is not re-digested on every render;
+  // motion comes from the edge particles the library animates itself.
   const data = useMemo(
     () => ({
       nodes: snapshot.nodes.map((node) => ({ ...node })),
@@ -76,33 +72,58 @@ export function Graph3D({
     }),
     [snapshot],
   );
-  const wave = 1 + 0.6 * Math.sin((pulse / 60) * Math.PI * 2);
+  const color = useCallback((node: object) => nodeColor(node as GraphNode, highlight), [highlight]);
+  const value = useCallback(
+    (node: object) => {
+      const n = node as GraphNode;
+      if (highlight?.hits.has(n.id)) return 8;
+      return n.kind === "entity" ? 3 : 2;
+    },
+    [highlight],
+  );
+  const isHitEdge = useCallback(
+    (link: object) => {
+      const l = link as Link;
+      return !!highlight && (highlight.edgeHits.has(l.id) || highlight.graph.has(l.id));
+    },
+    [highlight],
+  );
+  const linkColor = useCallback(
+    (link: object) => (!highlight ? COLORS.link : isHitEdge(link) ? COLORS.graph : COLORS.linkDim),
+    [highlight, isHitEdge],
+  );
+  const linkWidth = useCallback((link: object) => (isHitEdge(link) ? 2.5 : 0.6), [isHitEdge]);
+  const particles = useCallback((link: object) => (isHitEdge(link) ? 4 : 0), [isHitEdge]);
+  const label = useCallback((node: object) => {
+    const n = node as GraphNode;
+    return `${n.kind}: ${n.label}`;
+  }, []);
+  const frameHighlight = useCallback(() => {
+    if (!highlight || !graph.current) return;
+    const touched = new Set([...highlight.hits, ...highlight.lexical, ...highlight.vector]);
+    if (touched.size === 0) return;
+    graph.current.zoomToFit(600, 60, (node) => touched.has((node as GraphNode).id));
+  }, [highlight]);
 
   return (
     <div ref={host} className="graph-host" data-testid="graph-canvas">
       <ForceGraph3D
+        ref={graph}
         width={size.width}
         height={size.height}
         graphData={data}
         backgroundColor="#0e1420"
         nodeId="id"
-        nodeLabel={(node) => `${(node as GraphNode).kind}: ${(node as GraphNode).label}`}
-        nodeColor={(node) => nodeColor(node as GraphNode, highlight)}
-        nodeVal={(node) => {
-          const n = node as GraphNode;
-          if (highlight?.hits.has(n.id)) return 6 * wave + 2;
-          return n.kind === "entity" ? 3 : 2;
-        }}
+        nodeLabel={label}
+        nodeColor={color}
+        nodeVal={value}
         nodeOpacity={0.95}
-        linkColor={(link) => {
-          const l = link as Link;
-          if (!highlight) return COLORS.link;
-          return highlight.edgeHits.has(l.id) || highlight.graph.has(l.id) ? COLORS.graph : COLORS.linkDim;
-        }}
-        linkWidth={(link) => (highlight?.edgeHits.has((link as Link).id) ? 2.5 : 0.6)}
-        linkDirectionalParticles={(link) => (highlight?.edgeHits.has((link as Link).id) ? 4 : 0)}
+        linkColor={linkColor}
+        linkWidth={linkWidth}
+        linkDirectionalParticles={particles}
         linkDirectionalParticleColor={() => COLORS.graph}
         onNodeClick={(node) => onSelect(node as GraphNode)}
+        onEngineStop={frameHighlight}
         enableNodeDrag={false}
         showNavInfo={false}
       />

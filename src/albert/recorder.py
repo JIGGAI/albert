@@ -141,7 +141,12 @@ def span(name: str, **detail: Any) -> Iterator[SpanHandle]:
     try:
         yield handle
     except Exception as exc:
-        handle.set(error=f"{type(exc).__name__}: {exc}"[:500])
+        # The message can embed SQL parameters or constraint values, which may
+        # be memory content; the type (and HTTP status) is all a trace keeps.
+        handle.set(error=type(exc).__name__)
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            handle.set(status_code=status_code)
         recorder.add_span(name, started, handle.detail, "error")
         raise
     recorder.add_span(name, started, handle.detail, "ok")

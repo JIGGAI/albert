@@ -25,6 +25,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("http_status", sa.Integer(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("written_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("duration_ms", sa.Float(), nullable=False),
         sa.Column("summary", sa.JSON(), nullable=False),
         sa.Column("spans", sa.JSON(), nullable=False),
@@ -34,6 +35,7 @@ def upgrade() -> None:
         ("ix_traces_name", ["name"]),
         ("ix_traces_status", ["status"]),
         ("ix_traces_started", ["started_at", "id"]),
+        ("ix_traces_written", ["written_at", "id"]),
         ("ix_traces_org_started", ["organization_id", "started_at"]),
     ):
         op.create_index(name, "traces", columns)

@@ -133,3 +133,45 @@ def test_housekeeping_prunes_old_traces() -> None:
     with SessionLocal() as session:
         assert session.get(Trace, old_id) is None
         assert session.get(Trace, fresh_id) is not None
+
+
+async def test_recorder_write_failure_never_fails_the_request(
+    client: httpx.AsyncClient, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    from albert import tracing
+
+    class BrokenWriter:
+        def submit(self, row: dict) -> bool:
+            raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(tracing, "get_trace_writer", lambda: BrokenWriter())
+    response = await client.post("/v1/search", json={"query": "still works"})
+    assert response.status_code == 200
+
+
+async def test_http_exception_span_records_status_not_message() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as anon:
+        await anon.post(
+            "/v1/search",
+            json={"query": "x"},
+            headers={"Authorization": "Bearer alb_nope_secret-content-marker-xyz"},
+        )
+    trace = _latest("POST /v1/search")
+    auth = trace.spans[0]
+    assert auth["status"] == "error"
+    assert auth["detail"]["error"] == "HTTPException"
+    assert auth["detail"]["status_code"] == 401
+    assert "secret-content-marker" not in json.dumps(trace.spans)
+
+
+async def test_lifespan_starts_and_stops_the_trace_writer() -> None:
+    from albert.trace_writer import get_trace_writer
+
+    writer = get_trace_writer()
+    async with app.router.lifespan_context(app):
+        assert writer.running
+    assert not writer.running
+    writer.start()
+    assert writer.running

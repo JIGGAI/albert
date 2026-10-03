@@ -8,9 +8,8 @@ the explicit detail endpoints, truncated and audited.
 from __future__ import annotations
 
 import json
-import threading
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -30,7 +29,28 @@ from albert.trace_writer import get_trace_writer
 
 router = APIRouter(prefix="/v1/console", tags=["console"])
 GRAPH_NODE_CAP = 5000
+GRAPH_CACHE_ENTRIES = 32
 _graph_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _cache_get(key: str) -> dict[str, Any] | None:
+    ttl = get_settings().console_graph_cache_seconds
+    cached = _graph_cache.get(key)
+    if cached is None or time.monotonic() - cached[0] >= ttl:
+        return None
+    return cached[1]
+
+
+def _cache_put(key: str, value: dict[str, Any]) -> None:
+    """Bounded: drop expired entries, then the oldest, before inserting."""
+    ttl = get_settings().console_graph_cache_seconds
+    now = time.monotonic()
+    for stale in [k for k, (stamp, _) in _graph_cache.items() if now - stamp >= ttl]:
+        del _graph_cache[stale]
+    while len(_graph_cache) >= GRAPH_CACHE_ENTRIES:
+        oldest = min(_graph_cache, key=lambda k: _graph_cache[k][0])
+        del _graph_cache[oldest]
+    _graph_cache[key] = (now, value)
 
 
 def _operator(auth: AuthContext = Depends(authenticate)) -> AuthContext:
@@ -53,8 +73,8 @@ def _iso(value: datetime | None) -> str | None:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
 
 
-_trace_summary = trace_summary
-_feed = TraceFeed(SessionLocal, engine)
+_trace_summary = trace_summary  # list/detail endpoints share the feed's shape
+_feed = TraceFeed(SessionLocal, engine, get_settings().database_url)
 KEEPALIVE_SECONDS = 15
 
 
@@ -122,24 +142,30 @@ def list_traces(
 
 
 @router.get("/stream")
-def stream(request: Request, _auth: AuthContext = Depends(_operator)) -> StreamingResponse:
-    """Server-sent events: one `trace` event per recorded trace, newest last."""
-    after = parse_event_id(request.headers.get("last-event-id"))
-    stop = threading.Event()
+def stream(
+    request: Request,
+    _auth: AuthContext = Depends(_operator),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Server-sent events: one `trace` event per recorded trace, newest last.
 
-    def body() -> Iterator[str]:
+    The request's database session is released before streaming starts so a
+    long-lived stream never pins a pooled connection, and the body is async so
+    idle waits do not occupy a threadpool slot.
+    """
+    after = parse_event_id(request.headers.get("last-event-id"))
+    session.close()
+
+    async def body() -> AsyncIterator[str]:
         last_keepalive = time.monotonic()
-        try:
-            for event in _feed.events(after, stop):
-                if event is None:
-                    if time.monotonic() - last_keepalive >= KEEPALIVE_SECONDS:
-                        last_keepalive = time.monotonic()
-                        yield ": keepalive\n\n"
-                    continue
-                payload = json.dumps(event["data"])
-                yield f"id: {event['id']}\nevent: trace\ndata: {payload}\n\n"
-        finally:
-            stop.set()
+        async for event in _feed.events(after):
+            if event is None:
+                if time.monotonic() - last_keepalive >= KEEPALIVE_SECONDS:
+                    last_keepalive = time.monotonic()
+                    yield ": keepalive\n\n"
+                continue
+            payload = json.dumps(event["data"])
+            yield f"id: {event['id']}\nevent: trace\ndata: {payload}\n\n"
 
     return StreamingResponse(
         body(),
@@ -188,10 +214,9 @@ def graph_snapshot(
     audited detail endpoint.
     """
     key = f"{organization_id}|{workspace_id}|{temporal_as_of}|{limit}"
-    ttl = get_settings().console_graph_cache_seconds
-    cached = _graph_cache.get(key)
-    if cached and time.monotonic() - cached[0] < ttl:
-        return cached[1]
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     when = temporal_as_of or datetime.now(UTC)
 
     entity_scope = [Entity.organization_id == organization_id]
@@ -267,7 +292,7 @@ def graph_snapshot(
     else:
         truncated = True
     result = {"nodes": nodes, "edges": edges, "truncated": truncated}
-    _graph_cache[key] = (time.monotonic(), result)
+    _cache_put(key, result)
     return result
 
 
@@ -287,17 +312,19 @@ def overview(
         if session.bind is not None and session.bind.dialect.name != "postgresql"
         else start
     )
-    for trace in session.scalars(select(Trace).where(Trace.started_at >= query_start)):
-        started = trace.started_at
-        started = started.replace(tzinfo=UTC) if started.tzinfo is None else started.astimezone(UTC)
-        key = started.replace(second=0, microsecond=0).isoformat()
+    recent = session.execute(
+        select(Trace.started_at, Trace.status).where(Trace.started_at >= query_start)
+    )
+    for started_at, trace_status in recent:
+        started = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
+        key = started.astimezone(UTC).replace(second=0, microsecond=0).isoformat()
         bucket = buckets.get(key)
         if bucket is None:
             continue
         bucket["count"] += 1
-        if trace.status == "error":
+        if trace_status == "error":
             bucket["errors"] += 1
-        elif trace.status == "degraded":
+        elif trace_status == "degraded":
             bucket["degraded"] += 1
     jobs = session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status)).all()
     oldest = session.scalar(select(func.min(Job.available_at)).where(Job.status == "pending"))
@@ -345,19 +372,27 @@ def operator_memory(
         "valid_from": _iso(memory.valid_from),
         "valid_until": _iso(memory.valid_until),
         "embedding_model": memory.embedding_model,
-        "metadata": memory.metadata_,
     }
 
 
 @router.get("/entities/{entity_id}")
 def operator_entity(
     entity_id: UUID,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     entity = session.get(Entity, entity_id)
     if entity is None:
         raise HTTPException(status_code=404, detail="Entity not found")
+    audit(
+        session,
+        auth,
+        "entity.read",
+        resource_type="entity",
+        resource_id=str(entity.id),
+        detail={"console": True},
+    )
+    session.commit()
     return {
         "id": str(entity.id),
         "name": entity.display_name,

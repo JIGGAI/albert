@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from albert.api import app
+from albert.db import SessionLocal
 from albert.trace_writer import get_trace_writer
 
 from .conftest import create_principal_key, drain_jobs
@@ -114,7 +115,6 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
     from typing import ClassVar
 
     from albert.console import stream
-    from albert.db import SessionLocal
     from albert.models import Trace
     from albert.security import AuthContext
 
@@ -145,7 +145,11 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
         workspace_id=None,
         capabilities=frozenset({"console.read"}),
     )
-    response = stream(FakeRequest(), auth)  # type: ignore[arg-type]
+    class FakeSession:
+        def close(self) -> None:
+            return None
+
+    response = stream(FakeRequest(), auth, FakeSession())  # type: ignore[arg-type]
     assert response.media_type == "text/event-stream"
     body = response.body_iterator
     first = ""
@@ -161,3 +165,69 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
     # envelope is asserted; the feed tests cover cursor semantics.
     assert {"id", "name", "status", "started_at", "summary"} <= set(payload)
     assert trace_id  # created above so the table is never empty here
+
+
+async def test_entity_detail_is_audited_and_memory_detail_omits_metadata(
+    client: httpx.AsyncClient, console_key: str
+) -> None:
+    from sqlalchemy import select
+
+    from albert.models import AuditEvent
+
+    created = await client.post(
+        "/v1/memories",
+        json={"content": "Audited Service uses Audited Store.", "metadata": {"secret_ish": 1}},
+    )
+    drain_jobs()
+    relationship = (await client.post("/v1/graph/query", json={"query": "Audited"})).json()[0]
+    async with _console_client(console_key) as console:
+        entity = await console.get(f"/v1/console/entities/{relationship['source_entity_id']}")
+        assert entity.status_code == 200
+        memory = await console.get(f"/v1/console/memories/{created.json()['id']}")
+        assert memory.status_code == 200
+        assert "metadata" not in memory.json()
+    with SessionLocal() as session:
+        events = session.scalars(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "entity.read",
+                AuditEvent.resource_id == relationship["source_entity_id"],
+            )
+        ).all()
+    assert events
+
+
+def test_graph_cache_is_bounded() -> None:
+    from albert import console
+
+    console._graph_cache.clear()
+    for i in range(console.GRAPH_CACHE_ENTRIES + 20):
+        console._cache_put(f"key-{i}", {"nodes": [], "edges": [], "truncated": False})
+    assert len(console._graph_cache) <= console.GRAPH_CACHE_ENTRIES
+    assert "key-0" not in console._graph_cache
+
+
+async def test_stream_releases_its_database_session(identity) -> None:  # type: ignore[no-untyped-def]
+    from typing import ClassVar
+
+    from albert.console import stream
+    from albert.security import AuthContext
+
+    _key, organization, _workspace = identity
+    closed: list[bool] = []
+
+    class FakeSession:
+        def close(self) -> None:
+            closed.append(True)
+
+    class FakeRequest:
+        headers: ClassVar[dict[str, str]] = {}
+
+    auth = AuthContext(
+        principal_id=organization.id,
+        organization_id=organization.id,
+        workspace_id=None,
+        capabilities=frozenset({"console.read"}),
+    )
+    response = stream(FakeRequest(), auth, FakeSession())  # type: ignore[arg-type]
+    await response.body_iterator.aclose()
+    assert closed == [True]
