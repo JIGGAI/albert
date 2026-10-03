@@ -8,13 +8,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, cast, func, or_, select
+from sqlalchemy import Float, cast, func, literal_column, or_, select, text
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import query_relationships
-from albert.models import Memory
+from albert.models import Memory, MemoryChunk
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
 
 RRF_K = 60
@@ -61,10 +61,11 @@ def _lexical_search(
         organization_id=organization_id, workspace_id=workspace_id, request=request
     )
     if session.bind is not None and session.bind.dialect.name == "postgresql":
-        document = func.to_tsvector(
-            "english", func.coalesce(Memory.subject, "") + " " + func.coalesce(Memory.content, "")
-        )
-        query = func.plainto_tsquery("english", request.query)
+        # memories.search_vector is a stored generated tsvector (migration 0003)
+        # with a GIN index; matching on the column keeps the index usable and
+        # avoids recomputing to_tsvector for every ranked row.
+        document = literal_column("memories.search_vector")
+        query = func.plainto_tsquery(literal_column("'english'::regconfig"), request.query)
         rank = func.ts_rank_cd(document, query)
         statement = (
             select(Memory, rank.label("lexical_rank"))
@@ -92,13 +93,29 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return sum(x * y for x, y in zip(left, right, strict=True)) / denominator if denominator else -1
 
 
+def _enable_iterative_scan(session: Session) -> None:
+    """Let pgvector keep scanning until the filtered result is full.
+
+    An HNSW scan returns ef_search candidates and only then applies the tenant,
+    workspace and sensitivity predicates; a small tenant inside a large table
+    can otherwise get zero vector hits. relaxed_order may return rows slightly
+    out of distance order, so callers re-sort.
+    """
+    try:
+        with session.begin_nested():
+            session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+    except Exception:  # pragma: no cover - older pgvector without the GUC
+        logger.warning("hnsw.iterative_scan unavailable; small tenants may lose vector hits")
+
+
 def _vector_search(
     session: Session,
     *,
     organization_id: UUID,
     workspace_id: UUID | None,
     request: SearchRequest,
-) -> list[tuple[Memory, float]]:
+) -> list[tuple[Memory, float, int]]:
+    """Best-matching chunk per memory as (memory, similarity, chunk_index)."""
     embedder = get_embedder()
     query_vector = embedder.embed(request.query)
     conditions = _scope_conditions(
@@ -106,22 +123,47 @@ def _vector_search(
     )
     # Vectors from another model live in a different space; comparing them to
     # this query would rank noise. They are re-embedded by reindex-memories.
-    conditions.append(Memory.embedding.is_not(None))
-    conditions.append(Memory.embedding_model == embedder.name)
+    conditions.extend(
+        [
+            MemoryChunk.organization_id == organization_id,
+            MemoryChunk.embedding_model == embedder.name,
+            MemoryChunk.embedding.is_not(None),
+        ]
+    )
+    minimum = get_settings().min_vector_similarity
+    candidate_limit = request.limit * 6
+    best: dict[UUID, tuple[Memory, float, int]] = {}
+
     if session.bind is not None and session.bind.dialect.name == "postgresql":
-        distance = cast(Memory.embedding.op("<=>")(query_vector), Float)
+        _enable_iterative_scan(session)
+        distance = cast(MemoryChunk.embedding.op("<=>")(query_vector), Float)
         rows = session.execute(
-            select(Memory, distance.label("vector_distance"))
+            select(Memory, MemoryChunk.chunk_index, distance.label("vector_distance"))
+            .join(MemoryChunk, MemoryChunk.memory_id == Memory.id)
             .where(*conditions)
             .order_by(distance)
-            .limit(request.limit * 3)
+            .limit(candidate_limit)
         )
-        candidates = [(memory, 1.0 - float(value)) for memory, value in rows]
-        return [item for item in candidates if item[1] >= get_settings().min_vector_similarity]
-    rows = list(session.scalars(select(Memory).where(*conditions)))
-    candidates = [(memory, _cosine(memory.embedding or [], query_vector)) for memory in rows]
-    candidates = [item for item in candidates if item[1] >= get_settings().min_vector_similarity]
-    return sorted(candidates, key=lambda item: item[1], reverse=True)[: request.limit * 3]
+        scored = [(memory, 1.0 - float(value), index) for memory, index, value in rows]
+    else:
+        rows = session.execute(
+            select(Memory, MemoryChunk.chunk_index, MemoryChunk.embedding)
+            .join(MemoryChunk, MemoryChunk.memory_id == Memory.id)
+            .where(*conditions)
+        )
+        scored = [
+            (memory, _cosine(embedding or [], query_vector), index)
+            for memory, index, embedding in rows
+        ]
+
+    for memory, similarity, index in scored:
+        if similarity < minimum:
+            continue
+        current = best.get(memory.id)
+        if current is None or similarity > current[1]:
+            best[memory.id] = (memory, similarity, index)
+    ordered = sorted(best.values(), key=lambda item: item[1], reverse=True)
+    return ordered[: request.limit * 3]
 
 
 def hybrid_search(
@@ -187,11 +229,12 @@ def hybrid_search(
                                 "memory_type": memory.memory_type,
                                 "sensitivity": memory.sensitivity,
                                 "confidence": memory.confidence,
+                                "chunk_index": chunk_index,
                                 "backend_scores": {"vector": vector_similarity},
                             },
                         ),
                     )
-                    for memory, vector_similarity in vectors
+                    for memory, vector_similarity, chunk_index in vectors
                 ],
             )
         )
@@ -255,6 +298,8 @@ def hybrid_search(
             if key in hits:
                 existing_scores = hits[key].metadata.setdefault("backend_scores", {})
                 existing_scores.update(hit.metadata.get("backend_scores", {}))
+                for name, value in hit.metadata.items():
+                    hits[key].metadata.setdefault(name, value)
             else:
                 hits[key] = hit
             backend_names[key].append(backend)

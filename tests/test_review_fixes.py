@@ -161,7 +161,7 @@ def test_heuristic_extractor_produces_bounded_entity_names() -> None:
 async def test_vector_search_ignores_embeddings_from_other_models(
     client: httpx.AsyncClient,
 ) -> None:
-    from albert.models import Memory
+    from albert.models import MemoryChunk
 
     created = await client.post(
         "/v1/memories", json={"subject": "Stale vector", "content": "Stale vector marker text"}
@@ -169,8 +169,10 @@ async def test_vector_search_ignores_embeddings_from_other_models(
     memory_id = created.json()["id"]
     drain_jobs()
     with SessionLocal() as session:
-        memory = session.get(Memory, UUID(memory_id))
-        memory.embedding_model = "some-other-model-v9"
+        for chunk in session.scalars(
+            select(MemoryChunk).where(MemoryChunk.memory_id == UUID(memory_id))
+        ):
+            chunk.embedding_model = "some-other-model-v9"
         session.commit()
     result = await client.post(
         "/v1/search", json={"query": "Stale vector marker text", "include_graph": False}

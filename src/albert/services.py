@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from albert.chunking import chunk_text
 from albert.classifier import (
     ExtractedEntity,
     ExtractedRelationship,
@@ -25,6 +26,7 @@ from albert.models import (
     Episode,
     Job,
     Memory,
+    MemoryChunk,
     Relationship,
     ResourceLock,
     WorkingMemory,
@@ -243,7 +245,9 @@ def update_memory(
         if (relationship.metadata_ or {}).get("extracted")
     ]
     if text_changed:
-        memory.embedding = None
+        # Old chunks describe text that no longer exists; drop them now rather
+        # than serve them from vector search until the worker catches up.
+        _drop_chunks(session, memory.id)
         memory.embedding_model = None
         # The facts themselves may have changed: close the old edges now and let
         # re-enrichment extract the current ones.
@@ -263,14 +267,52 @@ def update_memory(
     return memory
 
 
+def _drop_chunks(session: Session, memory_id: UUID) -> None:
+    session.query(MemoryChunk).filter(MemoryChunk.memory_id == memory_id).delete(
+        synchronize_session=False
+    )
+
+
+def index_memory_chunks(session: Session, memory: Memory) -> None:
+    """Replace a memory's chunks and embeddings with ones for its current text."""
+    settings = get_settings()
+    embedder = get_embedder()
+    _drop_chunks(session, memory.id)
+    chunks = chunk_text(
+        memory.content,
+        max_characters=settings.chunk_characters,
+        overlap_characters=settings.chunk_overlap_characters,
+    )
+    truncated = len(chunks) > settings.max_chunks_per_memory
+    chunks = chunks[: settings.max_chunks_per_memory]
+    for index, chunk in enumerate(chunks):
+        text = f"{memory.subject}\n{chunk}" if memory.subject else chunk
+        session.add(
+            MemoryChunk(
+                memory_id=memory.id,
+                organization_id=memory.organization_id,
+                workspace_id=memory.workspace_id,
+                chunk_index=index,
+                content=chunk,
+                embedding=embedder.embed(text),
+                embedding_model=embedder.name,
+            )
+        )
+    memory.embedding_model = embedder.name
+    memory.metadata_ = {
+        **(memory.metadata_ or {}),
+        "embedding": {"model": embedder.name, "chunks": len(chunks), "truncated": truncated},
+    }
+
+
 def _scrub_memory(session: Session, memory: Memory, now: datetime) -> None:
     """Forget a memory: keep the row for audit identity, drop everything it said."""
     memory.status = "deleted"
     memory.subject = ""
     memory.content = ""
-    memory.embedding = None
     memory.embedding_model = None
     memory.metadata_ = {}
+    _drop_chunks(session, memory.id)
     session.query(Relationship).filter(
         Relationship.organization_id == memory.organization_id,
         Relationship.source_memory_id == memory.id,
@@ -634,9 +676,7 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
     if memory is None or memory.status != "active":
         return
     result = classify(f"{memory.subject}\n{memory.content}")
-    embedder = get_embedder()
-    memory.embedding = embedder.embed(f"{memory.subject}\n{memory.content}")
-    memory.embedding_model = embedder.name
+    index_memory_chunks(session, memory)
     if memory.memory_type == "fact" and result.memory_type != "fact":
         memory.memory_type = result.memory_type
     original_sensitivity = memory.sensitivity
@@ -698,9 +738,7 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     )
     session.add(memory)
     session.flush()
-    embedder = get_embedder()
-    memory.embedding = embedder.embed(memory.content)
-    memory.embedding_model = embedder.name
+    index_memory_chunks(session, memory)
     for relationship in result.relationships:
         add_relationship(
             session,

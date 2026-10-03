@@ -16,13 +16,20 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+POSTGRES_ONLY_INDEXES = {
+    "ix_memory_chunks_embedding_hnsw",
+    "ix_memories_search_vector",
+}
+POSTGRES_ONLY_COLUMNS = {("memories", "search_vector")}
+
+
 def include_object(object_, name, type_, reflected, compare_to):  # type: ignore[no-untyped-def]
-    # These production indexes are created explicitly in the migration because
-    # SQLAlchemy metadata cannot represent the FTS expression portably.
-    if type_ == "index" and reflected and name in {
-        "ix_memories_embedding_hnsw",
-        "ix_memories_fts",
-    }:
+    # The HNSW index and the generated tsvector column exist only on PostgreSQL
+    # and are created with raw DDL in the migrations, so autogenerate must not
+    # try to drop them.
+    if type_ == "index" and reflected and name in POSTGRES_ONLY_INDEXES:
+        return False
+    if type_ == "column" and reflected and (object_.table.name, name) in POSTGRES_ONLY_COLUMNS:
         return False
     return True
 
