@@ -43,7 +43,14 @@ def _opt(value: UUID | None) -> str | None:
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    """ISO-8601 with an explicit UTC offset.
+
+    SQLite returns naive timestamps; a browser would read those as local time
+    and the explorer's time slider would drift by the operator's UTC offset.
+    """
+    if value is None:
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
 
 
 _trace_summary = trace_summary
@@ -160,7 +167,7 @@ def _edge(relationship: Relationship) -> dict[str, Any]:
         "target": str(relationship.target_entity_id),
         "relation_type": relationship.relation_type,
         "sensitivity": relationship.sensitivity,
-        "valid_from": relationship.valid_from.isoformat(),
+        "valid_from": _iso(relationship.valid_from),
         "valid_until": _iso(relationship.valid_until),
         "source_memory_id": _opt(relationship.source_memory_id),
     }
@@ -335,7 +342,7 @@ def operator_memory(
         "sensitivity": memory.sensitivity,
         "workspace_id": _opt(memory.workspace_id),
         "organization_id": str(memory.organization_id),
-        "valid_from": memory.valid_from.isoformat(),
+        "valid_from": _iso(memory.valid_from),
         "valid_until": _iso(memory.valid_until),
         "embedding_model": memory.embedding_model,
         "metadata": memory.metadata_,

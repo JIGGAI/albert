@@ -43,6 +43,8 @@ def trace_summary(trace: Trace) -> dict[str, Any]:
     def opt(value: UUID | None) -> str | None:
         return str(value) if value is not None else None
 
+    started = trace.started_at if trace.started_at.tzinfo else trace.started_at.replace(tzinfo=UTC)
+
     return {
         "id": str(trace.id),
         "kind": trace.kind,
@@ -51,7 +53,7 @@ def trace_summary(trace: Trace) -> dict[str, Any]:
         "principal_id": opt(trace.principal_id),
         "status": trace.status,
         "http_status": trace.http_status,
-        "started_at": trace.started_at.isoformat(),
+        "started_at": started.astimezone(UTC).isoformat(),
         "duration_ms": trace.duration_ms,
         "summary": trace.summary,
     }

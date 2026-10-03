@@ -111,6 +111,7 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
     buffers whole responses, so an endless event stream can never complete there."""
     import json
     from datetime import UTC, datetime
+    from typing import ClassVar
 
     from albert.console import stream
     from albert.db import SessionLocal
@@ -136,7 +137,7 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
     epoch = "1970-01-01T00:00:00+00:00|00000000-0000-0000-0000-000000000000"
 
     class FakeRequest:
-        headers = {"last-event-id": epoch}
+        headers: ClassVar[dict[str, str]] = {"last-event-id": epoch}
 
     auth = AuthContext(
         principal_id=organization.id,

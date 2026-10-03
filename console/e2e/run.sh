@@ -16,7 +16,7 @@ export ALBERT_E2E_KEY="$key" ALBERT_CONSOLE_API_KEY="$key" ALBERT_API_URL=http:/
 api=$!
 .venv/bin/albert-worker &
 worker=$!
-trap 'kill $api $worker 2>/dev/null || true; rm -f "$db.sqlite3"' EXIT INT TERM
+trap 'kill $api $worker 2>/dev/null || true; wait $api $worker 2>/dev/null || true; rm -f "$db.sqlite3"' EXIT INT TERM
 for _ in $(seq 1 40); do
   if curl -fs http://127.0.0.1:8080/v1/health/ready >/dev/null 2>&1; then break; fi
   sleep 0.25
