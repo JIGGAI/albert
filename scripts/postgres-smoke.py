@@ -72,7 +72,7 @@ def main() -> None:
         second_workspace = Workspace(organization_id=organization.id, name="Second")
         session.add(second_workspace)
         session.commit()
-        first_episode = create_episode(
+        first_episode, _ = create_episode(
             session,
             organization_auth,
             EpisodeCreate(
@@ -81,7 +81,7 @@ def main() -> None:
                 source_uri="smoke://shared",
             ),
         )
-        second_episode = create_episode(
+        second_episode, _ = create_episode(
             session,
             organization_auth,
             EpisodeCreate(

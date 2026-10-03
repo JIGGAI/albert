@@ -11,6 +11,12 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def _require_visible_text(value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError("content must contain visible text")
+    return value
+
+
 class ScopeFields(BaseModel):
     workspace_id: UUID | None = None
     project_ref: str | None = Field(default=None, max_length=300)
@@ -25,6 +31,8 @@ class EpisodeCreate(ScopeFields):
     sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
     occurred_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _visible_content = field_validator("content")(_require_visible_text)
 
 
 class EpisodeRead(ORMModel):
@@ -56,6 +64,8 @@ class MemoryCreate(ScopeFields):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _visible_content = field_validator("content")(_require_visible_text)
+
     @field_validator("valid_until")
     @classmethod
     def validate_valid_until(cls, value: datetime | None, info):  # type: ignore[no-untyped-def]
@@ -73,6 +83,8 @@ class MemoryUpdate(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     valid_until: datetime | None = None
     metadata: dict[str, Any] | None = None
+
+    _visible_content = field_validator("content")(_require_visible_text)
 
 
 class MemoryRead(ORMModel):
@@ -182,6 +194,12 @@ class RelationshipRead(BaseModel):
 class GraphQuery(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     workspace_id: UUID | None = None
+    hops: int = Field(default=2, ge=1, le=5)
+    limit: int = Field(default=50, ge=1, le=200)
+    temporal_as_of: datetime | None = None
+
+
+class SubgraphQuery(BaseModel):
     hops: int = Field(default=2, ge=1, le=5)
     limit: int = Field(default=50, ge=1, le=200)
     temporal_as_of: datetime | None = None

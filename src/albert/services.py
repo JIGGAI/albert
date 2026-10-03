@@ -91,7 +91,14 @@ def enqueue(session: Session, organization_id: UUID, job_type: str, payload: dic
     return job
 
 
-def create_episode(session: Session, auth: AuthContext, data: EpisodeCreate) -> Episode:
+def create_episode(
+    session: Session, auth: AuthContext, data: EpisodeCreate
+) -> tuple[Episode, bool]:
+    """Persist a canonical episode; returns (episode, created).
+
+    Deduplication is scoped to the calling principal so one principal can never
+    learn about, or be handed, another principal's episode by re-posting text.
+    """
     auth.require("memory.write")
     if contains_likely_secret(data.content):
         raise HTTPException(
@@ -99,16 +106,16 @@ def create_episode(session: Session, auth: AuthContext, data: EpisodeCreate) -> 
         )
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     digest = hashlib.sha256(data.content.encode()).hexdigest()
-    existing = session.scalar(
-        select(Episode).where(
-            Episode.organization_id == auth.organization_id,
-            Episode.workspace_id == workspace_id,
-            Episode.content_hash == digest,
-            Episode.source_uri == data.source_uri,
-        )
+    duplicate_of = select(Episode).where(
+        Episode.organization_id == auth.organization_id,
+        Episode.workspace_id == workspace_id,
+        Episode.owner_principal_id == auth.principal_id,
+        Episode.content_hash == digest,
+        Episode.source_uri == data.source_uri,
     )
+    existing = session.scalar(duplicate_of)
     if existing is not None:
-        return existing
+        return existing, False
     episode = Episode(
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -129,22 +136,15 @@ def create_episode(session: Session, auth: AuthContext, data: EpisodeCreate) -> 
         session.flush()
     except IntegrityError as exc:
         session.rollback()
-        existing = session.scalar(
-            select(Episode).where(
-                Episode.organization_id == auth.organization_id,
-                Episode.workspace_id == workspace_id,
-                Episode.content_hash == digest,
-                Episode.source_uri == data.source_uri,
-            )
-        )
+        existing = session.scalar(duplicate_of)
         if existing is not None:
-            return existing
+            return existing, False
         raise HTTPException(status_code=409, detail="Episode was concurrently ingested") from exc
     enqueue(session, auth.organization_id, "enrich_episode", {"episode_id": str(episode.id)})
     audit(session, auth, "episode.created", resource_type="episode", resource_id=str(episode.id))
     session.commit()
     session.refresh(episode)
-    return episode
+    return episode, True
 
 
 def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Memory:
@@ -211,29 +211,36 @@ def update_memory(
         setattr(memory, name, value)
     if metadata is not None:
         memory.metadata_ = metadata
-    derived_fields_changed = bool(
-        {"content", "subject", "sensitivity", "valid_until"}.intersection(changes)
-    )
-    if data.content is not None or data.subject is not None:
+    text_changed = data.content is not None or data.subject is not None
+    extracted_edges = [
+        relationship
+        for relationship in session.scalars(
+            select(Relationship).where(
+                Relationship.organization_id == auth.organization_id,
+                Relationship.source_memory_id == memory.id,
+            )
+        )
+        if (relationship.metadata_ or {}).get("extracted")
+    ]
+    if text_changed:
         if contains_likely_secret(f"{memory.subject}\n{memory.content}"):
             raise HTTPException(
                 status_code=422, detail="Content appears to contain a credential or secret"
             )
         memory.embedding = None
         memory.embedding_model = None
-    if derived_fields_changed:
+        # The facts themselves may have changed: close the old edges now and let
+        # re-enrichment extract the current ones.
         now = utcnow()
-        for relationship in session.scalars(
-            select(Relationship).where(
-                Relationship.organization_id == auth.organization_id,
-                Relationship.source_memory_id == memory.id,
-            )
-        ):
-            if (relationship.metadata_ or {}).get("extracted") and (
-                relationship.valid_until is None or _as_utc(relationship.valid_until) > now
-            ):
+        for relationship in extracted_edges:
+            if relationship.valid_until is None or _as_utc(relationship.valid_until) > now:
                 relationship.valid_until = now
         enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
+    elif {"sensitivity", "valid_until"}.intersection(changes):
+        # The facts are unchanged; their visibility window follows the memory.
+        for relationship in extracted_edges:
+            relationship.sensitivity = memory.sensitivity
+            relationship.valid_until = memory.valid_until
     audit(session, auth, "memory.updated", resource_type="memory", resource_id=str(memory.id))
     session.commit()
     session.refresh(memory)

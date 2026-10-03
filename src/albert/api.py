@@ -36,6 +36,7 @@ from albert.schemas import (
     RelationshipRead,
     SearchRequest,
     SearchResponse,
+    SubgraphQuery,
     WorkingMemoryCreate,
     WorkingMemoryCreateRead,
     WorkingMemoryFinish,
@@ -115,10 +116,14 @@ async def ready(session: Session = Depends(get_session)) -> HealthResponse:
 @app.post("/v1/episodes", response_model=EpisodeRead, status_code=201, tags=["episodes"])
 async def post_episode(
     data: EpisodeCreate,
+    response: Response,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ) -> Episode:
-    return create_episode(session, auth, data)
+    episode, created = create_episode(session, auth, data)
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return episode
 
 
 @app.get("/v1/episodes/{episode_id}", response_model=EpisodeRead, tags=["episodes"])
@@ -318,8 +323,7 @@ async def query_graph(
 )
 async def get_subgraph(
     entity_id: UUID,
-    hops: int = 2,
-    limit: int = 50,
+    query: SubgraphQuery = Depends(),
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ) -> list[RelationshipRead]:
@@ -336,9 +340,9 @@ async def get_subgraph(
         organization_id=auth.organization_id,
         workspace_id=entity.workspace_id,
         entity_id=entity.id,
-        hops=max(1, min(5, hops)),
-        temporal_as_of=None,
-        limit=max(1, min(200, limit)),
+        hops=query.hops,
+        temporal_as_of=query.temporal_as_of,
+        limit=query.limit,
         sensitivities=auth.allowed_sensitivities(),
     )
 
@@ -395,7 +399,8 @@ async def read_working_memory(
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ):  # type: ignore[no-untyped-def]
-    auth.require("working_memory.write")
+    if "working_memory.read" not in auth.capabilities:
+        auth.require("working_memory.write")
     return get_working_memory(session, auth, working_id)
 
 

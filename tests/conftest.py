@@ -90,3 +90,43 @@ async def client(identity):  # type: ignore[no-untyped-def]
 @pytest.fixture()
 def anyio_backend() -> str:
     return "asyncio"
+
+
+def create_principal_key(
+    organization: Organization,
+    workspace: Workspace | None,
+    name: str,
+    capabilities: list[str],
+) -> str:
+    """Issue a key for an additional principal inside an existing tenant."""
+    with SessionLocal() as session:
+        principal = Principal(
+            organization_id=organization.id,
+            workspace_id=workspace.id if workspace is not None else None,
+            name=name,
+            principal_type="agent",
+        )
+        session.add(principal)
+        session.flush()
+        raw, prefix, digest = issue_api_key()
+        session.add(
+            APIKey(
+                principal_id=principal.id,
+                prefix=prefix,
+                key_hash=digest,
+                capabilities=capabilities,
+            )
+        )
+        session.commit()
+        return raw
+
+
+def drain_jobs() -> None:
+    from albert.worker import claim_job, process_job
+
+    while True:
+        with SessionLocal() as session:
+            job = claim_job(session, "test-worker")
+            if job is None:
+                return
+            process_job(session, job)

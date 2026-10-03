@@ -92,6 +92,7 @@ class Episode(Base, TimestampMixin):
             "uq_episodes_scope_content_source",
             "organization_id",
             "workspace_id",
+            "owner_principal_id",
             "content_hash",
             "source_uri",
             unique=True,

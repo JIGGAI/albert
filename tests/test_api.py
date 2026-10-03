@@ -80,7 +80,7 @@ async def test_episode_is_canonical_and_idempotent(client: httpx.AsyncClient) ->
     first = await client.post("/v1/episodes", json=payload)
     second = await client.post("/v1/episodes", json=payload)
     assert first.status_code == 201
-    assert second.status_code == 201
+    assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
     drain_jobs()
     status = await client.get(f"/v1/episodes/{first.json()['id']}")

@@ -20,6 +20,7 @@ ALL_CAPABILITIES = [
     "memory.import",
     "graph.query",
     "graph.write",
+    "working_memory.read",
     "working_memory.write",
     "locks.acquire",
     "admin",
