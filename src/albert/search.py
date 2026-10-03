@@ -103,7 +103,7 @@ def _vector_search(
     )
     conditions.append(Memory.embedding.is_not(None))
     if session.bind is not None and session.bind.dialect.name == "postgresql":
-        distance = Memory.embedding.cosine_distance(query_vector)  # type: ignore[union-attr]
+        distance = Memory.embedding.op("<=>")(query_vector)
         return list(
             session.scalars(
                 select(Memory)

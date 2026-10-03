@@ -79,7 +79,11 @@ def main() -> None:
         )
         matching = [hit for hit in results.hits if hit.memory_id == memory.id]
         if not matching or "vector" not in matching[0].backends:
-            raise RuntimeError("pgvector retrieval did not return the enriched memory")
+            backends = [hit.backends for hit in matching]
+            raise RuntimeError(
+                "pgvector retrieval did not return the enriched memory; "
+                f"matching_backends={backends}, degraded={results.degraded}"
+            )
         relationships = query_relationships(
             session,
             organization_id=organization.id,
