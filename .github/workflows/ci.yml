@@ -51,3 +51,10 @@ jobs:
           ALBERT_DATABASE_URL: postgresql+psycopg://albert:albert@127.0.0.1:5432/albert
           ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
         run: alembic check
+      - name: Exercise PostgreSQL vector and graph paths
+        env:
+          ALBERT_DATABASE_URL: postgresql+psycopg://albert:albert@127.0.0.1:5432/albert
+          ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
+          ALBERT_EMBEDDING_PROVIDER: hashing
+          ALBERT_EMBEDDING_DIMENSIONS: "384"
+        run: python scripts/postgres-smoke.py

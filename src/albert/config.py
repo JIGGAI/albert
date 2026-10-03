@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,8 +20,9 @@ class Settings(BaseSettings):
     embedding_provider: Literal["hashing", "sentence-transformers", "openai-compatible"] = (
         "hashing"
     )
-    embedding_dimensions: int = Field(default=384, ge=32, le=4096)
+    embedding_dimensions: int = Field(default=384, ge=32, le=2000)
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_request_dimensions: bool = False
 
     llm_provider: Literal["none", "openai-compatible"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -40,6 +41,30 @@ class Settings(BaseSettings):
             raise ValueError("ALBERT_API_KEY_PEPPER must contain at least 32 characters")
         return value
 
+    @field_validator("openai_api_key", "classification_model", mode="before")
+    @classmethod
+    def empty_optional_strings(cls, value: object) -> object | None:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def validate_provider_configuration(self) -> Settings:
+        if self.embedding_provider == "openai-compatible" and self.openai_api_key is None:
+            raise ValueError(
+                "ALBERT_OPENAI_API_KEY is required for openai-compatible embeddings"
+            )
+        if self.llm_provider == "openai-compatible":
+            if self.openai_api_key is None:
+                raise ValueError(
+                    "ALBERT_OPENAI_API_KEY is required for openai-compatible classification"
+                )
+            if self.classification_model is None:
+                raise ValueError(
+                    "ALBERT_CLASSIFICATION_MODEL is required for openai-compatible classification"
+                )
+        return self
+
     @property
     def is_postgres(self) -> bool:
         return self.database_url.startswith("postgresql")
@@ -48,4 +73,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

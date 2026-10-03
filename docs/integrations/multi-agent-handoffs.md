@@ -59,13 +59,14 @@ The outgoing agent should:
 The incoming agent should:
 
 1. search durable memory for project context;
-2. use the outgoing agent's handoff summary and working-memory id;
+2. read the working record with `working_memory_get` and use the outgoing
+   agent's handoff summary;
 3. verify current external state;
 4. acquire a fresh lock before mutation; and
 5. continue updating the same working record when ownership permits.
 
-Albert 0.1 does not expose a read/list endpoint for working-memory records, so
-the handoff summary remains necessary even when an id is supplied.
+The handoff summary remains useful because it can include external state that
+does not belong in Albert's task-progress object.
 
 ## Fencing behavior
 
@@ -77,7 +78,8 @@ owners.
 
 ## Completion and failure
 
-Use `working_memory_complete` through MCP when the outcome is finished. REST
-clients can use `/complete` or `/fail`. Both terminal transitions release
-associated active locks. Consolidation notes should summarize outcome and
-verification; durable lessons belong in normal memories.
+Use `working_memory_complete` when the outcome is finished and
+`working_memory_fail` when it genuinely failed. Both MCP tools map to the same
+REST terminal transitions and release associated active locks. Consolidation
+notes should summarize outcome and verification; durable lessons belong in
+normal memories.

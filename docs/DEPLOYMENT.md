@@ -22,8 +22,12 @@ ALBERT_POSTGRES_PASSWORD=<random database password>
 ALBERT_API_KEY_PEPPER=<at least 32 random characters>
 ```
 
+Select the embedding and optional model-classification mode described in
+[Embedding and classification providers](PROVIDERS.md) before the first start.
+The chosen embedding dimensions become part of the PostgreSQL schema.
+
 Do not reuse the database password as the API-key pepper. Start the database,
-migration, API, and worker first:
+migration, provider validation, API, and worker first:
 
 ```bash
 docker compose up -d --build db migrate api worker

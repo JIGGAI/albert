@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import typer
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from albert.db import SessionLocal, initialize_database
-from albert.models import APIKey, Organization, Principal, Workspace
+from albert.embeddings import get_embedder
+from albert.models import APIKey, Job, Memory, Organization, Principal, Workspace
 from albert.security import issue_api_key
 
 app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
@@ -102,6 +103,86 @@ def create_key(
     typer.echo(raw)
 
 
+@app.command("validate-runtime")
+def validate_runtime(
+    probe_embedding: bool = typer.Option(
+        False, "--probe-embedding", help="Load and execute the configured embedding provider"
+    ),
+) -> None:
+    """Validate provider configuration and optionally execute one embedding."""
+    from albert.config import get_settings
+
+    settings = get_settings()
+    typer.echo(
+        f"embedding={settings.embedding_provider}:{settings.embedding_model} "
+        f"dimensions={settings.embedding_dimensions} classifier={settings.llm_provider}"
+    )
+    with SessionLocal() as session:
+        if session.bind is not None and session.bind.dialect.name == "postgresql":
+            vector_type = session.scalar(
+                text(
+                    "SELECT format_type(attribute.atttypid, attribute.atttypmod) "
+                    "FROM pg_attribute AS attribute "
+                    "JOIN pg_class AS relation ON relation.oid = attribute.attrelid "
+                    "WHERE relation.relname = 'memories' "
+                    "AND attribute.attname = 'embedding' "
+                    "AND NOT attribute.attisdropped"
+                )
+            )
+            expected = f"vector({settings.embedding_dimensions})"
+            if vector_type != expected:
+                typer.echo(
+                    f"database embedding type is {vector_type!r}; expected {expected!r}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            hnsw_exists = session.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_indexes "
+                    "WHERE indexname = 'ix_memories_embedding_hnsw')"
+                )
+            )
+            if not hnsw_exists:
+                typer.echo("database HNSW embedding index is missing", err=True)
+                raise typer.Exit(code=1)
+            typer.echo("database vector schema and HNSW index are valid")
+    if probe_embedding:
+        embedder = get_embedder()
+        vector = embedder.embed("Albert runtime readiness probe")
+        if len(vector) != settings.embedding_dimensions:
+            raise typer.Exit(code=1)
+        typer.echo(f"embedding probe succeeded ({len(vector)} dimensions)")
+
+
+@app.command("reindex-memories")
+def reindex_memories(
+    all_memories: bool = typer.Option(
+        False, "--all", help="Re-enrich every active memory, including current embeddings"
+    ),
+) -> None:
+    """Queue active memories whose embedding is absent or uses another model."""
+    embedder = get_embedder()
+    with SessionLocal() as session:
+        statement = select(Memory).where(Memory.status == "active")
+        memories = list(session.scalars(statement))
+        selected = [
+            memory
+            for memory in memories
+            if all_memories
+            or memory.embedding is None
+            or memory.embedding_model != embedder.name
+        ]
+        for memory in selected:
+            session.add(
+                Job(
+                    organization_id=memory.organization_id,
+                    job_type="enrich_memory",
+                    payload={"memory_id": str(memory.id)},
+                )
+            )
+        session.commit()
+    typer.echo(f"queued {len(selected)} memories for enrichment with {embedder.name}")
+
+
 if __name__ == "__main__":
     app()
-

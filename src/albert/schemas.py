@@ -241,3 +241,7 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     version: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_dimensions: int
+    classifier_provider: str

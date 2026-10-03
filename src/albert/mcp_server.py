@@ -93,6 +93,36 @@ async def memory_get(memory_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def memory_update(
+    memory_id: str,
+    subject: str | None = None,
+    content: str | None = None,
+    memory_type: str | None = None,
+    sensitivity: str | None = None,
+    confidence: float | None = None,
+) -> dict[str, Any]:
+    """Update an authorized durable memory and re-enrich changed content."""
+    payload = {
+        key: value
+        for key, value in {
+            "subject": subject,
+            "content": content,
+            "memory_type": memory_type,
+            "sensitivity": sensitivity,
+            "confidence": confidence,
+        }.items()
+        if value is not None
+    }
+    return await _request("PATCH", f"/v1/memories/{memory_id}", payload)
+
+
+@mcp.tool()
+async def memory_get_episode(episode_id: str) -> dict[str, Any]:
+    """Read one authorized canonical episode by UUID."""
+    return await _request("GET", f"/v1/episodes/{episode_id}")
+
+
+@mcp.tool()
 async def memory_search(
     query: str,
     limit: int = 10,
@@ -160,6 +190,30 @@ async def memory_get_subgraph(
 
 
 @mcp.tool()
+async def memory_add_relationship(
+    source_name: str,
+    relation_type: str,
+    target_name: str,
+    source_type: str = "concept",
+    target_type: str = "concept",
+    sensitivity: str = "internal",
+    source_memory_id: str | None = None,
+) -> dict[str, Any]:
+    """Create an explicit typed relationship in the authorized memory graph."""
+    return await _request(
+        "POST",
+        "/v1/relationships",
+        {
+            "source": {"name": source_name, "entity_type": source_type},
+            "relation_type": relation_type,
+            "target": {"name": target_name, "entity_type": target_type},
+            "sensitivity": sensitivity,
+            "source_memory_id": source_memory_id,
+        },
+    )
+
+
+@mcp.tool()
 async def working_memory_start(
     task_id: str,
     description: str,
@@ -194,6 +248,12 @@ async def working_memory_update(
 
 
 @mcp.tool()
+async def working_memory_get(working_id: str) -> dict[str, Any]:
+    """Read current task coordination state by UUID."""
+    return await _request("GET", f"/v1/working-memory/{working_id}")
+
+
+@mcp.tool()
 async def working_memory_complete(
     working_id: str, consolidation_notes: str = ""
 ) -> dict[str, Any]:
@@ -201,6 +261,18 @@ async def working_memory_complete(
     return await _request(
         "POST",
         f"/v1/working-memory/{working_id}/complete",
+        {"consolidation_notes": consolidation_notes},
+    )
+
+
+@mcp.tool()
+async def working_memory_fail(
+    working_id: str, consolidation_notes: str = ""
+) -> dict[str, Any]:
+    """Mark task coordination state failed and release associated locks."""
+    return await _request(
+        "POST",
+        f"/v1/working-memory/{working_id}/fail",
         {"consolidation_notes": consolidation_notes},
     )
 

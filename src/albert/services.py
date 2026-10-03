@@ -16,6 +16,7 @@ from albert.classifier import (
     classify,
     contains_likely_secret,
 )
+from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import add_relationship
 from albert.models import (
@@ -499,23 +500,37 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
     memory.metadata_ = {
         **(memory.metadata_ or {}),
         "classification": {
-            "provider": "configured",
+            "provider": get_settings().llm_provider,
             "confidence": result.confidence,
             "suggested_sensitivity": result.sensitivity,
         },
     }
+    retained_relationship_ids = set()
     for relationship in result.relationships:
-        add_relationship(
-            session,
-            organization_id=memory.organization_id,
-            workspace_id=memory.workspace_id,
-            extracted=relationship,
-            source_memory_id=memory.id,
-            sensitivity=memory.sensitivity,
-            valid_from=memory.valid_from,
-            valid_until=memory.valid_until,
-            metadata={"extracted": True},
+        retained_relationship_ids.add(
+            add_relationship(
+                session,
+                organization_id=memory.organization_id,
+                workspace_id=memory.workspace_id,
+                extracted=relationship,
+                source_memory_id=memory.id,
+                sensitivity=memory.sensitivity,
+                valid_from=memory.valid_from,
+                valid_until=memory.valid_until,
+                metadata={"extracted": True},
+            ).id
         )
+    now = utcnow()
+    for existing in session.scalars(
+        select(Relationship).where(
+            Relationship.organization_id == memory.organization_id,
+            Relationship.source_memory_id == memory.id,
+            Relationship.valid_until.is_(None),
+        )
+    ):
+        is_extracted = (existing.metadata_ or {}).get("extracted")
+        if is_extracted and existing.id not in retained_relationship_ids:
+            existing.valid_until = now
 
 
 def enrich_episode(session: Session, episode_id: UUID) -> None:

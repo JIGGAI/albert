@@ -1,5 +1,10 @@
 name: albert
 
+x-albert-build: &albert-build
+  context: .
+  args:
+    ALBERT_INSTALL_SEMANTIC: ${ALBERT_INSTALL_SEMANTIC:-false}
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -17,30 +22,45 @@ services:
     restart: unless-stopped
 
   migrate:
-    build: .
+    build: *albert-build
     environment: &albert-env
       ALBERT_DATABASE_URL: postgresql+psycopg://albert:${ALBERT_POSTGRES_PASSWORD:-change-me}@db:5432/albert
       ALBERT_API_KEY_PEPPER: ${ALBERT_API_KEY_PEPPER:?set ALBERT_API_KEY_PEPPER}
       ALBERT_EMBEDDING_PROVIDER: ${ALBERT_EMBEDDING_PROVIDER:-hashing}
       ALBERT_EMBEDDING_DIMENSIONS: ${ALBERT_EMBEDDING_DIMENSIONS:-384}
       ALBERT_EMBEDDING_MODEL: ${ALBERT_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      ALBERT_EMBEDDING_REQUEST_DIMENSIONS: ${ALBERT_EMBEDDING_REQUEST_DIMENSIONS:-false}
       ALBERT_LLM_PROVIDER: ${ALBERT_LLM_PROVIDER:-none}
       ALBERT_OPENAI_BASE_URL: ${ALBERT_OPENAI_BASE_URL:-https://api.openai.com/v1}
       ALBERT_OPENAI_API_KEY: ${ALBERT_OPENAI_API_KEY:-}
       ALBERT_CLASSIFICATION_MODEL: ${ALBERT_CLASSIFICATION_MODEL:-}
+      HF_HOME: /var/cache/albert-models
     command: ["alembic", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
     restart: "no"
 
-  api:
-    build: .
+  runtime-check:
+    build: *albert-build
     environment: *albert-env
+    command: ["albert-admin", "validate-runtime", "--probe-embedding"]
+    volumes:
+      - albert-model-cache:/var/cache/albert-models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    build: *albert-build
+    environment: *albert-env
+    volumes:
+      - albert-model-cache:/var/cache/albert-models
     ports:
       - "${ALBERT_API_PORT:-8080}:8080"
     depends_on:
-      migrate:
+      runtime-check:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/v1/health/ready')"]
@@ -50,16 +70,18 @@ services:
     restart: unless-stopped
 
   worker:
-    build: .
+    build: *albert-build
     environment: *albert-env
     command: ["albert-worker"]
+    volumes:
+      - albert-model-cache:/var/cache/albert-models
     depends_on:
-      migrate:
+      runtime-check:
         condition: service_completed_successfully
     restart: unless-stopped
 
   mcp:
-    build: .
+    build: *albert-build
     environment:
       <<: *albert-env
       ALBERT_API_URL: http://api:8080
@@ -74,3 +96,4 @@ services:
 
 volumes:
   albert-postgres:
+  albert-model-cache:

@@ -1,5 +1,7 @@
 FROM python:3.12-slim AS runtime
 
+ARG ALBERT_INSTALL_SEMANTIC=false
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -11,7 +13,11 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
-RUN pip install .
+RUN if [ "$ALBERT_INSTALL_SEMANTIC" = "true" ]; then \
+      pip install '.[semantic]'; \
+    else \
+      pip install .; \
+    fi
 
 USER albert
 EXPOSE 8080 8081

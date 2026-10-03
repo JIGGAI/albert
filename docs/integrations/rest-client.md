@@ -111,10 +111,12 @@ When a client must renew or explicitly release a lease, start the working record
 with `acquire_lock: false`, then call `POST /v1/locks/acquire` with its
 `working_memory_id` and retain the returned token only in ephemeral task state.
 
-Update progress with `PATCH /v1/working-memory/{id}`. Finish with
-`POST /v1/working-memory/{id}/complete`, or record failure with the REST-only
+Read state with `GET /v1/working-memory/{id}` and update progress with
+`PATCH /v1/working-memory/{id}`. Finish with
+`POST /v1/working-memory/{id}/complete`, or record failure with
 `POST /v1/working-memory/{id}/fail`. Completing or failing a working record
-releases associated active locks.
+releases associated active locks. All four lifecycle operations are also
+available through MCP.
 
 ## Graph operations
 

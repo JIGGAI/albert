@@ -48,8 +48,14 @@ def contains_likely_secret(text: str) -> bool:
 
 _RELATION_PATTERNS = (
     (re.compile(r"\b(.{1,80}?)\s+depends on\s+(.{1,80}?)(?:[.;]|$)", re.I), "depends_on"),
+    (re.compile(r"\b(.{1,80}?)\s+integrates with\s+(.{1,80}?)(?:[.;]|$)", re.I), "integrates_with"),
+    (re.compile(r"\b(.{1,80}?)\s+runs on\s+(.{1,80}?)(?:[.;]|$)", re.I), "runs_on"),
+    (re.compile(r"\b(.{1,80}?)\s+belongs to\s+(.{1,80}?)(?:[.;]|$)", re.I), "belongs_to"),
+    (re.compile(r"\b(.{1,80}?)\s+is owned by\s+(.{1,80}?)(?:[.;]|$)", re.I), "owned_by"),
     (re.compile(r"\b(.{1,80}?)\s+uses\s+(.{1,80}?)(?:[.;]|$)", re.I), "uses"),
     (re.compile(r"\b(.{1,80}?)\s+owns\s+(.{1,80}?)(?:[.;]|$)", re.I), "owns"),
+    (re.compile(r"\b(.{1,80}?)\s+manages\s+(.{1,80}?)(?:[.;]|$)", re.I), "manages"),
+    (re.compile(r"\b(.{1,80}?)\s+supports\s+(.{1,80}?)(?:[.;]|$)", re.I), "supports"),
     (re.compile(r"\b(.{1,80}?)\s+prefers\s+(.{1,80}?)(?:[.;]|$)", re.I), "prefers"),
     (re.compile(r"\b(.{1,80}?)\s+works on\s+(.{1,80}?)(?:[.;]|$)", re.I), "works_on"),
 )
@@ -178,4 +184,3 @@ exactly match entity names. Never include credentials or secrets."""
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
     return _parse_model_classification(json.loads(content))
-

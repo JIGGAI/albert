@@ -16,11 +16,13 @@ Implemented and tested:
 - Deterministic classification and optional OpenAI-compatible classification
 - Dependency-free development embeddings
 - Local sentence-transformer and OpenAI-compatible semantic embedding options
+- Deployment-time provider probes, vector-dimension validation, and reindex tooling
 - PostgreSQL full-text retrieval
 - pgvector storage, cosine retrieval, and HNSW index
 - Reciprocal-rank fusion across lexical, vector, and graph results
 - Typed temporal entities and relationships with provenance
 - Natural-language graph lookup and bounded subgraph traversal
+- Stale extracted-edge invalidation when memories are edited and re-enriched
 - Sensitivity enforcement across memories, episodes, vector results, and graph edges
 - Bounded context assembly with citations
 - Working memory, expiration, completion/failure, and progress state

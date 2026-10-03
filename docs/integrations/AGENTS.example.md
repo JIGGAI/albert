@@ -51,9 +51,10 @@ lock.
    create a memory merely to record that the task happened.
 2. Call `working_memory_complete` with concise consolidation notes. Associated
    locks are released when the task completes.
-3. If no working-memory record exists, release an acquired lease explicitly
+3. Call `working_memory_fail` instead when the task genuinely failed.
+4. If no working-memory record exists, release an acquired lease explicitly
    with `memory_lock_release`.
-4. Report verification and any remaining risk to the user.
+5. Report verification and any remaining risk to the user.
 
 ## Suggested memory types
 

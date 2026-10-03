@@ -64,10 +64,13 @@ class OpenAICompatibleEmbedder:
         self.dimensions = dimensions
 
     def embed(self, text: str) -> list[float]:
+        payload: dict[str, object] = {"model": self.name, "input": text}
+        if get_settings().embedding_request_dimensions:
+            payload["dimensions"] = self.dimensions
         response = httpx.post(
             f"{self.base_url}/embeddings",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.name, "input": text, "dimensions": self.dimensions},
+            json=payload,
             timeout=60,
         )
         response.raise_for_status()

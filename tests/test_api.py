@@ -22,7 +22,10 @@ def drain_jobs() -> None:
 
 
 async def test_health_and_auth(client: httpx.AsyncClient) -> None:
-    assert (await client.get("/v1/health/live")).status_code == 200
+    health = await client.get("/v1/health/live")
+    assert health.status_code == 200
+    assert health.json()["embedding_provider"] == "hashing"
+    assert health.json()["embedding_dimensions"] == 64
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as anonymous:
@@ -102,6 +105,32 @@ async def test_graph_write_query_and_traversal(client: httpx.AsyncClient) -> Non
     assert graph.json()[0]["target_name"] == "PostgreSQL"
 
 
+async def test_reenrichment_expires_stale_extracted_relationships(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await client.post(
+        "/v1/memories",
+        json={"subject": "Runtime", "content": "Runtime uses Database Alpha."},
+    )
+    assert created.status_code == 201
+    memory_id = created.json()["id"]
+    drain_jobs()
+    before = await client.post("/v1/graph/query", json={"query": "Alpha"})
+    assert before.status_code == 200
+    assert before.json()
+
+    updated = await client.patch(
+        f"/v1/memories/{memory_id}",
+        json={"content": "Runtime uses Database Beta."},
+    )
+    assert updated.status_code == 200
+    drain_jobs()
+    stale = await client.post("/v1/graph/query", json={"query": "Alpha"})
+    current = await client.post("/v1/graph/query", json={"query": "Beta"})
+    assert stale.json() == []
+    assert current.json()
+
+
 async def test_working_memory_and_fenced_locks(client: httpx.AsyncClient) -> None:
     working = await client.post(
         "/v1/working-memory",
@@ -109,6 +138,9 @@ async def test_working_memory_and_fenced_locks(client: httpx.AsyncClient) -> Non
     )
     assert working.status_code == 201
     working_id = working.json()["id"]
+    read_working = await client.get(f"/v1/working-memory/{working_id}")
+    assert read_working.status_code == 200
+    assert read_working.json()["task_id"] == "task-lock"
     acquired = await client.post(
         "/v1/locks/acquire",
         json={

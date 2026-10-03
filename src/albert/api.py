@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from albert import __version__
+from albert.config import get_settings
 from albert.db import get_session
 from albert.graph import query_relationships, subgraph
 from albert.models import Entity, Episode, Relationship
@@ -48,6 +49,7 @@ from albert.services import (
     delete_memory,
     finish_working_memory,
     get_memory,
+    get_working_memory,
     release_lock,
     renew_lock,
     resolve_workspace,
@@ -75,7 +77,16 @@ app = FastAPI(
 
 @app.get("/v1/health/live", response_model=HealthResponse, tags=["health"])
 async def live() -> HealthResponse:
-    return HealthResponse(status="ok", database="unchecked", version=__version__)
+    settings = get_settings()
+    return HealthResponse(
+        status="ok",
+        database="unchecked",
+        version=__version__,
+        embedding_provider=settings.embedding_provider,
+        embedding_model=settings.embedding_model,
+        embedding_dimensions=settings.embedding_dimensions,
+        classifier_provider=settings.llm_provider,
+    )
 
 
 @app.get("/v1/health/ready", response_model=HealthResponse, tags=["health"])
@@ -84,7 +95,16 @@ async def ready(session: Session = Depends(get_session)) -> HealthResponse:
         session.execute(text("SELECT 1"))
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
-    return HealthResponse(status="ok", database="ok", version=__version__)
+    settings = get_settings()
+    return HealthResponse(
+        status="ok",
+        database="ok",
+        version=__version__,
+        embedding_provider=settings.embedding_provider,
+        embedding_model=settings.embedding_model,
+        embedding_dimensions=settings.embedding_dimensions,
+        classifier_provider=settings.llm_provider,
+    )
 
 
 @app.post("/v1/episodes", response_model=EpisodeRead, status_code=201, tags=["episodes"])
@@ -351,6 +371,20 @@ async def patch_working_memory(
     session: Session = Depends(get_session),
 ):  # type: ignore[no-untyped-def]
     return update_working_memory(session, auth, working_id, data)
+
+
+@app.get(
+    "/v1/working-memory/{working_id}",
+    response_model=WorkingMemoryRead,
+    tags=["working-memory"],
+)
+async def read_working_memory(
+    working_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+):  # type: ignore[no-untyped-def]
+    auth.require("working_memory.write")
+    return get_working_memory(session, auth, working_id)
 
 
 @app.post(

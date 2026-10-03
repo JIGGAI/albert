@@ -8,6 +8,9 @@ temporal entity/relationship graph.
 The project is under active construction. The authoritative design and delivery
 plan are in [`docs/MEMORY_PLATFORM.md`](docs/MEMORY_PLATFORM.md).
 
+Embedding and classifier choices are documented in
+[`docs/PROVIDERS.md`](docs/PROVIDERS.md).
+
 ## Development
 
 ```bash
