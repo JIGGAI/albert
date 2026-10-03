@@ -33,6 +33,8 @@ Implemented and tested:
 - Backup and guarded restore scripts
 - Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
   ingestion, deletion, and locks
+- Integration handbook covering Codex, Claude Desktop/Code, Cursor, OpenClaw,
+  direct REST clients, agent instructions, workflows, handoffs, and diagnostics
 
 ## Deployment posture
 

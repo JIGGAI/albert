@@ -74,3 +74,21 @@ Tools include:
 The MCP implementation is a client of the REST service; it has no independent
 database or authorization rules.
 
+## Workflow guides
+
+The [integration handbook](integrations/README.md) contains ready-to-use setup
+and operating guidance:
+
+- [example `AGENTS.md`](integrations/AGENTS.example.md)
+- [Codex](integrations/codex.md)
+- [Claude Desktop and Claude Code](integrations/claude-desktop.md)
+- [Cursor](integrations/cursor.md)
+- [OpenClaw](integrations/openclaw.md)
+- [direct REST clients](integrations/rest-client.md)
+- [standard agent workflows](integrations/agent-workflows.md)
+- [multi-agent handoffs](integrations/multi-agent-handoffs.md)
+- [troubleshooting](integrations/troubleshooting.md)
+
+The current streamable-HTTP MCP gateway uses one server-side Albert credential
+for all callers and does not authenticate individual remote clients. Use stdio
+or a protected private endpoint until per-request identity is implemented.

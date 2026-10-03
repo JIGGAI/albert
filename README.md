@@ -27,8 +27,11 @@ The command prints the API key once. Store it securely.
 REST documentation is available at `http://localhost:8080/docs` and MCP uses
 streamable HTTP at `http://localhost:8081/mcp`.
 
+For client setup, drop-in agent instructions, ordinary workflows, multi-agent
+handoffs, REST recipes, and troubleshooting, see the
+[`docs/integrations` handbook](docs/integrations/README.md).
+
 ## Independence
 
 Albert is a clean, standalone system. It does not access, depend on, synchronize
 with, or deploy to TenHost.
-
