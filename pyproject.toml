@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "albert-memory"
+version = "0.1.0"
+description = "Independent multi-tenant hybrid memory service for AI agents"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "JIGGAI" }]
+dependencies = [
+  "alembic>=1.16,<2",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "mcp>=2,<3",
+  "pgvector>=0.4,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.10,<3",
+  "sqlalchemy>=2.0.41,<3",
+  "typer>=0.16,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+semantic = ["sentence-transformers>=5,<6"]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-cov>=6.2,<7",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+albert-api = "albert.api:run"
+albert-admin = "albert.admin:app"
+albert-worker = "albert.worker:run"
+albert-mcp = "albert.mcp_server:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/albert"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["B008"] # FastAPI dependency injection intentionally calls Depends in defaults.

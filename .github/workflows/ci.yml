@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: albert
+          POSTGRES_USER: albert
+          POSTGRES_PASSWORD: albert
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U albert -d albert"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: pytest --cov=albert --cov-report=term-missing
+      - name: Verify PostgreSQL migration
+        env:
+          ALBERT_DATABASE_URL: postgresql+psycopg://albert:albert@127.0.0.1:5432/albert
+          ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
+        run: alembic upgrade head
+      - name: Verify migration is current
+        env:
+          ALBERT_DATABASE_URL: postgresql+psycopg://albert:albert@127.0.0.1:5432/albert
+          ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
+        run: alembic check
