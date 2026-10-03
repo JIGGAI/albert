@@ -2,7 +2,7 @@
 
 ## Ready now
 
-Albert 0.2 is ready for an isolated self-hosted deployment and integration
+Albert 0.3 is ready for an isolated self-hosted deployment and integration
 testing through REST and MCP.
 
 Implemented and tested:
@@ -17,8 +17,9 @@ Implemented and tested:
 - Dependency-free development embeddings
 - Local sentence-transformer and OpenAI-compatible semantic embedding options
 - Deployment-time provider probes, vector-dimension validation, and reindex tooling
-- PostgreSQL full-text retrieval
-- pgvector storage, cosine retrieval, and HNSW index
+- PostgreSQL full-text retrieval over a stored, GIN-indexed tsvector
+- Chunked embeddings with pgvector storage, cosine retrieval, HNSW index, and
+  iterative scans so small tenants are not starved by post-filtering
 - Reciprocal-rank fusion across lexical, vector, and graph results
 - Typed temporal entities and relationships with provenance
 - Natural-language graph lookup and bounded subgraph traversal
@@ -29,13 +30,17 @@ Implemented and tested:
 - Working memory, expiration, completion/failure, and progress state
 - Exclusive lease locks with secret tokens and monotonic fencing values
 - Audit events without raw memory bodies
-- Credential-pattern screening before ingestion
+- Credential-pattern screening on every stored surface, including metadata,
+  working memory, graph descriptions, and import bundles
+- Scrubbing deletion for memories and episodes, including derived records
+- Per-principal episode idempotency
 - Alembic migration and drift check
 - Docker image and Docker Compose deployment
 - Readiness/liveness endpoints
 - Backup and guarded restore scripts
 - Portable memory/explicit-graph export and transactional import
-- Per-caller bearer identity forwarding for HTTP MCP
+- Per-caller bearer identity forwarding for HTTP MCP, verified end to end
+  through the MCP session manager
 - Workspace, principal, API-key listing, issuance, and revocation commands
 - Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
   ingestion, deletion, and locks

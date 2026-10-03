@@ -12,6 +12,9 @@ make supplied memory content trustworthy.
 - Workspace-scoped credentials cannot select another workspace.
 - Retrieval applies organization and workspace constraints inside every
   lexical, vector, and graph query.
+- Episode deduplication is scoped to the calling principal, so re-posting text
+  cannot be used to learn whether, or at what sensitivity, another principal
+  holds it.
 - Cross-tenant access is covered by automated tests.
 - A future hosted deployment should add PostgreSQL row-level security as defense
   in depth after connection-pool tenant context is formally designed.
@@ -32,8 +35,15 @@ make supplied memory content trustworthy.
 - Every memory records provenance, confidence, sensitivity, owner, and scope.
 - Model-produced classifications are constrained and parsed before storage.
 - Relationship extraction retains the source memory and episode.
-- The built-in credential detector rejects common secret formats before durable
-  ingestion. It is defense in depth, not a complete data-loss-prevention system.
+- The built-in credential detector rejects common secret formats on every
+  stored surface: memory and episode bodies, metadata, working-memory
+  descriptions, progress and consolidation notes, relationship names and
+  descriptions, and import bundles. It is defense in depth, not a complete
+  data-loss-prevention system.
+- Classification may raise a memory's sensitivity but never lower it; the
+  caller-supplied level is retained in `metadata.classification`.
+- Deletion scrubs content rather than only flagging rows, so a forgotten memory
+  or episode is not recoverable through any read path.
 - Imported instructions are data; retrieval does not grant them authority.
 
 ## Locks
