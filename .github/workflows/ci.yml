@@ -34,6 +34,13 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: ruff check .
       - run: pytest --cov=albert --cov-report=term-missing
+      - name: Validate Compose configuration
+        env:
+          ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
+          ALBERT_POSTGRES_PASSWORD: ci-database-password
+        run: docker compose config --quiet
+      - name: Build production image
+        run: docker build --tag albert-memory:ci .
       - name: Verify PostgreSQL migration
         env:
           ALBERT_DATABASE_URL: postgresql+psycopg://albert:albert@127.0.0.1:5432/albert
