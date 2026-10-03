@@ -99,3 +99,37 @@ async def test_health_endpoints_are_not_traced(client: httpx.AsyncClient) -> Non
     with SessionLocal() as session:
         after = session.scalars(select(Trace).where(Trace.name.like("%health%"))).all()
     assert len(after) == len(before)
+
+
+def test_housekeeping_prunes_old_traces() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from albert.worker import housekeeping
+
+    with SessionLocal() as session:
+        old = Trace(
+            kind="request",
+            name="old",
+            status="ok",
+            started_at=datetime.now(UTC) - timedelta(days=30),
+            duration_ms=1,
+            summary={},
+            spans=[],
+        )
+        fresh = Trace(
+            kind="request",
+            name="fresh",
+            status="ok",
+            started_at=datetime.now(UTC),
+            duration_ms=1,
+            summary={},
+            spans=[],
+        )
+        session.add_all([old, fresh])
+        session.commit()
+        old_id, fresh_id = old.id, fresh.id
+        housekeeping(session)
+    # Bulk deletes bypass the identity map; verify through a fresh session.
+    with SessionLocal() as session:
+        assert session.get(Trace, old_id) is None
+        assert session.get(Trace, fresh_id) is not None

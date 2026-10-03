@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal
-from albert.models import Episode, Job, ResourceLock, WorkingMemory, utcnow
+from albert.models import Episode, Job, ResourceLock, Trace, WorkingMemory, utcnow
 from albert.services import enrich_episode, enrich_memory
 from albert.tracing import traced_job
 
@@ -100,6 +100,10 @@ def housekeeping(session: Session) -> None:
     session.query(Job).filter(
         Job.status == "running", Job.locked_at < now - timedelta(minutes=15)
     ).update({Job.status: "pending", Job.locked_at: None, Job.locked_by: None})
+    retention = timedelta(days=get_settings().trace_retention_days)
+    session.query(Trace).filter(Trace.started_at < now - retention).delete(
+        synchronize_session=False
+    )
     session.commit()
 
 
