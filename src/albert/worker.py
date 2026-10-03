@@ -13,8 +13,10 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal
-from albert.models import Episode, Job, ResourceLock, WorkingMemory, utcnow
+from albert.models import Episode, Job, ResourceLock, Trace, WorkingMemory, utcnow
 from albert.services import enrich_episode, enrich_memory
+from albert.trace_writer import get_trace_writer
+from albert.tracing import traced_job
 
 logger = logging.getLogger("albert.worker")
 _stop = False
@@ -49,12 +51,13 @@ def claim_job(session: Session, worker_id: str) -> Job | None:
 
 def process_job(session: Session, job: Job) -> None:
     try:
-        if job.job_type == "enrich_memory":
-            enrich_memory(session, UUID(job.payload["memory_id"]))
-        elif job.job_type == "enrich_episode":
-            enrich_episode(session, UUID(job.payload["episode_id"]))
-        else:
-            raise ValueError(f"Unknown job type: {job.job_type}")
+        with traced_job(job):
+            if job.job_type == "enrich_memory":
+                enrich_memory(session, UUID(job.payload["memory_id"]))
+            elif job.job_type == "enrich_episode":
+                enrich_episode(session, UUID(job.payload["episode_id"]))
+            else:
+                raise ValueError(f"Unknown job type: {job.job_type}")
         job.status = "complete"
         job.last_error = None
         session.commit()
@@ -98,6 +101,10 @@ def housekeeping(session: Session) -> None:
     session.query(Job).filter(
         Job.status == "running", Job.locked_at < now - timedelta(minutes=15)
     ).update({Job.status: "pending", Job.locked_at: None, Job.locked_by: None})
+    retention = timedelta(days=get_settings().trace_retention_days)
+    session.query(Trace).filter(Trace.started_at < now - retention).delete(
+        synchronize_session=False
+    )
     session.commit()
 
 
@@ -119,6 +126,7 @@ def run() -> None:
                 process_job(session, job)
                 continue
         time.sleep(get_settings().worker_poll_seconds)
+    get_trace_writer().stop()
     logger.info("Albert worker stopped")
 
 

@@ -28,6 +28,8 @@ make supplied memory content trustworthy.
 - Streamable HTTP MCP requires a caller bearer key and forwards that same
   identity to REST; stdio uses its process-local `ALBERT_MCP_API_KEY`.
 - Lock tokens are stored using the same one-way construction.
+- The console's operator key is held by the console server process only; the
+  browser never receives it. Console detail reads are audited like any read.
 - Secrets belong in environment-backed secret management, never memory.
 
 ## Memory poisoning and model output
@@ -44,6 +46,8 @@ make supplied memory content trustworthy.
   caller-supplied level is retained in `metadata.classification`.
 - Deletion scrubs content rather than only flagging rows, so a forgotten memory
   or episode is not recoverable through any read path.
+- Traces record ids, scores, timings and search query text, never memory
+  subjects or content, so the recorder is not a second copy of the corpus.
 - Imported instructions are data; retrieval does not grant them authority.
 
 ## Locks

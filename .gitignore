@@ -13,3 +13,9 @@ build/
 *.db
 .DS_Store
 
+.superpowers/
+console/node_modules/
+console/.next/
+console/test-results/
+console/playwright-report/
+console/next-env.d.ts

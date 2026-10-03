@@ -53,11 +53,33 @@ chunks and closes its extracted relationships. `DELETE /v1/episodes/{id}` does
 the same for the episode and every memory derived from it. Both need
 `memory.delete`.
 
+## Console API
+
+Operator endpoints under `/v1/console`, gated by `console.read` (implied by
+`admin`). They cross tenants on purpose.
+
+- `GET /v1/console/traces` with filters `kind`, `status`, `organization_id`,
+  `principal_id`, `name`, `since`, `until`, `q`, keyset `cursor`, `limit`
+- `GET /v1/console/traces/{id}` including `spans`
+- `GET /v1/console/stream`: server-sent events, one `event: trace` per recorded
+  trace; reconnect with `Last-Event-ID`
+- `GET /v1/console/graph?organization_id=…`: capped graph snapshot (entities,
+  memories by type only, edges) at an optional `temporal_as_of`
+- `GET /v1/console/overview`: traces per minute, job counts, writer drops
+- `GET /v1/console/memories/{id}` and `/entities/{id}`: audited detail reads
+  with content truncated to 500 characters
+
+Every request and worker job is recorded as a trace with ordered spans
+(`auth`, `resolve_scope`, `lexical`, `vector`, `graph`, `fuse`; jobs:
+`classify`, `chunk`, `embed`, `write_edges`). Retrieval spans carry up to 50
+candidates as `{id, kind, score, rank}` and `fuse` carries each final hit's
+per-backend reciprocal-rank contribution.
+
 ## Capabilities
 
 `memory.read`, `memory.write`, `memory.delete`, `memory.export`,
 `memory.import`, `graph.query`, `graph.write`, `working_memory.read`,
-`working_memory.write`, `locks.acquire`, `memory.confidential`,
+`working_memory.write`, `locks.acquire`, `console.read`, `memory.confidential`,
 `memory.restricted`, and `admin`. Reading working memory needs
 `working_memory.read` or `working_memory.write`.
 

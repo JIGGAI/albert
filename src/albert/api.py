@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from albert import __version__
 from albert.config import get_settings
+from albert.console import router as console_router
 from albert.db import get_session
 from albert.graph import query_relationships, subgraph
 from albert.models import Entity, Episode, Relationship
 from albert.portability import export_bundle, import_bundle
+from albert.recorder import cap_candidates, current_recorder, span
 from albert.schemas import (
     ContextRequest,
     ContextResponse,
@@ -64,6 +66,8 @@ from albert.services import (
     update_memory,
     update_working_memory,
 )
+from albert.trace_writer import get_trace_writer
+from albert.tracing import RecordingMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("albert.api")
@@ -72,7 +76,10 @@ logger = logging.getLogger("albert.api")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     logger.info("Albert API starting", extra={"version": __version__})
+    writer = get_trace_writer()
+    writer.start()
     yield
+    writer.stop()
 
 
 app = FastAPI(
@@ -81,6 +88,14 @@ app = FastAPI(
     description="Independent hybrid memory service for AI agents",
     lifespan=lifespan,
 )
+app.add_middleware(RecordingMiddleware)
+app.include_router(console_router)
+
+
+def _note(**fields: object) -> None:
+    recorder = current_recorder()
+    if recorder is not None:
+        recorder.note(**fields)
 
 
 @app.get("/v1/health/live", response_model=HealthResponse, tags=["health"])
@@ -203,6 +218,7 @@ def search_memories(
     if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
         raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
     effective = data.model_copy(update={"sensitivity": data.sensitivity or allowed_sensitivities})
+    _note(query=data.query)
     result = hybrid_search(
         session,
         organization_id=auth.organization_id,
@@ -210,6 +226,7 @@ def search_memories(
         request=effective,
         allowed_sensitivities=allowed_sensitivities,
     )
+    _note(hits=len(result.hits), degraded=result.degraded)
     audit(
         session,
         auth,
@@ -232,6 +249,7 @@ def assemble_context(
     if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
         raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
     effective = data.model_copy(update={"sensitivity": data.sensitivity or allowed_sensitivities})
+    _note(query=data.query)
     result = hybrid_search(
         session,
         organization_id=auth.organization_id,
@@ -239,6 +257,7 @@ def assemble_context(
         request=effective,
         allowed_sensitivities=allowed_sensitivities,
     )
+    _note(hits=len(result.hits), degraded=result.degraded)
     sections: list[str] = []
     citations: list[dict] = []
     used = 0
@@ -304,15 +323,27 @@ def query_graph(
 ) -> list[RelationshipRead]:
     auth.require("graph.query")
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
-    result = query_relationships(
-        session,
-        organization_id=auth.organization_id,
-        workspace_id=workspace_id,
-        query=data.query,
-        temporal_as_of=data.temporal_as_of,
-        limit=data.limit,
-        sensitivities=auth.allowed_sensitivities(),
-    )
+    _note(query=data.query)
+    with span("graph") as handle:
+        result = query_relationships(
+            session,
+            organization_id=auth.organization_id,
+            workspace_id=workspace_id,
+            query=data.query,
+            temporal_as_of=data.temporal_as_of,
+            limit=data.limit,
+            sensitivities=auth.allowed_sensitivities(),
+        )
+        handle.set(
+            candidates_total=len(result),
+            candidates=cap_candidates(
+                [
+                    {"id": str(r.id), "kind": "relationship", "score": r.confidence, "rank": i}
+                    for i, r in enumerate(result, start=1)
+                ]
+            ),
+        )
+    _note(hits=len(result))
     audit(session, auth, "graph.queried", detail={"result_count": len(result)})
     session.commit()
     return result

@@ -66,6 +66,10 @@ def create_identity(
 def database():  # type: ignore[no-untyped-def]
     Base.metadata.create_all(engine)
     yield
+    # Flush queued traces before the tables disappear, as the API does on shutdown.
+    from albert.trace_writer import get_trace_writer
+
+    get_trace_writer().stop()
     Base.metadata.drop_all(engine)
     engine.dispose()
     DB_PATH.unlink(missing_ok=True)

@@ -15,6 +15,7 @@ from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import query_relationships
 from albert.models import Memory, MemoryChunk
+from albert.recorder import cap_candidates, current_recorder, span
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
 
 RRF_K = 60
@@ -166,6 +167,45 @@ def _vector_search(
     return ordered[: request.limit * 3]
 
 
+def _filters(request: SearchRequest, workspace_id: UUID | None) -> dict[str, Any]:
+    return {
+        "workspace_id": str(workspace_id) if workspace_id else None,
+        "project_ref": request.project_ref,
+        "task_ref": request.task_ref,
+        "run_ref": request.run_ref,
+        "memory_types": request.memory_types,
+        "sensitivity": request.sensitivity,
+        "temporal_as_of": request.temporal_as_of.isoformat() if request.temporal_as_of else None,
+    }
+
+
+def _candidates(items: list[tuple[Any, float]], kind: str) -> list[dict[str, Any]]:
+    return cap_candidates(
+        [
+            {"id": str(ident), "kind": kind, "score": score, "rank": rank}
+            for rank, (ident, score) in enumerate(items, start=1)
+        ]
+    )
+
+
+def _memory_hit(memory: Memory, request: SearchRequest, backend: str, score: float) -> SearchHit:
+    return SearchHit(
+        memory_id=memory.id,
+        kind="memory",
+        subject=memory.subject,
+        content=memory.content if request.include_content else "",
+        score=0,
+        backends=[],
+        source_episode_id=memory.episode_id,
+        metadata={
+            "memory_type": memory.memory_type,
+            "sensitivity": memory.sensitivity,
+            "confidence": memory.confidence,
+            "backend_scores": {backend: score},
+        },
+    )
+
+
 def hybrid_search(
     session: Session,
     *,
@@ -176,83 +216,68 @@ def hybrid_search(
 ) -> SearchResponse:
     ranked: list[tuple[str, list[tuple[str, SearchHit]]]] = []
     degraded: list[str] = []
+    filters = _filters(request, workspace_id)
 
-    lexical = _lexical_search(
-        session, organization_id=organization_id, workspace_id=workspace_id, request=request
-    )
+    with span("lexical", filters=filters) as handle:
+        lexical = _lexical_search(
+            session, organization_id=organization_id, workspace_id=workspace_id, request=request
+        )
+        handle.set(
+            candidates_total=len(lexical),
+            candidates=_candidates([(m.id, s) for m, s in lexical], "memory"),
+        )
     ranked.append(
         (
             "lexical",
-            [
-                (
-                    f"memory:{memory.id}",
-                    SearchHit(
-                        memory_id=memory.id,
-                        kind="memory",
-                        subject=memory.subject,
-                        content=memory.content if request.include_content else "",
-                        score=0,
-                        backends=[],
-                        source_episode_id=memory.episode_id,
-                        metadata={
-                            "memory_type": memory.memory_type,
-                            "sensitivity": memory.sensitivity,
-                            "confidence": memory.confidence,
-                            "backend_scores": {"lexical": lexical_score},
-                        },
-                    ),
-                )
-                for memory, lexical_score in lexical
-            ],
+            [(f"memory:{m.id}", _memory_hit(m, request, "lexical", s)) for m, s in lexical],
         )
     )
 
     try:
-        vectors = _vector_search(
-            session, organization_id=organization_id, workspace_id=workspace_id, request=request
-        )
-        ranked.append(
-            (
-                "vector",
-                [
-                    (
-                        f"memory:{memory.id}",
-                        SearchHit(
-                            memory_id=memory.id,
-                            kind="memory",
-                            subject=memory.subject,
-                            content=memory.content if request.include_content else "",
-                            score=0,
-                            backends=[],
-                            source_episode_id=memory.episode_id,
-                            metadata={
-                                "memory_type": memory.memory_type,
-                                "sensitivity": memory.sensitivity,
-                                "confidence": memory.confidence,
-                                "chunk_index": chunk_index,
-                                "backend_scores": {"vector": vector_similarity},
-                            },
-                        ),
-                    )
-                    for memory, vector_similarity, chunk_index in vectors
-                ],
+        with span(
+            "vector",
+            filters=filters,
+            embedding_model=get_embedder().name,
+            min_similarity=get_settings().min_vector_similarity,
+        ) as handle:
+            vectors = _vector_search(
+                session,
+                organization_id=organization_id,
+                workspace_id=workspace_id,
+                request=request,
             )
-        )
+            handle.set(
+                candidates_total=len(vectors),
+                candidates=_candidates([(m.id, s) for m, s, _i in vectors], "memory"),
+            )
+        vector_hits = []
+        for memory, similarity, chunk_index in vectors:
+            hit = _memory_hit(memory, request, "vector", similarity)
+            hit.metadata["chunk_index"] = chunk_index
+            vector_hits.append((f"memory:{memory.id}", hit))
+        ranked.append(("vector", vector_hits))
     except Exception as exc:
         logger.exception("Vector retrieval failed")
         degraded.append(f"vector retrieval unavailable: {type(exc).__name__}")
 
     if request.include_graph:
         try:
-            relationships = query_relationships(
-                session,
-                organization_id=organization_id,
-                workspace_id=workspace_id,
-                query=request.query,
-                temporal_as_of=request.temporal_as_of,
-                limit=request.limit * 3,
-                sensitivities=allowed_sensitivities,
-            )
+            with span("graph", filters=filters) as handle:
+                relationships = query_relationships(
+                    session,
+                    organization_id=organization_id,
+                    workspace_id=workspace_id,
+                    query=request.query,
+                    temporal_as_of=request.temporal_as_of,
+                    limit=request.limit * 3,
+                    sensitivities=allowed_sensitivities,
+                )
+                handle.set(
+                    candidates_total=len(relationships),
+                    candidates=_candidates(
+                        [(r.id, r.confidence) for r in relationships], "relationship"
+                    ),
+                )
             ranked.append(
                 (
                     "graph",
@@ -289,25 +314,47 @@ def hybrid_search(
             logger.exception("Graph retrieval failed")
             degraded.append(f"graph retrieval unavailable: {type(exc).__name__}")
 
-    scores: dict[str, float] = defaultdict(float)
-    hits: dict[str, SearchHit] = {}
-    backend_names: dict[str, list[str]] = defaultdict(list)
-    for backend, backend_hits in ranked:
-        for rank, (key, hit) in enumerate(backend_hits, start=1):
-            scores[key] += 1.0 / (RRF_K + rank)
-            if key in hits:
-                existing_scores = hits[key].metadata.setdefault("backend_scores", {})
-                existing_scores.update(hit.metadata.get("backend_scores", {}))
-                for name, value in hit.metadata.items():
-                    hits[key].metadata.setdefault(name, value)
-            else:
-                hits[key] = hit
-            backend_names[key].append(backend)
-    ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
-    result = []
-    for key in ordered:
-        hit = hits[key]
-        hit.score = scores[key]
-        hit.backends = backend_names[key]
-        result.append(hit)
+    with span("fuse", k=RRF_K) as handle:
+        scores: dict[str, float] = defaultdict(float)
+        contributions: dict[str, dict[str, float]] = defaultdict(dict)
+        hits: dict[str, SearchHit] = {}
+        backend_names: dict[str, list[str]] = defaultdict(list)
+        for backend, backend_hits in ranked:
+            for rank, (key, hit) in enumerate(backend_hits, start=1):
+                contribution = 1.0 / (RRF_K + rank)
+                scores[key] += contribution
+                contributions[key][backend] = round(contribution, 6)
+                if key in hits:
+                    existing_scores = hits[key].metadata.setdefault("backend_scores", {})
+                    existing_scores.update(hit.metadata.get("backend_scores", {}))
+                    for name, value in hit.metadata.items():
+                        hits[key].metadata.setdefault(name, value)
+                else:
+                    hits[key] = hit
+                backend_names[key].append(backend)
+        ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
+        result = []
+        for key in ordered:
+            hit = hits[key]
+            hit.score = scores[key]
+            hit.backends = backend_names[key]
+            result.append(hit)
+        handle.set(
+            candidates_total=len(hits),
+            hits=[
+                {
+                    "id": key.split(":", 1)[1],
+                    "kind": key.split(":", 1)[0],
+                    "rank": rank,
+                    "rrf": contributions[key],
+                    "backends": backend_names[key],
+                }
+                for rank, key in enumerate(ordered, start=1)
+            ],
+            degraded=degraded,
+        )
+    if degraded:
+        recorder = current_recorder()
+        if recorder is not None:
+            recorder.status = "degraded"
     return SearchResponse(hits=result, degraded=degraded)

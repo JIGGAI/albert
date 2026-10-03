@@ -63,6 +63,36 @@ Endpoints:
 - OpenAPI UI: `http://127.0.0.1:8080/docs`
 - MCP streamable HTTP: `http://127.0.0.1:8081/mcp`
 
+## Memory console
+
+The console is an operator UI shipped with Albert: a live feed of every request
+and worker job, a step-by-step replay of any trace with the fusion math behind
+each result, and a 3D explorer of entities, memories and edges with a time
+slider. It sees every tenant, so it is for operators, not end users.
+
+Issue it a key on a dedicated service principal, then start it:
+
+```bash
+docker compose exec api albert-admin create-principal \
+  --organization "Example" --name "Console" --principal-type service
+docker compose exec api albert-admin create-key \
+  --principal-id <console principal id> --name console \
+  --capabilities console.read,memory.read
+# put the printed key in .env as ALBERT_CONSOLE_API_KEY, then:
+docker compose up -d console
+```
+
+Open `http://127.0.0.1:8082`. The key stays inside the console container; the
+browser only ever talks to the console. Like the API and MCP, the console binds
+to loopback by default; put it behind the same TLS reverse proxy before exposing
+it, and treat anyone who can reach it as an operator.
+
+Traces hold ids, scores, timings and the search query text, never memory
+subjects or content. `ALBERT_TRACE_SAMPLE_RATE` (default `1.0`) is the dial
+for busy installs; error and degraded traces are always kept.
+`ALBERT_TRACE_RETENTION_DAYS` (default `14`) bounds the table; the worker's
+housekeeping pass prunes older traces about once a minute.
+
 ## Upgrading to 0.3
 
 Migration `0003` moves embeddings from `memories` to a `memory_chunks` table and

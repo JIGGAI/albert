@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from albert.config import get_settings
 from albert.db import get_session
 from albert.models import APIKey, Principal
+from albert.recorder import current_recorder, span
 
 bearer = HTTPBearer(auto_error=False)
 # Writing last_used_at on every request turns a shared agent key into a hot row.
@@ -81,24 +82,32 @@ def authenticate(
 ) -> AuthContext:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Bearer API key required")
-    parsed = parse_api_key(credentials.credentials)
-    if parsed is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    prefix, raw = parsed
-    record = session.scalar(select(APIKey).where(APIKey.prefix == prefix, APIKey.active.is_(True)))
-    now = datetime.now(UTC)
-    if (
-        record is None
-        or not hmac.compare_digest(record.key_hash, _digest(raw))
-        or (record.expires_at is not None and _as_utc(record.expires_at) <= now)
-        or not record.principal.active
-    ):
-        raise HTTPException(status_code=401, detail="Invalid or expired API key")
-    last_used = record.last_used_at
-    if last_used is None or now - _as_utc(last_used) >= LAST_USED_WRITE_INTERVAL:
-        record.last_used_at = now
-        session.commit()
-    principal: Principal = record.principal
+    with span("auth") as handle:
+        parsed = parse_api_key(credentials.credentials)
+        if parsed is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        prefix, raw = parsed
+        handle.set(prefix=prefix)
+        record = session.scalar(
+            select(APIKey).where(APIKey.prefix == prefix, APIKey.active.is_(True))
+        )
+        now = datetime.now(UTC)
+        if (
+            record is None
+            or not hmac.compare_digest(record.key_hash, _digest(raw))
+            or (record.expires_at is not None and _as_utc(record.expires_at) <= now)
+            or not record.principal.active
+        ):
+            raise HTTPException(status_code=401, detail="Invalid or expired API key")
+        last_used = record.last_used_at
+        if last_used is None or now - _as_utc(last_used) >= LAST_USED_WRITE_INTERVAL:
+            record.last_used_at = now
+            session.commit()
+        principal: Principal = record.principal
+        handle.set(capabilities=sorted(record.capabilities or []))
+        recorder = current_recorder()
+        if recorder is not None:
+            recorder.set_identity(principal.organization_id, principal.id)
     return AuthContext(
         principal_id=principal.id,
         organization_id=principal.organization_id,
