@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from albert.classifier import ExtractedEntity, ExtractedRelationship, contains_likely_secret
+from albert.classifier import ExtractedEntity, ExtractedRelationship
 from albert.graph import add_relationship
 from albert.models import Memory, Organization, Relationship, Workspace
 from albert.schemas import (
@@ -20,7 +20,7 @@ from albert.schemas import (
     WorkspaceExport,
 )
 from albert.security import AuthContext
-from albert.services import audit, enqueue, resolve_workspace
+from albert.services import audit, enqueue, reject_secrets, resolve_workspace
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -179,15 +179,27 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
 
     allowed_sensitivities = set(auth.allowed_sensitivities())
     memory_map: dict[UUID, UUID] = {}
+    memories_created = 0
+    memories_skipped = 0
     for item in request.bundle.memories:
         if item.sensitivity not in allowed_sensitivities:
             raise HTTPException(status_code=403, detail="Bundle contains unauthorized sensitivity")
-        if contains_likely_secret(f"{item.subject}\n{item.content}"):
-            raise HTTPException(
-                status_code=422, detail="Bundle appears to contain a credential or secret"
-            )
+        reject_secrets(item.subject, item.content, item.metadata, what="Bundle")
         if item.valid_until is not None and _as_utc(item.valid_until) <= _as_utc(item.valid_from):
             raise HTTPException(status_code=422, detail="Memory validity interval is invalid")
+        already_imported = session.scalar(
+            select(Memory).where(
+                Memory.organization_id == auth.organization_id,
+                Memory.status == "active",
+                Memory.metadata_["imported_from"]["organization"].as_string()
+                == request.bundle.organization_name,
+                Memory.metadata_["imported_from"]["memory_ref"].as_string() == str(item.ref),
+            )
+        )
+        if already_imported is not None:
+            memory_map[item.ref] = already_imported.id
+            memories_skipped += 1
+            continue
         memory = Memory(
             organization_id=auth.organization_id,
             workspace_id=mapped_workspace(item.workspace_ref),
@@ -214,12 +226,21 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
         session.add(memory)
         session.flush()
         memory_map[item.ref] = memory.id
+        memories_created += 1
         enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
 
     relationships_created = 0
     for item in request.bundle.relationships:
         if item.sensitivity not in allowed_sensitivities:
             raise HTTPException(status_code=403, detail="Bundle contains unauthorized sensitivity")
+        reject_secrets(
+            item.source.name,
+            item.source.description,
+            item.target.name,
+            item.target.description,
+            item.metadata,
+            what="Bundle",
+        )
         if item.valid_until is not None and _as_utc(item.valid_until) <= _as_utc(item.valid_from):
             raise HTTPException(status_code=422, detail="Relationship validity interval is invalid")
         source_memory_id = None
@@ -229,7 +250,7 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
                 raise HTTPException(
                     status_code=422, detail="Relationship references an unknown memory"
                 )
-        add_relationship(
+        _relationship, created = add_relationship(
             session,
             organization_id=auth.organization_id,
             workspace_id=mapped_workspace(item.workspace_ref),
@@ -255,10 +276,11 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
             valid_until=item.valid_until,
             metadata={**item.metadata, "imported": True},
         )
-        relationships_created += 1
+        relationships_created += int(created)
 
     result = ImportResult(
-        memories_created=len(memory_map),
+        memories_created=memories_created,
+        memories_skipped=memories_skipped,
         relationships_created=relationships_created,
         workspaces_created=workspaces_created,
     )

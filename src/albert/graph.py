@@ -77,7 +77,8 @@ def add_relationship(
     valid_from: datetime,
     valid_until: datetime | None = None,
     metadata: dict | None = None,
-) -> Relationship:
+) -> tuple[Relationship, bool]:
+    """Create or reuse an open edge; returns (relationship, created)."""
     source = upsert_entity(
         session,
         organization_id=organization_id,
@@ -104,7 +105,7 @@ def add_relationship(
     )
     if existing is not None:
         existing.confidence = max(existing.confidence, extracted.confidence)
-        return existing
+        return existing, False
     relationship = Relationship(
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -120,7 +121,7 @@ def add_relationship(
     )
     session.add(relationship)
     session.flush()
-    return relationship
+    return relationship, True
 
 
 def query_relationships(

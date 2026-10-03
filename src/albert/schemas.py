@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -14,6 +15,15 @@ class ORMModel(BaseModel):
 def _require_visible_text(value: str | None) -> str | None:
     if value is not None and not value.strip():
         raise ValueError("content must contain visible text")
+    return value
+
+
+MAX_JSON_FIELD_CHARACTERS = 64_000
+
+
+def _bounded_json(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is not None and len(json.dumps(value, default=str)) > MAX_JSON_FIELD_CHARACTERS:
+        raise ValueError(f"JSON field exceeds {MAX_JSON_FIELD_CHARACTERS} serialized characters")
     return value
 
 
@@ -33,6 +43,7 @@ class EpisodeCreate(ScopeFields):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
 class EpisodeRead(ORMModel):
@@ -66,6 +77,7 @@ class MemoryCreate(ScopeFields):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
     @field_validator("valid_until")
     @classmethod
@@ -86,6 +98,7 @@ class MemoryUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
 
     _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
 class MemoryRead(ORMModel):
@@ -165,6 +178,8 @@ class RelationshipCreate(BaseModel):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
     @model_validator(mode="after")
     def validate_interval(self):  # type: ignore[no-untyped-def]
         if (
@@ -219,6 +234,8 @@ class WorkingMemoryCreate(BaseModel):
 class WorkingMemoryUpdate(BaseModel):
     progress: dict[str, Any] | None = None
     expires_in_seconds: int | None = Field(default=None, ge=60, le=604800)
+
+    _bounded_progress = field_validator("progress")(_bounded_json)
 
 
 class WorkingMemoryFinish(BaseModel):
@@ -290,6 +307,8 @@ class MemoryExport(BaseModel):
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
 
 class RelationshipExport(BaseModel):
     workspace_ref: UUID | None = None
@@ -302,6 +321,8 @@ class RelationshipExport(BaseModel):
     valid_from: datetime
     valid_until: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
 class ExportBundle(BaseModel):
@@ -320,6 +341,7 @@ class ImportRequest(BaseModel):
 
 class ImportResult(BaseModel):
     memories_created: int
+    memories_skipped: int = 0
     relationships_created: int
     workspaces_created: int
 

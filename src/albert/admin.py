@@ -3,14 +3,30 @@ from __future__ import annotations
 from uuid import UUID
 
 import typer
-from sqlalchemy import select, text
+from sqlalchemy import Engine, inspect, select, text
 
-from albert.db import SessionLocal, initialize_database
+from albert.db import SessionLocal, engine, initialize_database
 from albert.embeddings import get_embedder
 from albert.models import APIKey, Job, Memory, Organization, Principal, Workspace
 from albert.security import issue_api_key
 
 app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
+
+
+class SchemaNotReady(RuntimeError):
+    pass
+
+
+def ensure_schema_ready(engine: Engine) -> None:
+    """Refuse to run against a database Alembic has not built.
+
+    Creating tables here would leave no alembic_version row and make the next
+    `alembic upgrade head` fail on tables that already exist.
+    """
+    if not inspect(engine).has_table("memories"):
+        raise SchemaNotReady(
+            "Database schema is missing; run `alembic upgrade head` before this command"
+        )
 
 ALL_CAPABILITIES = [
     "memory.read",
@@ -29,9 +45,13 @@ ALL_CAPABILITIES = [
 
 @app.command("init-db")
 def init_db() -> None:
-    """Create database extensions and tables for development."""
+    """Create tables directly for throwaway development databases only.
+
+    Deployed databases must use `alembic upgrade head`; this command records no
+    migration version.
+    """
     initialize_database()
-    typer.echo("Database initialized")
+    typer.echo("Database initialized (development only; no Alembic version recorded)")
 
 
 @app.command()
@@ -41,7 +61,10 @@ def bootstrap(
     principal: str = typer.Option("Administrator", help="Administrator display name"),
 ) -> None:
     """Create the first tenant and print its administrator key exactly once."""
-    initialize_database()
+    try:
+        ensure_schema_ready(engine)
+    except SchemaNotReady as exc:
+        raise typer.BadParameter(str(exc)) from exc
     with SessionLocal() as session:
         org = session.scalar(select(Organization).where(Organization.name == organization))
         if org is None:

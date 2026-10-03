@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -52,6 +53,23 @@ def _as_utc(value: datetime) -> datetime:
 def _highest_sensitivity(*values: str) -> str:
     """Classification may raise a record's sensitivity but never lower it."""
     return max(values, key=SENSITIVITY_ORDER.index)
+
+
+def reject_secrets(*parts: str | dict | None, what: str = "Content") -> None:
+    """Refuse to persist anything that looks like a credential.
+
+    Every text or JSON field Albert stores or exports goes through here, not
+    only memory bodies: working-memory notes, graph descriptions and metadata
+    are retrievable too.
+    """
+    for part in parts:
+        if part is None:
+            continue
+        text = part if isinstance(part, str) else json.dumps(part, default=str)
+        if contains_likely_secret(text):
+            raise HTTPException(
+                status_code=422, detail=f"{what} appears to contain a credential or secret"
+            )
 
 
 def resolve_workspace(session: Session, auth: AuthContext, requested: UUID | None) -> UUID | None:
@@ -107,10 +125,7 @@ def create_episode(
     learn about, or be handed, another principal's episode by re-posting text.
     """
     auth.require("memory.write")
-    if contains_likely_secret(data.content):
-        raise HTTPException(
-            status_code=422, detail="Content appears to contain a credential or secret"
-        )
+    reject_secrets(data.content, data.metadata)
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     digest = hashlib.sha256(data.content.encode()).hexdigest()
     duplicate_of = select(Episode).where(
@@ -156,10 +171,7 @@ def create_episode(
 
 def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Memory:
     auth.require("memory.write")
-    if contains_likely_secret(f"{data.subject}\n{data.content}"):
-        raise HTTPException(
-            status_code=422, detail="Content appears to contain a credential or secret"
-        )
+    reject_secrets(data.subject, data.content, data.metadata)
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     memory = Memory(
         organization_id=auth.organization_id,
@@ -214,6 +226,7 @@ def update_memory(
         if valid_until is not None and _as_utc(valid_until) <= _as_utc(memory.valid_from):
             raise HTTPException(status_code=422, detail="valid_until must be after valid_from")
     metadata = changes.pop("metadata", None)
+    reject_secrets(changes.get("subject"), changes.get("content"), metadata)
     for name, value in changes.items():
         setattr(memory, name, value)
     if metadata is not None:
@@ -230,10 +243,6 @@ def update_memory(
         if (relationship.metadata_ or {}).get("extracted")
     ]
     if text_changed:
-        if contains_likely_secret(f"{memory.subject}\n{memory.content}"):
-            raise HTTPException(
-                status_code=422, detail="Content appears to contain a credential or secret"
-            )
         memory.embedding = None
         memory.embedding_model = None
         # The facts themselves may have changed: close the old edges now and let
@@ -313,6 +322,14 @@ def add_explicit_relationship(
     session: Session, auth: AuthContext, data: RelationshipCreate
 ) -> Relationship:
     auth.require("graph.write")
+    reject_secrets(
+        data.source.name,
+        data.source.description,
+        data.target.name,
+        data.target.description,
+        data.metadata,
+        what="Relationship",
+    )
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     if data.source_memory_id is not None:
         get_memory(session, auth, data.source_memory_id)
@@ -332,7 +349,7 @@ def add_explicit_relationship(
         ),
         confidence=data.confidence,
     )
-    relationship = add_relationship(
+    relationship, _created = add_relationship(
         session,
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -359,6 +376,7 @@ def create_working_memory(
     session: Session, auth: AuthContext, data: WorkingMemoryCreate
 ) -> tuple[WorkingMemory, tuple[ResourceLock, str] | None]:
     auth.require("working_memory.write")
+    reject_secrets(data.description, what="Working memory")
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     working = WorkingMemory(
         organization_id=auth.organization_id,
@@ -426,6 +444,7 @@ def update_working_memory(
         raise HTTPException(status_code=403, detail="Working memory is owned by another principal")
     if working.status != "active":
         raise HTTPException(status_code=409, detail="Working memory is not active")
+    reject_secrets(data.progress, what="Working memory progress")
     if data.progress is not None:
         working.progress = data.progress
     if data.expires_in_seconds is not None:
@@ -449,6 +468,7 @@ def finish_working_memory(
         raise HTTPException(status_code=403, detail="Working memory is owned by another principal")
     if working.status != "active":
         raise HTTPException(status_code=409, detail="Working memory is not active")
+    reject_secrets(data.consolidation_notes, what="Consolidation notes")
     working.status = "failed" if failed else "completed"
     working.completed_at = utcnow()
     working.consolidation_notes = data.consolidation_notes

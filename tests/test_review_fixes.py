@@ -277,3 +277,106 @@ def test_endpoints_do_not_run_blocking_io_on_the_event_loop() -> None:
     from albert.db import get_session
 
     assert not inspect.isasyncgenfunction(get_session)
+
+
+SECRET = "password: hunter2-super-secret-value"
+
+
+async def test_secret_screening_covers_working_memory_relationships_and_metadata(
+    client: httpx.AsyncClient,
+) -> None:
+    working = await client.post(
+        "/v1/working-memory", json={"task_id": "secret-task", "description": SECRET}
+    )
+    assert working.status_code == 422
+    created = await client.post(
+        "/v1/working-memory", json={"task_id": "progress-task", "description": "Clean"}
+    )
+    progress = await client.patch(
+        f"/v1/working-memory/{created.json()['id']}", json={"progress": {"note": SECRET}}
+    )
+    assert progress.status_code == 422
+    finish = await client.post(
+        f"/v1/working-memory/{created.json()['id']}/complete",
+        json={"consolidation_notes": SECRET},
+    )
+    assert finish.status_code == 422
+    relationship = await client.post(
+        "/v1/relationships",
+        json={
+            "source": {"name": "Service", "description": SECRET},
+            "relation_type": "uses",
+            "target": {"name": "Database"},
+        },
+    )
+    assert relationship.status_code == 422
+    memory = await client.post(
+        "/v1/memories", json={"content": "Clean content", "metadata": {"note": SECRET}}
+    )
+    assert memory.status_code == 422
+    episode = await client.post(
+        "/v1/episodes", json={"content": "Clean content", "metadata": {"note": SECRET}}
+    )
+    assert episode.status_code == 422
+
+
+async def test_metadata_size_is_bounded(client: httpx.AsyncClient) -> None:
+    oversized = {"blob": "x" * 70_000}
+    memory = await client.post("/v1/memories", json={"content": "Bounded", "metadata": oversized})
+    episode = await client.post("/v1/episodes", json={"content": "Bounded", "metadata": oversized})
+    working = await client.post(
+        "/v1/working-memory", json={"task_id": "big-progress", "description": "Bounded"}
+    )
+    progress = await client.patch(
+        f"/v1/working-memory/{working.json()['id']}", json={"progress": oversized}
+    )
+    assert memory.status_code == 422
+    assert episode.status_code == 422
+    assert progress.status_code == 422
+
+
+async def test_import_is_idempotent(client: httpx.AsyncClient) -> None:
+    from .conftest import create_identity
+
+    memory = await client.post(
+        "/v1/memories", json={"subject": "Idempotent record", "content": "Imported once only."}
+    )
+    relationship = await client.post(
+        "/v1/relationships",
+        json={
+            "source": {"name": "Importer", "entity_type": "tool"},
+            "relation_type": "supports",
+            "target": {"name": "Idempotency", "entity_type": "feature"},
+            "source_memory_id": memory.json()["id"],
+        },
+    )
+    assert relationship.status_code == 201
+    bundle = (await client.get("/v1/export")).json()
+    target_key, _org, _ws = create_identity("Idempotent Target")
+    async with _client(target_key) as target:
+        first = await target.post("/v1/import", json={"bundle": bundle})
+        second = await target.post("/v1/import", json={"bundle": bundle})
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["memories_created"] == 1
+        assert second.json()["memories_created"] == 0
+        assert second.json()["memories_skipped"] == 1
+        assert second.json()["relationships_created"] == 0
+        found = await target.post("/v1/search", json={"query": "Idempotent record"})
+        matches = [hit for hit in found.json()["hits"] if hit["subject"] == "Idempotent record"]
+        assert len(matches) == 1
+        graph = await target.post("/v1/graph/query", json={"query": "Idempotency"})
+        assert len(graph.json()) == 1
+
+
+def test_bootstrap_refuses_an_unmigrated_database(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from sqlalchemy import create_engine
+
+    from albert.admin import SchemaNotReady, ensure_schema_ready
+    from albert.db import Base
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh.sqlite3'}")
+    with pytest.raises(SchemaNotReady, match="alembic upgrade head"):
+        ensure_schema_ready(engine)
+    Base.metadata.create_all(engine)
+    ensure_schema_ready(engine)
