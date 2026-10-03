@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from albert import __version__
 from albert.config import get_settings
+from albert.console import router as console_router
 from albert.db import get_session
 from albert.graph import query_relationships, subgraph
 from albert.models import Entity, Episode, Relationship
@@ -84,6 +85,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(RecordingMiddleware)
+app.include_router(console_router)
 
 
 def _note(**fields: object) -> None:
