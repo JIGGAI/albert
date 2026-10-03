@@ -33,6 +33,7 @@ from albert.models import (
     Workspace,
     utcnow,
 )
+from albert.recorder import span
 from albert.schemas import (
     EpisodeCreate,
     LockAcquire,
@@ -75,19 +76,21 @@ def reject_secrets(*parts: str | dict | None, what: str = "Content") -> None:
 
 
 def resolve_workspace(session: Session, auth: AuthContext, requested: UUID | None) -> UUID | None:
-    if auth.workspace_id is not None and requested not in (None, auth.workspace_id):
-        raise HTTPException(status_code=403, detail="Workspace is outside the API key scope")
-    workspace_id = requested if requested is not None else auth.workspace_id
-    if workspace_id is not None:
-        exists = session.scalar(
-            select(Workspace.id).where(
-                Workspace.id == workspace_id,
-                Workspace.organization_id == auth.organization_id,
+    with span("resolve_scope", requested=str(requested) if requested else None) as handle:
+        if auth.workspace_id is not None and requested not in (None, auth.workspace_id):
+            raise HTTPException(status_code=403, detail="Workspace is outside the API key scope")
+        workspace_id = requested if requested is not None else auth.workspace_id
+        if workspace_id is not None:
+            exists = session.scalar(
+                select(Workspace.id).where(
+                    Workspace.id == workspace_id,
+                    Workspace.organization_id == auth.organization_id,
+                )
             )
-        )
-        if exists is None:
-            raise HTTPException(status_code=404, detail="Workspace not found")
-    return workspace_id
+            if exists is None:
+                raise HTTPException(status_code=404, detail="Workspace not found")
+        handle.set(workspace_id=str(workspace_id) if workspace_id else None)
+        return workspace_id
 
 
 def audit(
@@ -267,6 +270,19 @@ def update_memory(
     return memory
 
 
+def _classify_traced(text: str):  # type: ignore[no-untyped-def]
+    with span("classify", provider=get_settings().llm_provider) as handle:
+        result = classify(text)
+        handle.set(
+            memory_type=result.memory_type,
+            sensitivity=result.sensitivity,
+            confidence=result.confidence,
+            entities=len(result.entities),
+            relationships=len(result.relationships),
+        )
+        return result
+
+
 def _drop_chunks(session: Session, memory_id: UUID) -> None:
     session.query(MemoryChunk).filter(MemoryChunk.memory_id == memory_id).delete(
         synchronize_session=False
@@ -278,26 +294,30 @@ def index_memory_chunks(session: Session, memory: Memory) -> None:
     settings = get_settings()
     embedder = get_embedder()
     _drop_chunks(session, memory.id)
-    chunks = chunk_text(
-        memory.content,
-        max_characters=settings.chunk_characters,
-        overlap_characters=settings.chunk_overlap_characters,
-    )
-    truncated = len(chunks) > settings.max_chunks_per_memory
-    chunks = chunks[: settings.max_chunks_per_memory]
-    for index, chunk in enumerate(chunks):
-        text = f"{memory.subject}\n{chunk}" if memory.subject else chunk
-        session.add(
-            MemoryChunk(
-                memory_id=memory.id,
-                organization_id=memory.organization_id,
-                workspace_id=memory.workspace_id,
-                chunk_index=index,
-                content=chunk,
-                embedding=embedder.embed(text),
-                embedding_model=embedder.name,
-            )
+    with span("chunk", max_characters=settings.chunk_characters) as chunk_span:
+        chunks = chunk_text(
+            memory.content,
+            max_characters=settings.chunk_characters,
+            overlap_characters=settings.chunk_overlap_characters,
         )
+        truncated = len(chunks) > settings.max_chunks_per_memory
+        chunks = chunks[: settings.max_chunks_per_memory]
+        chunk_span.set(chunks=len(chunks), truncated=truncated)
+    with span("embed", embedding_model=embedder.name, dimensions=embedder.dimensions) as embed_span:
+        for index, chunk in enumerate(chunks):
+            text = f"{memory.subject}\n{chunk}" if memory.subject else chunk
+            session.add(
+                MemoryChunk(
+                    memory_id=memory.id,
+                    organization_id=memory.organization_id,
+                    workspace_id=memory.workspace_id,
+                    chunk_index=index,
+                    content=chunk,
+                    embedding=embedder.embed(text),
+                    embedding_model=embedder.name,
+                )
+            )
+        embed_span.set(vectors=len(chunks))
     memory.embedding_model = embedder.name
     memory.metadata_ = {
         **(memory.metadata_ or {}),
@@ -675,7 +695,7 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
     memory = session.get(Memory, memory_id, with_for_update=True)
     if memory is None or memory.status != "active":
         return
-    result = classify(f"{memory.subject}\n{memory.content}")
+    result = _classify_traced(f"{memory.subject}\n{memory.content}")
     index_memory_chunks(session, memory)
     if memory.memory_type == "fact" and result.memory_type != "fact":
         memory.memory_type = result.memory_type
@@ -691,35 +711,41 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
         },
     }
     now = utcnow()
-    for existing in session.scalars(
-        select(Relationship).where(
-            Relationship.organization_id == memory.organization_id,
-            Relationship.source_memory_id == memory.id,
-        )
-    ):
-        if (existing.metadata_ or {}).get("extracted") and (
-            existing.valid_until is None or _as_utc(existing.valid_until) > now
+    with span("write_edges") as edges_span:
+        closed = 0
+        for existing in session.scalars(
+            select(Relationship).where(
+                Relationship.organization_id == memory.organization_id,
+                Relationship.source_memory_id == memory.id,
+            )
         ):
-            existing.valid_until = now
-    for relationship in result.relationships:
-        add_relationship(
-            session,
-            organization_id=memory.organization_id,
-            workspace_id=memory.workspace_id,
-            extracted=relationship,
-            source_memory_id=memory.id,
-            sensitivity=memory.sensitivity,
-            valid_from=memory.valid_from,
-            valid_until=memory.valid_until,
-            metadata={"extracted": True},
-        )
+            if (existing.metadata_ or {}).get("extracted") and (
+                existing.valid_until is None or _as_utc(existing.valid_until) > now
+            ):
+                existing.valid_until = now
+                closed += 1
+        written = 0
+        for relationship in result.relationships:
+            _edge, created = add_relationship(
+                session,
+                organization_id=memory.organization_id,
+                workspace_id=memory.workspace_id,
+                extracted=relationship,
+                source_memory_id=memory.id,
+                sensitivity=memory.sensitivity,
+                valid_from=memory.valid_from,
+                valid_until=memory.valid_until,
+                metadata={"extracted": True},
+            )
+            written += int(created)
+        edges_span.set(edges_closed=closed, edges_written=written)
 
 
 def enrich_episode(session: Session, episode_id: UUID) -> None:
     episode = session.get(Episode, episode_id)
     if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
         return
-    result = classify(episode.content)
+    result = _classify_traced(episode.content)
     memory = Memory(
         episode_id=episode.id,
         organization_id=episode.organization_id,
@@ -739,16 +765,20 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     session.add(memory)
     session.flush()
     index_memory_chunks(session, memory)
-    for relationship in result.relationships:
-        add_relationship(
-            session,
-            organization_id=episode.organization_id,
-            workspace_id=episode.workspace_id,
-            extracted=relationship,
-            source_memory_id=memory.id,
-            sensitivity=memory.sensitivity,
-            valid_from=episode.occurred_at,
-            metadata={"extracted": True, "episode_id": str(episode.id)},
-        )
+    with span("write_edges") as edges_span:
+        written = 0
+        for relationship in result.relationships:
+            _edge, created = add_relationship(
+                session,
+                organization_id=episode.organization_id,
+                workspace_id=episode.workspace_id,
+                extracted=relationship,
+                source_memory_id=memory.id,
+                sensitivity=memory.sensitivity,
+                valid_from=episode.occurred_at,
+                metadata={"extracted": True, "episode_id": str(episode.id)},
+            )
+            written += int(created)
+        edges_span.set(edges_closed=0, edges_written=written, memory_id=str(memory.id))
     episode.enrichment_status = "complete"
     episode.enrichment_error = None

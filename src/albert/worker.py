@@ -15,6 +15,7 @@ from albert.config import get_settings
 from albert.db import SessionLocal
 from albert.models import Episode, Job, ResourceLock, WorkingMemory, utcnow
 from albert.services import enrich_episode, enrich_memory
+from albert.tracing import traced_job
 
 logger = logging.getLogger("albert.worker")
 _stop = False
@@ -49,12 +50,13 @@ def claim_job(session: Session, worker_id: str) -> Job | None:
 
 def process_job(session: Session, job: Job) -> None:
     try:
-        if job.job_type == "enrich_memory":
-            enrich_memory(session, UUID(job.payload["memory_id"]))
-        elif job.job_type == "enrich_episode":
-            enrich_episode(session, UUID(job.payload["episode_id"]))
-        else:
-            raise ValueError(f"Unknown job type: {job.job_type}")
+        with traced_job(job):
+            if job.job_type == "enrich_memory":
+                enrich_memory(session, UUID(job.payload["memory_id"]))
+            elif job.job_type == "enrich_episode":
+                enrich_episode(session, UUID(job.payload["episode_id"]))
+            else:
+                raise ValueError(f"Unknown job type: {job.job_type}")
         job.status = "complete"
         job.last_error = None
         session.commit()
