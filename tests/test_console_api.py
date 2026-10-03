@@ -106,7 +106,7 @@ async def test_operator_detail_reads_truncate_content(
         assert len(detail.json()["content"]) == 500
 
 
-async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-untyped-def]
+async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-untyped-def]  # noqa: E501
     """Drive the endpoint's generator directly: the in-memory ASGI transport
     buffers whole responses, so an endless event stream can never complete there."""
     import json
