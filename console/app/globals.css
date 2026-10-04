@@ -225,7 +225,56 @@ button.link { background: none; border: 0; padding: 0; color: var(--lexical); cu
 .map-frame { position: relative; display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; min-height: 460px; height: calc(100vh - 226px); }
 .map-stage { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .map-host { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
-.map-stage > .map-host { position: absolute; inset: 0; }
+.map-stage > .map-host { position: relative; flex: 1; }
+.replay-bar {
+  flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 7px 12px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; min-height: 40px;
+}
+.replay-bar select, .replay-bar button.play, .map-search input, .map-search button {
+  background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12px;
+}
+.replay-bar button, .map-search button { cursor: pointer; }
+.replay-bar button:disabled, .map-search button:disabled { color: var(--faint); cursor: default; }
+.replay-bar button:focus-visible, .replay-bar select:focus-visible, .replay-bar input:focus-visible, .replay-bar a:focus-visible,
+.map-search input:focus-visible, .map-search button:focus-visible { outline: 2px solid var(--lexical); outline-offset: 1px; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.segmented button { background: none; border: 0; padding: 3px 10px; color: var(--muted); }
+.segmented button[aria-pressed="true"] { background: var(--panel-raised); color: var(--fg); }
+.live-state { display: inline-flex; align-items: center; color: var(--muted); min-width: 64px; }
+.live-state.live { color: var(--ok); }
+.live-state.replay { color: var(--graph); }
+.live-state.replay .live-dot { background: var(--graph); }
+.scrub { position: relative; flex: 1; min-width: 160px; height: 22px; display: flex; align-items: center; }
+.scrub input { width: 100%; margin: 0; accent-color: var(--graph); position: relative; }
+.scrub .marks { position: absolute; left: 8px; right: 8px; top: 0; height: 5px; }
+.scrub .marks i { position: absolute; top: 0; width: 1px; height: 5px; background: var(--graph); opacity: 0.7; }
+.scrub .marks i.store { background: var(--ok); }
+.replay-bar .when { min-width: 84px; }
+.ticker { list-style: none; margin: 0 0 0 auto; padding: 0; display: flex; gap: 14px; min-width: 0; max-width: 100%; overflow: hidden; }
+.replay-bar[data-mode="replay"] .ticker { flex-basis: 100%; margin-left: 0; }
+.ticker li { min-width: 0; flex: 0 1 auto; }
+.ticker a { display: inline-flex; align-items: center; gap: 6px; max-width: 320px; color: var(--muted); }
+.ticker a:hover { color: var(--fg); }
+.ticker li:first-child a { color: var(--fg); }
+.swatch.recall { background: var(--graph); }
+.swatch.store { background: var(--ok); }
+.map-search { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.map-search input { min-width: 220px; background: var(--panel); padding: 5px 8px; font-size: 13px; }
+.map-search button { background: var(--panel); padding: 5px 9px; }
+.map-search .count { color: var(--lexical); }
+.search-error { color: var(--error); }
+.search-results {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 420px; max-width: 80vw; max-height: 340px; overflow-y: auto;
+  background: var(--panel-raised); border: 1px solid var(--line); border-radius: 6px; padding: 6px;
+}
+.search-results ol { list-style: none; margin: 0; padding: 0; }
+.search-results p { margin: 6px; }
+.search-results li button {
+  display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; width: 100%;
+  background: none; border: 0; border-radius: 4px; padding: 5px 6px; text-align: left;
+}
+.search-results li button:hover { background: var(--panel); }
+.search-results .rank { color: var(--lexical); text-align: right; }
 .map-frame > .graph-empty { position: relative; flex: 1; }
 
 .reading-pane { position: relative; flex: none; max-width: 70%; background: var(--panel); border-left: 1px solid var(--line); display: flex; }
@@ -269,7 +318,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--lexical); cu
 .reading-pane section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
 .reading-pane h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
 .reading-pane h4 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; }
-.reading-pane ul { list-style: none; margin: 0; padding: 0; }
+.reading-pane section ul { list-style: none; margin: 0; padding: 0; }
 .reading-pane section li > button, .reading-pane section li > a {
   display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%;
   background: none; border: 0; border-radius: 4px; padding: 4px 6px; margin: 0 -6px; text-align: left; cursor: pointer;

@@ -1,5 +1,6 @@
 "use client";
 
+import { forceCollide, forceX, forceY } from "d3-force-3d";
 import dynamic from "next/dynamic";
 import type { ForceGraphMethods } from "react-force-graph-2d";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -92,6 +93,7 @@ export function MapView({
   highlight,
   pulses,
   searchHits,
+  liveRecalls,
   onSelect,
 }: {
   snapshot: MapSnapshot;
@@ -102,6 +104,8 @@ export function MapView({
   highlight: Highlight | null;
   pulses: Pulse[];
   searchHits: Map<string, number>;
+  /** Recalls seen live since the snapshot loaded, so nodes grow as agents use them. */
+  liveRecalls: Map<string, number>;
   onSelect: (id: string | null) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -156,12 +160,18 @@ export function MapView({
       // so they read as threads across the map rather than reshaping it.
       const link = instance.d3Force("link") as unknown as LinkForce | undefined;
       link
-        ?.distance((l) => (l.kind === "similar" ? 26 : 70))
+        ?.distance((l) => (l.kind === "similar" ? 34 : 80))
         .strength((l) =>
           l.kind === "similar" ? 0.25 + 0.6 * Math.max(0, (l.weight - 0.78) / 0.22) : 0.02,
         );
       const charge = instance.d3Force("charge") as unknown as ChargeForce | undefined;
-      charge?.strength(-55).distanceMax(260);
+      charge?.strength(-70).distanceMax(320);
+      // Gentle gravity keeps unconnected clusters on one screen; collision keeps
+      // hexagons from stacking inside a tight cluster.
+      const force = instance.d3Force.bind(instance) as unknown as (name: string, f: object) => void;
+      force("x", forceX(0).strength(0.05));
+      force("y", forceY(0).strength(0.05));
+      force("collide", forceCollide((node) => nodeRadius((node as SimNode).recalls) + 5));
       instance.d3ReheatSimulation();
     };
     apply();
@@ -192,11 +202,16 @@ export function MapView({
     [highlight, searchHits, selectedId, neighbours],
   );
 
+  const radius = useCallback(
+    (node: SimNode) => nodeRadius(node.recalls + (liveRecalls.get(node.id) ?? 0)),
+    [liveRecalls],
+  );
+
   const drawNode = useCallback(
-    (raw: object, ctx: CanvasRenderingContext2D, zoom: number) => {
+    (raw: object, ctx: CanvasRenderingContext2D) => {
       const node = raw as SimNode;
       if (node.x === undefined || node.y === undefined) return;
-      const r = nodeRadius(node.recalls);
+      const r = radius(node);
       const faded = dimmed(node.id);
       let fill = scale.color(node);
       if (highlight) {
@@ -244,26 +259,20 @@ export function MapView({
         ctx.fillStyle = "#0e1420";
         ctx.fillText(String(rank), bx, by + 0.3);
       }
-      const labelled =
-        node.id === selectedId || rank !== undefined || (zoom >= LABEL_ZOOM && !faded);
-      if (labelled) {
-        ctx.font = `${11 / zoom}px ${canvasFont()}`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = `rgba(${INK}, ${node.id === selectedId ? 1 : 0.78})`;
-        ctx.fillText(clip(node.title, 34), node.x, node.y + r + 3 / zoom + 2);
-      }
     },
-    [dimmed, scale, highlight, searchHits, selectedId],
+    [dimmed, scale, highlight, searchHits, selectedId, radius],
   );
 
-  const paintPointer = useCallback((raw: object, color: string, ctx: CanvasRenderingContext2D) => {
-    const node = raw as SimNode;
-    if (node.x === undefined || node.y === undefined) return;
-    hexPath(ctx, node.x, node.y, nodeRadius(node.recalls) + 2.5);
-    ctx.fillStyle = color;
-    ctx.fill();
-  }, []);
+  const paintPointer = useCallback(
+    (raw: object, color: string, ctx: CanvasRenderingContext2D) => {
+      const node = raw as SimNode;
+      if (node.x === undefined || node.y === undefined) return;
+      hexPath(ctx, node.x, node.y, radius(node) + 2.5);
+      ctx.fillStyle = color;
+      ctx.fill();
+    },
+    [radius],
+  );
 
   const linkTouchesSelection = useCallback(
     (link: SimLink) => {
@@ -334,8 +343,55 @@ export function MapView({
     [data.nodes, snapshot.clusters, highlight],
   );
 
+  // Titles are drawn after the nodes, most important first, and one that would
+  // cover an earlier title is skipped: a readable few beats an unreadable pile.
+  const drawLabels = useCallback(
+    (ctx: CanvasRenderingContext2D, zoom: number) => {
+      const priority = (node: SimNode) =>
+        (node.id === selectedId ? 1e9 : 0) +
+        (searchHits.has(node.id) ? 1e6 - (searchHits.get(node.id) ?? 0) : 0) +
+        (highlight?.hits.has(node.id) ? 1e5 : 0) +
+        (neighbours.has(node.id) ? 1e4 : 0) +
+        node.recalls;
+      const candidates = data.nodes
+        .filter(
+          (node) =>
+            node.x !== undefined &&
+            (node.id === selectedId ||
+              searchHits.has(node.id) ||
+              (zoom >= LABEL_ZOOM && !dimmed(node.id))),
+        )
+        .sort((a, b) => priority(b) - priority(a) || a.id.localeCompare(b.id));
+      const size = 11 / zoom;
+      const placed: [number, number, number, number][] = [];
+      ctx.font = `${size}px ${canvasFont()}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (const node of candidates) {
+        const text = clip(node.title, 34);
+        const width = ctx.measureText(text).width;
+        const left = (node.x as number) - width / 2;
+        const top = (node.y as number) + radius(node) + 4 / zoom + 2;
+        const box: [number, number, number, number] = [left, top, left + width, top + size * 1.25];
+        if (placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) {
+          continue;
+        }
+        placed.push(box);
+        // A halo in the background color keeps a title legible over links and hexagons.
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 3 / zoom;
+        ctx.strokeStyle = "rgba(14, 20, 32, 0.85)";
+        ctx.strokeText(text, node.x as number, top);
+        ctx.fillStyle = `rgba(${INK}, ${node.id === selectedId ? 1 : 0.8})`;
+        ctx.fillText(text, node.x as number, top);
+      }
+    },
+    [data.nodes, selectedId, searchHits, highlight, neighbours, dimmed, radius],
+  );
+
   const drawPulses = useCallback(
-    (ctx: CanvasRenderingContext2D) => {
+    (ctx: CanvasRenderingContext2D, zoom: number) => {
+      drawLabels(ctx, zoom);
       const now = performance.now();
       const still = prefersReducedMotion();
       for (const pulse of pulses) {
@@ -343,7 +399,7 @@ export function MapView({
         if (!node || node.x === undefined || node.y === undefined) continue;
         const t = (now - pulse.at) / PULSE_MS;
         if (t < 0 || t > 1) continue;
-        const r = nodeRadius(node.recalls);
+        const r = radius(node);
         const rgb = PULSE_RGB[pulse.kind];
         if (still) {
           hexPath(ctx, node.x, node.y, r + 6);
@@ -366,7 +422,7 @@ export function MapView({
         ctx.fill();
       }
     },
-    [pulses],
+    [pulses, radius, drawLabels],
   );
 
   const onHover = (raw: object | null) => {

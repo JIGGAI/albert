@@ -1,32 +1,39 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { getMap, listOrganizations, listWorkspaces } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getMap, listOrganizations, listWorkspaces, openTraceStream } from "@/lib/api";
 import {
   NO_FILTERS,
+  PULSE_MS,
   applyFilters,
   clusterColor,
   colorScale,
+  eventFromTrace,
   highlightFromTrace,
   type ColorBy,
   type Filters,
+  type MapEvent,
   type Pulse,
 } from "@/lib/map";
 import type {
+  MapSearchHit,
   MapSnapshot,
   MemoryDetail,
   Organization,
   TraceDetail,
   Workspace,
 } from "@/lib/types";
+import { MapSearch } from "./MapSearch";
 import { LinkToggles, MapToolbar } from "./MapToolbar";
 import { MapView } from "./MapView";
 import { ReadingPane } from "./ReadingPane";
+import { ReplayBar, type LiveState, type MapMode } from "./ReplayBar";
 
 const EMPTY: MapSnapshot = { nodes: [], links: [], clusters: [], truncated: false };
-const NO_PULSES: Pulse[] = [];
-const NO_HITS = new Map<string, number>();
+const NO_RECALLS = new Map<string, number>();
+const TICKER_LENGTH = 4;
+const REFETCH_DELAY_MS = 1200;
 
 export function MapPanel({ trace }: { trace?: TraceDetail }) {
   const router = useRouter();
@@ -43,6 +50,18 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
   const [colorBy, setColorBy] = useState<ColorBy>("type");
   const [localSelected, setLocalSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ node?: string; cluster?: number; seq: number } | null>(null);
+  const [mode, setMode] = useState<MapMode>("live");
+  const [liveState, setLiveState] = useState<LiveState>("connecting");
+  const [pulses, setPulses] = useState<Pulse[]>([]);
+  const [pulseCount, setPulseCount] = useState(0);
+  const [ticker, setTicker] = useState<MapEvent[]>([]);
+  const [liveRecalls, setLiveRecalls] = useState<{ on: MapSnapshot; counts: Map<string, number> }>({
+    on: EMPTY,
+    counts: NO_RECALLS,
+  });
+  const [reload, setReload] = useState(0);
+  const [hits, setHits] = useState<MapSearchHit[] | null>(null);
+  const refetch = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // On the map page the selection lives in the address, so a memory can be linked to.
   const selected = trace ? localSelected : params.get("memory");
@@ -88,6 +107,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
       .then((data) => {
         if (cancelled) return;
         setSnapshot(data);
+        setLiveRecalls({ on: data, counts: new Map() });
         setLoaded(true);
         setError(null);
       })
@@ -97,7 +117,72 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
     return () => {
       cancelled = true;
     };
-  }, [organization, workspace]);
+  }, [organization, workspace, reload]);
+
+  /** Show one recall or store on the map: pulse its memories and note it in the ticker. */
+  const show = useCallback((event: MapEvent, live: boolean) => {
+    const at = performance.now();
+    setPulses((current) => [
+      ...current.filter((pulse) => at - pulse.at < PULSE_MS),
+      ...event.ids.map((nodeId) => ({
+        key: `${event.traceId}-${nodeId}-${at}`,
+        nodeId,
+        kind: event.kind,
+        at,
+      })),
+    ]);
+    setPulseCount((count) => count + 1);
+    setTicker((current) =>
+      [event, ...current.filter((e) => e.traceId !== event.traceId)].slice(0, TICKER_LENGTH),
+    );
+    if (!live) return;
+    if (event.kind === "recall") {
+      setLiveRecalls((current) => {
+        const counts = new Map(current.counts);
+        for (const id of event.ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+        return { on: current.on, counts };
+      });
+    }
+    // Something the map does not have yet, or freshly indexed links: fetch again,
+    // once, after the burst settles.
+    if (event.kind === "store") {
+      if (refetch.current) clearTimeout(refetch.current);
+      refetch.current = setTimeout(() => setReload((n) => n + 1), REFETCH_DELAY_MS);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (pulses.length === 0) return;
+    const timer = setTimeout(() => {
+      const now = performance.now();
+      setPulses((current) => current.filter((pulse) => now - pulse.at < PULSE_MS));
+    }, PULSE_MS + 120);
+    return () => clearTimeout(timer);
+  }, [pulses]);
+
+  useEffect(() => {
+    if (trace || mode !== "live" || !organization) return;
+    const close = openTraceStream(
+      (summary) => {
+        if (summary.organization_id !== organization) return;
+        const event = eventFromTrace(summary);
+        if (event) show(event, true);
+      },
+      (open) => setLiveState(open ? "live" : "paused"),
+    );
+    return () => {
+      close();
+      if (refetch.current) clearTimeout(refetch.current);
+    };
+  }, [trace, mode, organization, show]);
+
+  const replayEvent = useCallback((event: MapEvent) => show(event, false), [show]);
+  const searchRanks = useMemo(
+    () => new Map((hits ?? []).map((hit) => [hit.id, hit.rank])),
+    [hits],
+  );
+  // Live counts belong to the snapshot they were seen on; a fresh one starts clean.
+  const recallsNow = liveRecalls.on === snapshot ? liveRecalls.counts : NO_RECALLS;
 
   const visible = useMemo(() => applyFilters(snapshot, filters), [snapshot, filters]);
   const scale = useMemo(() => colorScale(visible.nodes, colorBy), [visible.nodes, colorBy]);
@@ -135,11 +220,15 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
     setFilters(NO_FILTERS);
     setLoaded(false);
     setSnapshot(EMPTY);
+    setHits(null);
+    setTicker([]);
+    setPulseCount(0);
     select(null);
   };
   const changeWorkspace = (id: string) => {
     setWorkspace(id);
     setFilters(NO_FILTERS);
+    setHits(null);
     setLoaded(false);
   };
 
@@ -158,7 +247,15 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
         colorBy={colorBy}
         onColorBy={setColorBy}
         compact={!!trace}
-      />
+      >
+        <MapSearch
+          organization={organization}
+          workspace={workspace}
+          hits={hits}
+          onHits={setHits}
+          onOpen={navigate}
+        />
+      </MapToolbar>
       <div className="map-meta">
         {highlight ? (
           <div className="legend" data-testid="highlight-legend">
@@ -248,10 +345,22 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
               selectedId={selected}
               focus={focus}
               highlight={highlight}
-              pulses={NO_PULSES}
-              searchHits={NO_HITS}
+              pulses={pulses}
+              searchHits={searchRanks}
+              liveRecalls={recallsNow}
               onSelect={select}
             />
+            {trace ? null : (
+              <ReplayBar
+                organization={organization}
+                mode={mode}
+                onMode={setMode}
+                liveState={liveState}
+                pulseCount={pulseCount}
+                ticker={ticker}
+                onEvent={replayEvent}
+              />
+            )}
           </div>
         )}
         {selected ? (

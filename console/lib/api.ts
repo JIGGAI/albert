@@ -58,11 +58,17 @@ export async function searchMap(body: {
 export const getOverview = () => get<Overview>("/overview");
 export const listOrganizations = () => get<{ items: Organization[] }>("/organizations");
 
-export function openTraceStream(onEvent: (trace: TraceSummary) => void): () => void {
+export function openTraceStream(
+  onEvent: (trace: TraceSummary) => void,
+  onState?: (open: boolean) => void,
+): () => void {
   const source = new EventSource(`${base}/stream`);
   source.addEventListener("trace", (event) => {
     onEvent(JSON.parse((event as MessageEvent<string>).data) as TraceSummary);
   });
+  // EventSource reconnects by itself; these only report whether it is connected.
+  source.onopen = () => onState?.(true);
+  source.onerror = () => onState?.(false);
   return () => source.close();
 }
 
