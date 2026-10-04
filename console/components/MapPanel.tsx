@@ -283,8 +283,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
             <LinkToggles filters={filters} onFilters={setFilters} />
           </>
         )}
-        <span className="spacer" />
-        <span className="stats mono">
+        <span className="map-stats mono">
           <span data-testid="map-node-count">{visible.nodes.length}</span> memories,{" "}
           <span data-testid="map-link-count">{visible.links.length}</span> links,{" "}
           <span data-testid="map-cluster-count">{visible.clusters.length}</span> clusters

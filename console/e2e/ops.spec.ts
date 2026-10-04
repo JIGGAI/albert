@@ -49,3 +49,12 @@ test("operations shows retrieval quality and the window can change", async ({ pa
   await page.getByRole("tab", { name: "Service" }).click();
   await expect(page).toHaveURL(/view=service/);
 });
+
+test("the console opens on operations, listed first", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/ops$/);
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  const first = page.getByRole("navigation", { name: "Console" }).getByRole("link").first();
+  await expect(first).toHaveText("Operations");
+  await expect(first).toHaveAttribute("aria-current", "page");
+});
