@@ -13,9 +13,16 @@ import {
   type Filters,
   type Pulse,
 } from "@/lib/map";
-import type { MapSnapshot, Organization, TraceDetail, Workspace } from "@/lib/types";
+import type {
+  MapSnapshot,
+  MemoryDetail,
+  Organization,
+  TraceDetail,
+  Workspace,
+} from "@/lib/types";
 import { LinkToggles, MapToolbar } from "./MapToolbar";
 import { MapView } from "./MapView";
+import { ReadingPane } from "./ReadingPane";
 
 const EMPTY: MapSnapshot = { nodes: [], links: [], clusters: [], truncated: false };
 const NO_PULSES: Pulse[] = [];
@@ -98,6 +105,28 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
   const current = organizations.find((o) => o.id === organization);
   const isEmpty = loaded && snapshot.nodes.length === 0;
   const filteredOut = loaded && !isEmpty && visible.nodes.length === 0;
+
+  const navigate = useCallback(
+    (id: string) => {
+      select(id);
+      setFocus({ node: id, seq: Date.now() });
+    },
+    [select],
+  );
+  // A linked memory may live in another tenant or outside the current workspace
+  // filter; follow it so the pane never shows something the map is hiding.
+  const follow = useCallback(
+    (memory: MemoryDetail) => {
+      if (memory.organization_id !== organization) {
+        setOrganization(memory.organization_id);
+        setWorkspace("");
+        setFilters(NO_FILTERS);
+      } else if (workspace && memory.workspace_id !== workspace) {
+        setWorkspace("");
+      }
+    },
+    [organization, workspace],
+  );
 
   const changeOrganization = (id: string) => {
     setOrganization(id);
@@ -212,17 +241,27 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
             </p>
           </div>
         ) : (
-          <MapView
-            snapshot={visible}
-            colorBy={colorBy}
-            selectedId={selected}
-            focus={focus}
-            highlight={highlight}
-            pulses={NO_PULSES}
-            searchHits={NO_HITS}
-            onSelect={select}
-          />
+          <div className="map-stage">
+            <MapView
+              snapshot={visible}
+              colorBy={colorBy}
+              selectedId={selected}
+              focus={focus}
+              highlight={highlight}
+              pulses={NO_PULSES}
+              searchHits={NO_HITS}
+              onSelect={select}
+            />
+          </div>
         )}
+        {selected ? (
+          <ReadingPane
+            memoryId={selected}
+            onNavigate={navigate}
+            onClose={() => select(null)}
+            onLoaded={follow}
+          />
+        ) : null}
       </div>
     </div>
   );

@@ -383,6 +383,13 @@ export function MapView({
   const fitOnce = useCallback(() => {
     if (fitted.current || data.nodes.length === 0) return;
     fitted.current = true;
+    const chosen = selectedId ? store.current.get(selectedId) : undefined;
+    if (chosen?.x !== undefined && chosen.y !== undefined) {
+      // Arriving by a link to one memory: open on it rather than on the whole map.
+      graph.current?.centerAt(chosen.x, chosen.y, 500);
+      graph.current?.zoom(2.2, 500);
+      return;
+    }
     const touched = highlight
       ? new Set([...highlight.hits, ...highlight.lexical, ...highlight.vector])
       : null;
@@ -391,7 +398,7 @@ export function MapView({
       60,
       touched && touched.size > 0 ? (node) => touched.has((node as SimNode).id) : undefined,
     );
-  }, [data.nodes.length, highlight]);
+  }, [data.nodes.length, highlight, selectedId]);
 
   return (
     <div ref={host} className="map-host" data-testid="map-canvas">
