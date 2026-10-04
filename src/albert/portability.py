@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from albert.classifier import ExtractedEntity, ExtractedRelationship
-from albert.graph import add_relationship
-from albert.models import Memory, Organization, Relationship, Workspace
+from albert.graph_store import get_graph_store
+from albert.models import Memory, Organization, Workspace
 from albert.schemas import (
     EntityInput,
     ExportBundle,
@@ -36,20 +36,16 @@ def export_bundle(session: Session, auth: AuthContext, workspace_id: UUID | None
         Memory.status == "active",
         Memory.sensitivity.in_(sensitivities),
     ]
-    relationship_conditions = [
-        Relationship.organization_id == auth.organization_id,
-        Relationship.sensitivity.in_(sensitivities),
-    ]
     if selected_workspace is not None:
         memory_conditions.append(Memory.workspace_id == selected_workspace)
-        relationship_conditions.append(Relationship.workspace_id == selected_workspace)
 
     memories = list(session.scalars(select(Memory).where(*memory_conditions)))
-    relationships = [
-        relationship
-        for relationship in session.scalars(select(Relationship).where(*relationship_conditions))
-        if not (relationship.metadata_ or {}).get("extracted")
-    ]
+    relationships = get_graph_store().export_relationships(
+        session,
+        organization_id=auth.organization_id,
+        workspace_id=selected_workspace,
+        sensitivities=sensitivities,
+    )
     workspace_ids = {
         item.workspace_id for item in [*memories, *relationships] if item.workspace_id is not None
     }
@@ -97,14 +93,14 @@ def export_bundle(session: Session, auth: AuthContext, workspace_id: UUID | None
             RelationshipExport(
                 workspace_ref=relationship.workspace_id,
                 source=EntityInput(
-                    name=relationship.source.display_name,
+                    name=relationship.source.name,
                     entity_type=relationship.source.entity_type,
                     description=relationship.source.description,
                     confidence=relationship.source.confidence,
                 ),
                 relation_type=relationship.relation_type,
                 target=EntityInput(
-                    name=relationship.target.display_name,
+                    name=relationship.target.name,
                     entity_type=relationship.target.entity_type,
                     description=relationship.target.description,
                     confidence=relationship.target.confidence,
@@ -118,7 +114,7 @@ def export_bundle(session: Session, auth: AuthContext, workspace_id: UUID | None
                 confidence=relationship.confidence,
                 valid_from=relationship.valid_from,
                 valid_until=relationship.valid_until,
-                metadata=relationship.metadata_ or {},
+                metadata=relationship.metadata,
             )
             for relationship in relationships
         ],
@@ -250,7 +246,7 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
                 raise HTTPException(
                     status_code=422, detail="Relationship references an unknown memory"
                 )
-        _relationship, created = add_relationship(
+        _relationship, created = get_graph_store().add_relationship(
             session,
             organization_id=auth.organization_id,
             workspace_id=mapped_workspace(item.workspace_ref),

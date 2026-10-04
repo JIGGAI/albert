@@ -9,7 +9,8 @@ The project is under active construction. The authoritative design and delivery
 plan are in [`docs/MEMORY_PLATFORM.md`](docs/MEMORY_PLATFORM.md).
 
 Embedding and classifier choices are documented in
-[`docs/PROVIDERS.md`](docs/PROVIDERS.md).
+[`docs/PROVIDERS.md`](docs/PROVIDERS.md). Knowledge-graph storage is pluggable; see
+[`docs/GRAPH_BACKENDS.md`](docs/GRAPH_BACKENDS.md).
 
 ## Development
 

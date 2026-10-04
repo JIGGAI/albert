@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.embeddings import get_embedder
-from albert.graph import query_relationships
+from albert.graph_store import get_graph_store
 from albert.models import Memory, MemoryChunk
 from albert.recorder import cap_candidates, current_recorder, span
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
@@ -263,7 +263,7 @@ def hybrid_search(
     if request.include_graph:
         try:
             with span("graph", filters=filters) as handle:
-                relationships = query_relationships(
+                relationships = get_graph_store().query(
                     session,
                     organization_id=organization_id,
                     workspace_id=workspace_id,

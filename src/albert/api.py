@@ -6,7 +6,7 @@ from uuid import UUID
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from albert import __version__
@@ -14,8 +14,8 @@ from albert.config import get_settings
 from albert.console import router as console_router
 from albert.console_map import router as console_map_router
 from albert.db import get_session
-from albert.graph import query_relationships, subgraph
-from albert.models import Entity, Episode, Relationship
+from albert.graph_store import get_graph_store
+from albert.models import Episode
 from albert.portability import export_bundle, import_bundle
 from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, span
 from albert.schemas import (
@@ -120,6 +120,8 @@ def live() -> HealthResponse:
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
         classifier_provider=settings.llm_provider,
+        graph_store=get_graph_store().name,
+        graph_builder=settings.graph_builder,
     )
 
 
@@ -138,6 +140,8 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
         classifier_provider=settings.llm_provider,
+        graph_store=get_graph_store().name,
+        graph_builder=settings.graph_builder,
     )
 
 
@@ -301,31 +305,13 @@ def assemble_context(
     )
 
 
-def _relationship_read(relationship: Relationship) -> RelationshipRead:
-    return RelationshipRead(
-        id=relationship.id,
-        source_entity_id=relationship.source.id,
-        source_name=relationship.source.display_name,
-        source_type=relationship.source.entity_type,
-        relation_type=relationship.relation_type,
-        sensitivity=relationship.sensitivity,
-        target_entity_id=relationship.target.id,
-        target_name=relationship.target.display_name,
-        target_type=relationship.target.entity_type,
-        source_memory_id=relationship.source_memory_id,
-        confidence=relationship.confidence,
-        valid_from=relationship.valid_from,
-        valid_until=relationship.valid_until,
-    )
-
-
 @app.post("/v1/relationships", response_model=RelationshipRead, status_code=201, tags=["graph"])
 def post_relationship(
     data: RelationshipCreate,
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ) -> RelationshipRead:
-    return _relationship_read(add_explicit_relationship(session, auth, data))
+    return add_explicit_relationship(session, auth, data).read()
 
 
 @app.post("/v1/graph/query", response_model=list[RelationshipRead], tags=["graph"])
@@ -338,7 +324,7 @@ def query_graph(
     workspace_id = resolve_workspace(session, auth, data.workspace_id)
     _note(query=data.query)
     with span("graph") as handle:
-        result = query_relationships(
+        result = get_graph_store().query(
             session,
             organization_id=auth.organization_id,
             workspace_id=workspace_id,
@@ -374,14 +360,13 @@ def get_subgraph(
     session: Session = Depends(get_session),
 ) -> list[RelationshipRead]:
     auth.require("graph.query")
-    entity = session.scalar(
-        select(Entity).where(Entity.id == entity_id, Entity.organization_id == auth.organization_id)
-    )
+    graph = get_graph_store()
+    entity = graph.get_entity(session, entity_id=entity_id, organization_id=auth.organization_id)
     if entity is None or (
         auth.workspace_id is not None and entity.workspace_id != auth.workspace_id
     ):
         raise HTTPException(status_code=404, detail="Entity not found")
-    return subgraph(
+    return graph.subgraph(
         session,
         organization_id=auth.organization_id,
         workspace_id=entity.workspace_id,

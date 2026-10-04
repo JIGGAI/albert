@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_request_dimensions: bool = False
 
+    # Where the knowledge graph is stored. See docs/GRAPH_BACKENDS.md.
+    graph_store: Literal["postgres"] = "postgres"
+
     llm_provider: Literal["none", "openai-compatible"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: SecretStr | None = None
@@ -50,6 +53,25 @@ class Settings(BaseSettings):
         if len(raw) < 32 and raw != "development-only-change-me":
             raise ValueError("ALBERT_API_KEY_PEPPER must contain at least 32 characters")
         return value
+
+    @field_validator("graph_store", mode="before")
+    @classmethod
+    def validate_graph_store(cls, value: object) -> object:
+        from albert.graph_store import GRAPH_STORES
+
+        name = str(value).strip().lower()
+        option = GRAPH_STORES.get(name)
+        if option is not None and not option.available:
+            raise ValueError(
+                f"ALBERT_GRAPH_STORE={name} is planned but not available in this build; "
+                "use 'postgres' (see docs/GRAPH_BACKENDS.md)"
+            )
+        return name
+
+    @property
+    def graph_builder(self) -> str:
+        """What turns memory text into entities and edges."""
+        return "regex" if self.llm_provider == "none" else "llm-classifier"
 
     @field_validator("openai_api_key", "classification_model", mode="before")
     @classmethod
