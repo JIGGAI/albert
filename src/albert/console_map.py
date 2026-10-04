@@ -47,8 +47,11 @@ def clean_title(subject: str | None, content: str | None) -> str:
     """A display title: the subject without markdown heading marks, else the first line."""
     for source in (subject or "", *(content or "").splitlines()):
         title = source.strip().lstrip("#").strip()
-        if title:
-            return title[:TITLE_LIMIT]
+        if not any(character.isalnum() for character in title):
+            continue  # blank, or a front-matter rule such as "---"
+        if "_" in title and not any(character.isspace() for character in title):
+            title = title.replace("_", " ")  # a file slug reads better as words
+        return title[:TITLE_LIMIT]
     return "Untitled"
 
 
