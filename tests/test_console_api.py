@@ -97,14 +97,15 @@ async def test_overview_reports_jobs_and_traces(
         assert "traces_dropped" in body
 
 
-async def test_operator_detail_reads_truncate_content(
+async def test_operator_memory_detail_reads_full_content(
     client: httpx.AsyncClient, console_key: str
 ) -> None:
     created = await client.post("/v1/memories", json={"subject": "Detail", "content": "d" * 2000})
     async with _console_client(console_key) as console:
         detail = await console.get(f"/v1/console/memories/{created.json()['id']}")
         assert detail.status_code == 200
-        assert len(detail.json()["content"]) == 500
+        # The reading pane shows a memory in full (capped at 50,000 characters).
+        assert len(detail.json()["content"]) == 2000
 
 
 async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-untyped-def]
@@ -145,6 +146,7 @@ async def test_stream_endpoint_emits_sse(identity) -> None:  # type: ignore[no-u
         workspace_id=None,
         capabilities=frozenset({"console.read"}),
     )
+
     class FakeSession:
         def close(self) -> None:
             return None

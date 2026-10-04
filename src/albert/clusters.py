@@ -69,10 +69,13 @@ def cluster_nodes(
     return {node: index for index, members in enumerate(kept) for node in members}
 
 
-def _terms(title: str) -> set[str]:
-    return {
-        term for term in _TERM.findall(title.lower()) if len(term) >= 3 and term not in STOP_WORDS
-    }
+def _terms(title: str) -> list[str]:
+    """Distinct naming terms of a title, in the order they appear."""
+    terms: list[str] = []
+    for term in _TERM.findall(title.lower()):
+        if len(term) >= 3 and term not in STOP_WORDS and term not in terms:
+            terms.append(term)
+    return terms
 
 
 def _display(term: str) -> str:
@@ -84,8 +87,12 @@ def name_clusters(titles: dict[str, str], assignment: dict[str, int]) -> dict[in
     clusters = sorted(set(assignment.values()))
     frequency: dict[int, Counter[str]] = {cluster: Counter() for cluster in clusters}
     sizes: Counter[int] = Counter(assignment.values())
+    position: dict[int, dict[str, int]] = {cluster: defaultdict(int) for cluster in clusters}
     for node, cluster in assignment.items():
-        frequency[cluster].update(_terms(titles.get(node, "")))
+        terms = _terms(titles.get(node, ""))
+        frequency[cluster].update(terms)
+        for index, term in enumerate(terms):
+            position[cluster][term] += index
     spread: Counter[str] = Counter()
     for counts in frequency.values():
         spread.update(counts.keys())
@@ -106,7 +113,12 @@ def name_clusters(titles: dict[str, str], assignment: dict[str, int]) -> dict[in
         name = ""
         # Prefer the two strongest terms; widen only to keep names distinct.
         for width in range(min(NAME_TERMS, len(ranked)), len(ranked) + 1):
-            candidate = " ".join(_display(term) for term in ranked[:width])
+            # Read like the titles do: order the chosen terms by where they usually sit.
+            chosen = sorted(
+                ranked[:width],
+                key=lambda term: (position[cluster][term] / frequency[cluster][term], term),
+            )
+            candidate = " ".join(_display(term) for term in chosen)
             if candidate and candidate not in taken:
                 name = candidate
                 break
