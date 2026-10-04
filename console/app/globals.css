@@ -343,3 +343,58 @@ button.link { background: none; border: 0; padding: 0; color: var(--lexical); cu
 .graph-empty p.muted { color: var(--muted); }
 .graph-empty code { background: var(--panel-raised); padding: 1px 5px; border-radius: 4px; }
 .muted { color: var(--muted); }
+
+/* Operations */
+.ops { display: flex; flex-direction: column; gap: 12px; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.tabs button { background: none; border: 0; padding: 5px 14px; color: var(--muted); cursor: pointer; }
+.tabs button:hover { color: var(--fg); }
+.tabs button[aria-selected="true"] { background: var(--panel-raised); color: var(--fg); }
+.tabs button:focus-visible { outline: 2px solid var(--lexical); outline-offset: -2px; }
+.ops-view { display: flex; flex-direction: column; gap: 12px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; }
+.stat .label { color: var(--muted); font-size: 12px; }
+.stat .value { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.stat .note { color: var(--faint); font-size: 11px; }
+.stat.warn .value { color: var(--degraded); }
+.stat.bad .value { color: var(--error); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; min-width: 0; }
+.card h2 { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.card p { margin: 0; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1000px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+table.data td.warn, .rows .warn { color: var(--degraded); }
+table.data th.right, table.data td.right { text-align: right; }
+table.data td.lexical { color: var(--lexical); }
+table.data td.vector { color: var(--vector); }
+table.data td.graph { color: var(--graph); }
+.columns { margin: 0; }
+.columns .plot { display: flex; align-items: flex-end; gap: 2px; height: 110px; border-bottom: 1px solid var(--line); }
+.columns .column { flex: 1; min-width: 2px; height: 100%; display: flex; flex-direction: column-reverse; }
+.columns .column:hover { background: var(--panel-raised); }
+.columns .column i { display: block; width: 100%; min-height: 2px; }
+.columns .column i:last-child { border-radius: 2px 2px 0 0; }
+.columns i.recall { background: var(--graph); }
+.columns i.store { background: var(--ok); }
+.columns figcaption { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; margin-top: 6px; }
+.columns .keys { display: inline-flex; gap: 14px; }
+.dist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dist li { display: grid; grid-template-columns: minmax(70px, 34%) 1fr max-content; gap: 10px; align-items: center; }
+.track { display: block; height: 8px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.track i { display: block; height: 100%; background: var(--lexical); border-radius: 2px; }
+.track i.vector { background: var(--vector); }
+.track i.graph { background: var(--graph); }
+.share { display: grid; grid-template-columns: minmax(80px, 220px) max-content; gap: 10px; align-items: center; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content; gap: 14px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.rows li:last-child { border-bottom: 0; }
+.rows.pairs li { grid-template-columns: minmax(0, 1fr) max-content; }
+.rows .pair { display: grid; gap: 1px; min-width: 0; }
+.rows a { color: var(--fg); }
+.rows a:hover { color: var(--lexical); text-decoration: underline; }
+.rows a:focus-visible { outline: 2px solid var(--lexical); outline-offset: 1px; }
+.config { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.config dt { color: var(--muted); }
+.config dd { margin: 0; overflow-wrap: anywhere; }

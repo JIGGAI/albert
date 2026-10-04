@@ -48,6 +48,8 @@ Implemented and tested:
   similarity/sequence/recalled-together links, named clusters, live recall and
   store pulses, replay, operator search and a full-content reading pane;
   Playwright-covered
+- Operations views in the console: agent activity, memory health, retrieval
+  quality and service health
 - Derived memory links and recall statistics, rebuildable with
   `albert-admin rebuild-links`
 - Workspace, principal, API-key listing, issuance, and revocation commands

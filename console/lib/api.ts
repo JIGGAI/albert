@@ -1,9 +1,13 @@
 import type {
+  AgentActivity,
   MapSearchHit,
   MapSnapshot,
   MemoryDetail,
+  MemoryHealth,
   Organization,
   Overview,
+  RetrievalQuality,
+  ServiceHealth,
   TraceDetail,
   TraceSummary,
   Workspace,
@@ -37,6 +41,15 @@ export const listWorkspaces = (organization_id: string) =>
 export const getMap = (params: { organization_id: string; workspace_id?: string; limit?: number }) =>
   get<MapSnapshot>("/map", params);
 export const getMemory = (id: string) => get<MemoryDetail>(`/memories/${id}`);
+
+export const getAgentActivity = (params: { organization_id?: string; hours: number }) =>
+  get<AgentActivity>("/ops/agents", params);
+export const getMemoryHealth = (params: { organization_id: string; workspace_id?: string }) =>
+  get<MemoryHealth>("/ops/memory", params);
+export const getServiceHealth = (params: { hours: number }) =>
+  get<ServiceHealth>("/ops/service", params);
+export const getRetrievalQuality = (params: { organization_id?: string; hours: number }) =>
+  get<RetrievalQuality>("/ops/retrieval", params);
 
 export async function searchMap(body: {
   organization_id: string;
