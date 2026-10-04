@@ -10,12 +10,15 @@ the baseline every install has; the rest are options on top.
 |---|---|---|
 | Store: PostgreSQL | `ALBERT_GRAPH_STORE=postgres` (default) | Available |
 | Store: FalkorDB | `ALBERT_GRAPH_STORE=falkordb` | Available |
-| Store: Neo4j | `ALBERT_GRAPH_STORE=neo4j` | Planned; refused at startup with an explanation |
+| Store: Neo4j | `ALBERT_GRAPH_STORE=neo4j` | Available |
 | Builder: regex | `ALBERT_LLM_PROVIDER=none` (default) | Available |
 | Builder: LLM classifier | `ALBERT_LLM_PROVIDER=openai-compatible` | Available |
 | Builder: Graphiti | not yet a setting | Planned |
 
-`GET /v1/health/live` reports the active `graph_store` and `graph_builder`.
+`GET /v1/health/live` reports the active `graph_store` and `graph_builder`. The
+console's **Backends** page shows every option, which is in use, whether it is
+reachable, how much it holds, how it has been performing, and the steps to
+switch. The console is read-only, so switching is always a settings change.
 
 ## Choosing a store
 
@@ -40,7 +43,7 @@ already uses.
 - Costs: a second service to operate and back up; graph writes are no longer
   transactional with memories.
 
-**Neo4j** (planned). The established graph database.
+**Neo4j.** The established graph database.
 
 - Mature Cypher tooling, graph algorithms (community detection, centrality),
   visual exploration, clustering and commercial support.
@@ -67,8 +70,28 @@ Switching stores does not move data. Edges written to PostgreSQL stay there;
 re-index memories (or re-import explicit relationships) to populate the new
 store. Back up the `albert-falkordb` volume alongside the database.
 
-Both stores run the same behavioural tests (`tests/test_graph_contract.py`),
-and CI runs them against a real FalkorDB.
+All three stores run the same behavioural tests
+(`tests/test_graph_contract.py`), and CI runs them against a real FalkorDB and
+a real Neo4j.
+
+### Running with Neo4j
+
+```bash
+# .env
+ALBERT_GRAPH_STORE=neo4j
+ALBERT_NEO4J_PASSWORD=<a strong password>
+
+docker compose --profile neo4j up -d
+```
+
+The `neo4j` service (Neo4j 5.26 Community) only starts with that profile. Its
+heap and page cache default to 512 MB and 256 MB (`ALBERT_NEO4J_HEAP`,
+`ALBERT_NEO4J_PAGECACHE`); allow the host 1-2 GB for it. As with FalkorDB,
+switching does not move data: re-index to fill it, and back up the
+`albert-neo4j` volume.
+
+FalkorDB and Neo4j share one implementation of the queries
+(`src/albert/graph_cypher.py`); each only supplies its connection.
 
 ## Choosing a builder
 
@@ -102,7 +125,7 @@ quality lever: a better store does not help a graph nothing fills.
 Every graph read and write goes through the `GraphStore` interface in
 `src/albert/graph_store.py`. The PostgreSQL implementation is
 `PostgresGraphStore` in `src/albert/graph.py` and the FalkorDB one is
-`FalkorDBGraphStore` in `src/albert/graph_cypher.py`; a test fails if any
+`FalkorDBGraphStore` and `Neo4jGraphStore` in `src/albert/graph_cypher.py`; a test fails if any
 other module reaches for the graph tables directly.
 
 A new store implements these operations:
@@ -116,6 +139,7 @@ A new store implements these operations:
 | `get_entity`, `subgraph` | Entity lookup and bounded traversal |
 | `export_relationships` | Explicit edges for a portable export |
 | `snapshot`, `counts`, `fingerprint` | Console views and their cache key |
+| `ping` | Reachability and version for the Backends page |
 
 Rules for a store that is not PostgreSQL:
 
@@ -133,5 +157,5 @@ Rules for a store that is not PostgreSQL:
 1. Store interface with PostgreSQL behind it. Done.
 2. An LLM for the classifier. Every builder beyond regex needs one.
 3. FalkorDB store adapter. Done.
-4. Graphiti as a builder on top of FalkorDB.
-5. Neo4j store adapter when a deployment needs it.
+4. Neo4j store adapter. Done.
+5. Graphiti as a builder, once a self-hosted model is available.

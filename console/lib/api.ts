@@ -1,5 +1,6 @@
 import type {
   AgentActivity,
+  Backends,
   MapSearchHit,
   MapSnapshot,
   MemoryDetail,
@@ -50,6 +51,8 @@ export const getServiceHealth = (params: { hours: number }) =>
   get<ServiceHealth>("/ops/service", params);
 export const getRetrievalQuality = (params: { organization_id?: string; hours: number }) =>
   get<RetrievalQuality>("/ops/retrieval", params);
+
+export const getBackends = (params: { hours: number }) => get<Backends>("/backends", params);
 
 export async function searchMap(body: {
   organization_id: string;

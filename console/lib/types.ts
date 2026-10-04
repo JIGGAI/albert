@@ -259,3 +259,57 @@ export interface RetrievalQuality {
   slowest: { trace_id: string; query: string; duration_ms: number; hits: number; at: string | null }[];
   truncated: boolean;
 }
+
+export interface BackendOption {
+  id: string;
+  name: string;
+  summary: string;
+  choose_when: string;
+  available: boolean;
+  active: boolean;
+  enable: string[];
+}
+
+export interface StoreBackend extends BackendOption {
+  status: {
+    reachable: boolean;
+    version: string | null;
+    latency_ms: number | null;
+    error: string | null;
+  } | null;
+  counts: { entities: number; edges: number } | null;
+}
+
+export interface Backends {
+  stores: StoreBackend[];
+  builders: (BackendOption & { model: string | null })[];
+  vectors: {
+    provider: string;
+    model: string;
+    dimensions: number;
+    chunks: number;
+    memories_embedded: number;
+    memories_total: number;
+  };
+  activity: {
+    window_hours: number;
+    bucket_hours: number;
+    indexing_jobs: number;
+    indexing_failures: number;
+    extraction_failures: number;
+    edges_written: number;
+    edges_closed: number;
+    write_failures: number;
+    write_p50_ms: number | null;
+    write_p95_ms: number | null;
+    classify_p50_ms: number | null;
+    classify_p95_ms: number | null;
+    graph_queries: number;
+    graph_candidates: number;
+    graph_failures: number;
+    graph_query_p50_ms: number | null;
+    graph_query_p95_ms: number | null;
+    series: { bucket: string; edges_written: number }[];
+    truncated: boolean;
+  };
+}
