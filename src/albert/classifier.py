@@ -128,60 +128,114 @@ def heuristic_classify(text: str) -> Classification:
     )
 
 
+MEMORY_TYPES = (
+    "fact",
+    "preference",
+    "procedure",
+    "lesson",
+    "warning",
+    "project_state",
+    "task_result",
+    "decision",
+    "relationship",
+    "recurring_pattern",
+    "reminder",
+    "summary",
+)
+SENSITIVITIES = ("public", "internal", "confidential", "restricted")
+MAX_ENTITIES = 40
+MAX_RELATIONSHIPS = 60
+
+
+def _score(value: object, default: float = 0.7) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _label(value: object) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+
+
 def _parse_model_classification(payload: dict) -> Classification:
-    allowed_types = {
-        "fact",
-        "preference",
-        "procedure",
-        "lesson",
-        "warning",
-        "project_state",
-        "task_result",
-        "decision",
-        "relationship",
-        "recurring_pattern",
-        "reminder",
-        "summary",
-    }
-    allowed_sensitivity = {"public", "internal", "confidential", "restricted"}
-    memory_type = str(payload.get("memory_type", "fact"))
-    sensitivity = str(payload.get("sensitivity", "internal"))
-    if memory_type not in allowed_types:
-        raise ValueError("Classifier returned an invalid memory type")
-    if sensitivity not in allowed_sensitivity:
-        raise ValueError("Classifier returned an invalid sensitivity")
+    """Validate and bound a model's reply.
+
+    A label outside the vocabulary falls back to a safe default instead of
+    raising: a model's wording must never be able to fail a memory's indexing.
+    """
+    memory_type = _label(payload.get("memory_type"))
+    if memory_type not in MEMORY_TYPES:
+        memory_type = "fact"
+    sensitivity = _label(payload.get("sensitivity"))
+    if sensitivity not in SENSITIVITIES:
+        sensitivity = "internal"
 
     entities: dict[str, ExtractedEntity] = {}
-    for raw in payload.get("entities", []):
-        name = _clean_entity(str(raw.get("name", "")))
+    for raw in payload.get("entities") or []:
+        if not isinstance(raw, dict) or len(entities) >= MAX_ENTITIES:
+            continue
+        name = _clean_entity(str(raw.get("name") or ""))
         if name:
-            entities[name.casefold()] = ExtractedEntity(
-                name=name,
-                entity_type=str(raw.get("entity_type", "concept"))[:100],
-                description=str(raw.get("description", ""))[:10_000],
-                confidence=min(1.0, max(0.0, float(raw.get("confidence", 0.7)))),
+            entities.setdefault(
+                name.casefold(),
+                ExtractedEntity(
+                    name=name,
+                    entity_type=(_label(raw.get("entity_type")) or "concept")[:100],
+                    description=str(raw.get("description") or "")[:10_000],
+                    confidence=_score(raw.get("confidence")),
+                ),
             )
     relationships: list[ExtractedRelationship] = []
-    for raw in payload.get("relationships", []):
-        source = entities.get(str(raw.get("source", "")).casefold())
-        target = entities.get(str(raw.get("target", "")).casefold())
-        relation = re.sub(r"[^a-z0-9_]+", "_", str(raw.get("relation_type", "" )).lower())
-        if source and target and relation:
-            relationships.append(
-                ExtractedRelationship(
-                    source,
-                    relation[:100],
-                    target,
-                    min(1.0, max(0.0, float(raw.get("confidence", 0.7)))),
-                )
-            )
+    seen: set[tuple[str, str, str]] = set()
+    for raw in payload.get("relationships") or []:
+        if not isinstance(raw, dict) or len(relationships) >= MAX_RELATIONSHIPS:
+            continue
+        source = entities.get(_clean_entity(str(raw.get("source") or "")).casefold())
+        target = entities.get(_clean_entity(str(raw.get("target") or "")).casefold())
+        relation = _label(raw.get("relation_type"))[:100]
+        if not (source and target and relation) or source is target:
+            continue
+        key = (source.name, relation, target.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        relationships.append(
+            ExtractedRelationship(source, relation, target, _score(raw.get("confidence")))
+        )
     return Classification(
         memory_type=memory_type,
         sensitivity=sensitivity,
-        confidence=min(1.0, max(0.0, float(payload.get("confidence", 0.7)))),
+        confidence=_score(payload.get("confidence")),
         entities=list(entities.values()),
         relationships=relationships,
     )
+
+
+CLASSIFIER_INSTRUCTION = f"""You label one memory for an agent memory system and extract a
+small knowledge graph from it. Return only a JSON object with these keys:
+
+- memory_type: exactly one of {", ".join(MEMORY_TYPES)}.
+- sensitivity: exactly one of {", ".join(SENSITIVITIES)}. Use "internal" for ordinary
+  working notes, plans, procedures and business detail. Use "confidential" only when the
+  text contains personal data about named individuals, pay, health, legal or financial
+  account detail. Use "restricted" only for material that would cause serious harm if
+  shared inside the organization. When unsure, use "internal".
+- confidence: a number from 0 to 1.
+- entities: at most 15 objects {{name, entity_type, description, confidence}}. Include
+  only specific, named things the memory is about: people, teams, roles, products,
+  systems, tools, files, places, organizations, recurring processes. Use the name as
+  written, without articles. entity_type is one lowercase word such as person, team,
+  role, system, tool, file, location, organization, process, product, concept.
+  Skip generic words, dates, numbers and one-off phrases.
+- relationships: at most 20 objects {{source, relation_type, target, confidence}}.
+  source and target must exactly match entity names from your entities list.
+  relation_type is a short lowercase snake_case verb phrase such as uses, owns,
+  depends_on, part_of, manages, reports_to, located_at, produces, replaces, blocks.
+  State only relationships the text supports.
+
+If the memory names nothing specific, return empty lists. Never include credentials or
+secrets."""
 
 
 def classify(text: str) -> Classification:
@@ -190,10 +244,6 @@ def classify(text: str) -> Classification:
         return heuristic_classify(text)
     if settings.openai_api_key is None or not settings.classification_model:
         raise ValueError("LLM classification requires an API key and classification model")
-    schema_instruction = """Return only JSON with keys memory_type, sensitivity, confidence,
-entities, relationships. entities is a list of {name, entity_type, description, confidence}.
-relationships is a list of {source, relation_type, target, confidence}; source and target must
-exactly match entity names. Never include credentials or secrets."""
     response = httpx.post(
         f"{settings.openai_base_url.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {settings.openai_api_key.get_secret_value()}"},
@@ -202,7 +252,7 @@ exactly match entity names. Never include credentials or secrets."""
             "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": schema_instruction},
+                {"role": "system", "content": CLASSIFIER_INSTRUCTION},
                 {"role": "user", "content": text[:100_000]},
             ],
         },

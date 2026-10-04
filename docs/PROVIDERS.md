@@ -99,9 +99,16 @@ ALBERT_OPENAI_BASE_URL=<provider base URL>
 ALBERT_OPENAI_API_KEY=<secret-store value>
 ```
 
-The classifier requests constrained JSON containing memory type, sensitivity,
-entities, and typed relationships. Output is parsed, bounded, and validated
-before it reaches storage. Without a model, deterministic extraction recognizes
+The classifier requests JSON containing memory type, sensitivity, entities, and
+typed relationships, and tells the model the allowed values for each label.
+Output is parsed, bounded (40 entities, 60 relationships) and validated before
+it reaches storage; a label outside the vocabulary falls back to `fact` or
+`internal` rather than failing the memory's indexing. The model must accept
+`temperature: 0` and `response_format: json_object`.
+
+Pick a model that reliably returns relationships, not only entities. On a
+sample of real team notes, `gpt-4.1-mini` produced typed edges for most
+memories while `gpt-4.1-nano` produced entities and no edges at all. Without a model, deterministic extraction recognizes
 common relationships such as `uses`, `depends_on`, `integrates_with`, `runs_on`,
 `belongs_to`, `owns`, `owned_by`, `manages`, `supports`, `prefers`, and
 `works_on`.
