@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     trace_retention_days: int = Field(default=14, ge=1, le=365)
     trace_queue_size: int = Field(default=1000, ge=10, le=100_000)
     console_graph_cache_seconds: int = Field(default=30, ge=0, le=3600)
+    link_neighbors: int = Field(default=5, ge=1, le=25)
+    link_similarity_min: float = Field(default=0.78, ge=0, le=1)
+    housekeeping_seconds: float = Field(default=60, ge=0.5, le=3600)
+    map_node_limit: int = Field(default=1500, ge=10, le=3000)
 
     @field_validator("api_key_pepper")
     @classmethod
