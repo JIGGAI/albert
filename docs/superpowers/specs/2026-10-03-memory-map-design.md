@@ -87,7 +87,7 @@ recalls, and every pair among the top 5 hits increments a `recalled` link.
 
 Still ids only. Search and context-assembly summaries gain `memory_ids` (final
 memory hits, at most 50). Memory and episode creation summaries gain
-`stored_ids`. The SSE feed therefore carries what the map needs to pulse nodes
+`stored_ids`, as do the worker's indexing job traces (which is where an episode's memory first exists). The SSE feed therefore carries what the map needs to pulse nodes
 without a second request.
 
 ## Clusters

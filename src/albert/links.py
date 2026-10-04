@@ -9,15 +9,25 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, cast, or_, select
+from sqlalchemy import Float, and_, cast, or_, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.models import Episode, Memory, MemoryChunk, MemoryLink
-from albert.recorder import span
+from albert.models import (
+    ConsoleState,
+    Episode,
+    Memory,
+    MemoryChunk,
+    MemoryLink,
+    MemoryRecall,
+    MemoryStat,
+    Trace,
+)
+from albert.recorder import current_recorder, span
 from albert.search import _cosine, _enable_iterative_scan
 
 logger = logging.getLogger("albert.links")
@@ -197,6 +207,10 @@ def link_sequence(session: Session, memory: Memory) -> int:
 def refresh_links_for_memory(session: Session, memory: Memory) -> dict[str, int]:
     """Compute a memory's links inside a `link` span; never raise."""
     result = {"similar": 0, "sequence": 0}
+    recorder = current_recorder()
+    if recorder is not None:
+        # The live map pulses and refetches on this once the memory is indexed.
+        recorder.note(stored_ids=[str(memory.id)])
     with span("link") as handle:
         try:
             with session.begin_nested():
@@ -246,3 +260,140 @@ def rebuild_links(session: Session, organization_id: UUID | None = None) -> dict
     session.flush()
     sequence = sum(link_sequence(session, memory) for memory in memories)
     return {"memories": len(memories), "similar": len(pairs), "sequence": sequence}
+
+
+COUNTED_TRACE_NAMES = ("POST /v1/search", "POST /v1/context/assemble")
+COUNTED_STATUSES = ("ok", "degraded")
+RECALL_CURSOR_KEY = "recall_cursor"
+RECALL_PAIR_DEPTH = 5
+
+
+def _read_cursor(session: Session) -> tuple[datetime, UUID] | None:
+    state = session.get(ConsoleState, RECALL_CURSOR_KEY)
+    raw = (state.value or {}).get("cursor") if state is not None else None
+    if not raw:
+        return None
+    written_at, _, trace_id = str(raw).partition("|")
+    return datetime.fromisoformat(written_at), UUID(trace_id)
+
+
+def _write_cursor(session: Session, trace: Trace) -> None:
+    value = {"cursor": f"{trace.written_at.isoformat()}|{trace.id}"}
+    state = session.get(ConsoleState, RECALL_CURSOR_KEY)
+    if state is None:
+        session.add(ConsoleState(key=RECALL_CURSOR_KEY, value=value))
+    else:
+        state.value = value
+
+
+def _record_recall(session: Session, trace: Trace) -> None:
+    raw_ids = (trace.summary or {}).get("memory_ids") or []
+    wanted: list[UUID] = []
+    for raw in raw_ids:
+        try:
+            memory_id = UUID(str(raw))
+        except ValueError:
+            continue
+        if memory_id not in wanted:
+            wanted.append(memory_id)
+    if not wanted or trace.organization_id is None:
+        return
+    workspaces = dict(
+        session.execute(
+            select(Memory.id, Memory.workspace_id).where(
+                Memory.id.in_(wanted),
+                Memory.organization_id == trace.organization_id,
+                Memory.status == "active",
+            )
+        ).all()
+    )
+    query = str((trace.summary or {}).get("query") or "")[:500]
+    for rank, memory_id in enumerate(wanted, start=1):
+        if memory_id not in workspaces:
+            continue  # forgotten since the search ran
+        session.add(
+            MemoryRecall(
+                memory_id=memory_id,
+                organization_id=trace.organization_id,
+                trace_id=trace.id,
+                recalled_at=trace.started_at,
+                rank=rank,
+                query=query,
+                principal_id=trace.principal_id,
+            )
+        )
+        stat = session.get(MemoryStat, memory_id)
+        if stat is None:
+            stat = MemoryStat(
+                memory_id=memory_id, organization_id=trace.organization_id, recall_count=0
+            )
+            session.add(stat)
+        stat.recall_count += 1
+        if stat.last_recalled_at is None or _aware(stat.last_recalled_at) < _aware(
+            trace.started_at
+        ):
+            stat.last_recalled_at = trace.started_at
+    top = [memory_id for memory_id in wanted if memory_id in workspaces][:RECALL_PAIR_DEPTH]
+    for index, first in enumerate(top):
+        for second in top[index + 1 :]:
+            source, target = _pair(first, second)
+            link = session.scalar(
+                select(MemoryLink).where(
+                    MemoryLink.source_memory_id == source,
+                    MemoryLink.target_memory_id == target,
+                    MemoryLink.kind == "recalled",
+                )
+            )
+            if link is None:
+                shared = workspaces[source] if workspaces[source] == workspaces[target] else None
+                session.add(
+                    MemoryLink(
+                        organization_id=trace.organization_id,
+                        workspace_id=shared,
+                        source_memory_id=source,
+                        target_memory_id=target,
+                        kind="recalled",
+                        weight=1.0,
+                        count=1,
+                    )
+                )
+            else:
+                link.count += 1
+                link.weight = float(link.count)
+    session.flush()
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def process_recall_traces(
+    session: Session, *, batch: int = 500, settle_seconds: float = 2.0
+) -> int:
+    """Turn counted search traces newer than the cursor into recalls, stats and links.
+
+    The cursor moves in the same transaction as the rows it accounts for, so a
+    restart never double counts. Traces younger than `settle_seconds` wait for
+    the next pass: the trace writer stamps `written_at` just before it commits.
+    """
+    cursor = _read_cursor(session)
+    statement = select(Trace).where(
+        Trace.name.in_(COUNTED_TRACE_NAMES),
+        Trace.status.in_(COUNTED_STATUSES),
+        Trace.written_at <= datetime.now(UTC) - timedelta(seconds=settle_seconds),
+    )
+    if cursor is not None:
+        written_at, trace_id = cursor
+        statement = statement.where(
+            or_(
+                Trace.written_at > written_at,
+                and_(Trace.written_at == written_at, Trace.id > trace_id),
+            )
+        )
+    traces = list(session.scalars(statement.order_by(Trace.written_at, Trace.id).limit(batch)))
+    for trace in traces:
+        _record_recall(session, trace)
+    if traces:
+        _write_cursor(session, traces[-1])
+    session.commit()
+    return len(traces)
