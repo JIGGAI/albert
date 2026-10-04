@@ -21,12 +21,15 @@ from albert.classifier import (
 from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import add_relationship
+from albert.links import drop_links_for_memory, refresh_links_for_memory
 from albert.models import (
     AuditEvent,
     Episode,
     Job,
     Memory,
     MemoryChunk,
+    MemoryRecall,
+    MemoryStat,
     Relationship,
     ResourceLock,
     WorkingMemory,
@@ -251,6 +254,7 @@ def update_memory(
         # Old chunks describe text that no longer exists; drop them now rather
         # than serve them from vector search until the worker catches up.
         _drop_chunks(session, memory.id)
+        drop_links_for_memory(session, memory.id)
         memory.embedding_model = None
         # The facts themselves may have changed: close the old edges now and let
         # re-enrichment extract the current ones.
@@ -333,6 +337,13 @@ def _scrub_memory(session: Session, memory: Memory, now: datetime) -> None:
     memory.embedding_model = None
     memory.metadata_ = {}
     _drop_chunks(session, memory.id)
+    drop_links_for_memory(session, memory.id)
+    session.query(MemoryRecall).filter(MemoryRecall.memory_id == memory.id).delete(
+        synchronize_session=False
+    )
+    session.query(MemoryStat).filter(MemoryStat.memory_id == memory.id).delete(
+        synchronize_session=False
+    )
     session.query(Relationship).filter(
         Relationship.organization_id == memory.organization_id,
         Relationship.source_memory_id == memory.id,
@@ -739,6 +750,7 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
             )
             written += int(created)
         edges_span.set(edges_closed=closed, edges_written=written)
+    refresh_links_for_memory(session, memory)
 
 
 def enrich_episode(session: Session, episode_id: UUID) -> None:
@@ -780,5 +792,6 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
             )
             written += int(created)
         edges_span.set(edges_closed=0, edges_written=written, memory_id=str(memory.id))
+    refresh_links_for_memory(session, memory)
     episode.enrichment_status = "complete"
     episode.enrichment_error = None
