@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   getAgentActivity,
+  getBackends,
   getMemoryHealth,
   getRetrievalQuality,
   getServiceHealth,
@@ -11,17 +12,19 @@ import {
 } from "@/lib/api";
 import type {
   AgentActivity,
+  Backends,
   MemoryHealth,
   Organization,
   RetrievalQuality,
   ServiceHealth,
 } from "@/lib/types";
-import { AgentsView, MemoryView, RetrievalView, ServiceView } from "./OpsViews";
+import { AgentsView, GraphView, MemoryView, RetrievalView, ServiceView } from "./OpsViews";
 
 const VIEWS = [
   { id: "agents", label: "Agents" },
   { id: "memory", label: "Memory" },
   { id: "retrieval", label: "Retrieval" },
+  { id: "graph", label: "Graph" },
   { id: "service", label: "Service" },
 ] as const;
 type ViewId = (typeof VIEWS)[number]["id"];
@@ -36,6 +39,7 @@ type Loaded =
   | { key: string; view: "agents"; data: AgentActivity }
   | { key: string; view: "memory"; data: MemoryHealth }
   | { key: string; view: "retrieval"; data: RetrievalQuality }
+  | { key: string; view: "graph"; data: Backends }
   | { key: string; view: "service"; data: ServiceHealth };
 
 export function OpsPanel() {
@@ -85,7 +89,9 @@ export function OpsPanel() {
           ? getMemoryHealth({ organization_id: tenant }).then((data) => ({ key, view, data }))
           : view === "retrieval"
             ? getRetrievalQuality({ organization_id, hours }).then((data) => ({ key, view, data }))
-            : getServiceHealth({ hours }).then((data) => ({ key, view, data }));
+            : view === "graph"
+              ? getBackends({ hours }).then((data) => ({ key, view, data }))
+              : getServiceHealth({ hours }).then((data) => ({ key, view, data }));
     request
       .then((result) => {
         if (!cancelled) setLoaded(result);
@@ -118,7 +124,7 @@ export function OpsPanel() {
           ))}
         </div>
         <span className="spacer" />
-        {view === "service" ? (
+        {view === "service" || view === "graph" ? (
           <span className="muted">All tenants</span>
         ) : (
           <select
@@ -155,6 +161,7 @@ export function OpsPanel() {
       {current?.view === "agents" ? <AgentsView data={current.data} /> : null}
       {current?.view === "memory" ? <MemoryView data={current.data} /> : null}
       {current?.view === "retrieval" ? <RetrievalView data={current.data} /> : null}
+      {current?.view === "graph" ? <GraphView data={current.data} /> : null}
       {current?.view === "service" ? <ServiceView data={current.data} /> : null}
     </div>
   );

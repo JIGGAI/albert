@@ -1,13 +1,7 @@
-import { Feed } from "@/components/Feed";
+import { redirect } from "next/navigation";
 
-export default function LivePage() {
-  return (
-    <>
-      <div className="page-head">
-        <h1>Live</h1>
-        <span className="sub">Every request and worker job, as it happens.</span>
-      </div>
-      <Feed />
-    </>
-  );
+// Operations is the console's home: the first thing an operator wants is whether
+// memory is being used and working, not a scrolling feed.
+export default function HomePage() {
+  redirect("/ops");
 }

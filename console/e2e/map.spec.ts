@@ -15,6 +15,11 @@ test("map shows titled clusters, typed links and a workspace picker", async ({ p
   await expect(page.getByLabel("Workspace")).toBeVisible();
   await expect(page.getByLabel("Workspace").locator("option", { hasText: "Default" })).toHaveCount(1);
   await expect(page.getByTestId("map-legend")).toBeVisible();
+  // The counts read as one line of text, not a stack of separate boxes.
+  const stats = page.locator(".map-stats");
+  const box = await stats.boundingBox();
+  expect(box?.height ?? 99).toBeLessThan(30);
+  await expect(stats).toContainText(/\d+ memories, \d+ links, \d+ clusters/);
 });
 
 test("switching a link kind off changes the link count", async ({ page, request }) => {

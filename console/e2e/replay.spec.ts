@@ -9,7 +9,7 @@ test("replay walks spans and shows fusion", async ({ page, request }) => {
   });
   await new Promise((resolve) => setTimeout(resolve, 2500));
   await request.post(`${api}/v1/search`, { headers, data: { query: "Replay Store" } });
-  await page.goto("/");
+  await page.goto("/live");
   await page.getByTestId("trace-row").filter({ hasText: "Replay Store" }).first().click();
   await expect(page.getByRole("heading", { name: /POST \/v1\/search/ })).toBeVisible();
   const rows = page.getByTestId("span-row");

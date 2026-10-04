@@ -2,6 +2,7 @@ import Link from "next/link";
 import { relativeTime } from "@/lib/api";
 import type {
   AgentActivity,
+  Backends,
   CountLabel,
   MemoryHealth,
   RetrievalQuality,
@@ -526,6 +527,86 @@ export function ServiceView({ data }: { data: ServiceHealth }) {
         </section>
       </div>
       <Capped show={data.truncated} />
+    </div>
+  );
+}
+
+export function GraphView({ data }: { data: Backends }) {
+  const activity = data.activity;
+  const store = data.stores.find((s) => s.active);
+  const builder = data.builders.find((b) => b.active);
+  const failures =
+    activity.indexing_failures + activity.extraction_failures + activity.write_failures;
+  const daily = activity.bucket_hours >= 24;
+  const series = activity.series.map((bucket) => {
+    const at = new Date(bucket.bucket);
+    return {
+      key: bucket.bucket,
+      label: daily
+        ? at.toLocaleDateString([], { month: "short", day: "numeric" })
+        : at.toLocaleTimeString([], { hour: "numeric" }),
+      parts: [{ name: "edge", value: bucket.edges_written }],
+    };
+  });
+  return (
+    <div data-testid="ops-graph" className="ops-view">
+      <p className="muted lead">
+        <b>{builder?.name ?? "No builder"}</b>
+        {builder?.model ? ` (${builder.model})` : ""} is writing to{" "}
+        <b>{store?.name ?? "no store"}</b>
+        {store?.status
+          ? store.status.reachable
+            ? `, reachable in ${ms(store.status.latency_ms)}`
+            : `, which is unreachable (${store.status.error})`
+          : ""}
+        . What is installed and how to switch is under <Link href="/backends">Backends</Link>.
+      </p>
+      <div className="stats">
+        <Stat id="indexed" label="Memories indexed" value={number.format(activity.indexing_jobs)} />
+        <Stat
+          id="edges-written"
+          label="Relationships written"
+          value={number.format(activity.edges_written)}
+          note={`${number.format(activity.edges_closed)} superseded`}
+        />
+        <Stat
+          id="graph-failures"
+          label="Failures"
+          value={number.format(failures)}
+          note="indexing, extraction or graph writes"
+          tone={failures ? "bad" : undefined}
+        />
+        <Stat
+          id="extraction"
+          label="Extraction time"
+          value={ms(activity.classify_p50_ms)}
+          note={`95th ${ms(activity.classify_p95_ms)}`}
+        />
+        <Stat
+          id="graph-write"
+          label="Graph write time"
+          value={ms(activity.write_p50_ms)}
+          note={`95th ${ms(activity.write_p95_ms)}`}
+        />
+        <Stat
+          id="graph-queries"
+          label="Graph lookups in searches"
+          value={number.format(activity.graph_queries)}
+          note={`median ${ms(activity.graph_query_p50_ms)} · ${number.format(activity.graph_candidates)} edges found`}
+          tone={activity.graph_failures ? "bad" : undefined}
+        />
+        <Stat
+          id="graph-size"
+          label="In the graph now"
+          value={store?.counts ? number.format(store.counts.edges) : "–"}
+          note={store?.counts ? `${number.format(store.counts.entities)} entities` : undefined}
+        />
+      </div>
+      <section className="card">
+        <h2>Relationships written over time</h2>
+        <Columns series={series} legend={["edge"]} />
+      </section>
+      <Capped show={activity.truncated} />
     </div>
   );
 }

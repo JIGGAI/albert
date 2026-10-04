@@ -212,7 +212,9 @@ table.data .kind { margin-left: 8px; }
 .link-key { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--muted); }
 .link-key.sequence { border-color: var(--ok); }
 .link-key.recalled { border-top-style: dashed; border-color: var(--graph); }
-.stats .degraded { color: var(--degraded); }
+.map-stats { flex-basis: 100%; color: var(--muted); white-space: nowrap; }
+.map-stats span[data-testid] { color: var(--fg); }
+.map-stats .degraded { color: var(--degraded); }
 .cluster-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
 .cluster-list button {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
@@ -428,4 +430,8 @@ table.data td.graph { color: var(--graph); }
 .steps summary { cursor: pointer; color: var(--lexical); }
 .steps summary:focus-visible { outline: 2px solid var(--lexical); outline-offset: 2px; }
 .steps ol { margin: 8px 0; padding-left: 18px; display: grid; gap: 4px; overflow-wrap: anywhere; }
-.columns i.graph { background: var(--graph); }
+.columns i.graph, .columns i.edge { background: var(--graph); }
+.swatch.edge { background: var(--graph); }
+.ops-view .lead { margin: 0; }
+.ops-view .lead b { color: var(--fg); font-weight: 500; }
+.ops-view .lead a, .backends > p a { color: var(--lexical); text-decoration: underline; }

@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
-  { href: "/", label: "Live" },
-  { href: "/map", label: "Map" },
   { href: "/ops", label: "Operations" },
+  { href: "/map", label: "Map" },
+  { href: "/live", label: "Live" },
   { href: "/backends", label: "Backends" },
 ];
 
@@ -19,7 +19,9 @@ export function Nav() {
         <small>memory console</small>
       </div>
       {links.map((link) => {
-        const current = link.href === "/" ? pathname === "/" || pathname.startsWith("/traces") : pathname.startsWith(link.href);
+        // A trace's replay belongs to Live, where traces are listed.
+        const current =
+          pathname.startsWith(link.href) || (link.href === "/live" && pathname.startsWith("/traces"));
         return (
           <Link key={link.href} href={link.href} aria-current={current ? "page" : undefined}>
             {link.label}
