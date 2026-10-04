@@ -129,8 +129,27 @@ export interface MemoryDetail {
   recalls: { count: number; last: string | null; recent: RecallEvent[] };
 }
 
+export interface SearchStep {
+  name: "lexical" | "vector" | "graph" | "fuse";
+  status: "ok" | "error";
+  started_offset_ms: number;
+  duration_ms: number;
+  candidates: number;
+  error: string | null;
+}
+
+export interface ConsoleSearchResult {
+  hits: MapSearchHit[];
+  degraded: string[];
+  path: SearchStep[];
+  duration_ms: number;
+  trace_id: string | null;
+}
+
 export interface MapSearchHit {
   id: string;
+  kind: "memory" | "relationship";
+  memory_id: string | null;
   rank: number;
   title: string;
   type: string;

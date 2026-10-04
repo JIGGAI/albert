@@ -58,3 +58,29 @@ test("the console opens on operations, listed first", async ({ page }) => {
   await expect(first).toHaveText("Operations");
   await expect(first).toHaveAttribute("aria-current", "page");
 });
+
+test("retrieval lets an operator try a search and see the path it took", async ({ page, request }) => {
+  await request.post(`${api}/v1/memories`, {
+    headers,
+    data: { content: "Probe Service uses Probe Store." },
+  });
+  await page.goto("/ops?view=retrieval");
+  const probe = page.getByTestId("search-probe");
+  await probe.getByTestId("probe-input").fill("brand voice sharp confident");
+  await probe.getByRole("button", { name: "Run" }).click();
+  await expect(probe.getByTestId("probe-hit-count")).not.toHaveText("0");
+  await expect(probe.getByTestId("probe-hit").first()).toContainText("Brand voice");
+  const path = probe.getByTestId("probe-path");
+  for (const step of ["lexical", "vector", "graph", "fuse"]) await expect(path).toContainText(step);
+  await expect(path).toContainText("kept");
+  await expect(probe.getByTestId("probe-total")).toContainText("ms");
+
+  await probe.getByRole("checkbox", { name: "Include the graph" }).uncheck();
+  await probe.getByRole("button", { name: "Run" }).click();
+  await expect(path.getByRole("listitem")).toHaveCount(3);
+
+  await probe.getByRole("link", { name: "Open the full replay" }).click();
+  await expect(page.getByRole("heading", { name: /POST \/v1\/console\/search/ })).toBeVisible({
+    timeout: 15_000,
+  });
+});

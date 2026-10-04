@@ -304,9 +304,10 @@ export function MemoryView({ data }: { data: MemoryHealth }) {
   );
 }
 
-export function RetrievalView({ data }: { data: RetrievalQuality }) {
+export function RetrievalView({ data, probe }: { data: RetrievalQuality; probe?: React.ReactNode }) {
   return (
     <div data-testid="ops-retrieval" className="ops-view">
+      {probe}
       <div className="stats">
         <Stat id="searches" label="Searches" value={number.format(data.searches)} />
         <Stat

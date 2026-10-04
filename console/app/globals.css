@@ -435,3 +435,29 @@ table.data td.graph { color: var(--graph); }
 .ops-view .lead { margin: 0; }
 .ops-view .lead b { color: var(--fg); font-weight: 500; }
 .ops-view .lead a, .backends > p a { color: var(--lexical); text-decoration: underline; }
+
+/* Search probe */
+.probe form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.probe input[type="text"] { flex: 1; min-width: 240px; background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; }
+.probe button, .probe select { background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+.probe button:disabled { color: var(--faint); cursor: default; }
+.probe input:focus-visible, .probe button:focus-visible, .probe select:focus-visible, .probe a:focus-visible { outline: 2px solid var(--lexical); outline-offset: 1px; }
+.probe .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.probe .check input { accent-color: var(--graph); }
+.probe-result { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px; margin-top: 14px; }
+@media (max-width: 1000px) { .probe-result { grid-template-columns: 1fr; } }
+.probe h3 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 0 8px; }
+.path { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.path li { display: grid; grid-template-columns: 62px 1fr 70px 110px; gap: 10px; align-items: center; }
+.path .lane { position: relative; height: 12px; background: var(--bg); border-radius: 2px; }
+.path .lane i { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; background: var(--muted); }
+.path .lexical { color: var(--lexical); } .path .lane i.lexical { background: var(--lexical); }
+.path .vector { color: var(--vector); } .path .lane i.vector { background: var(--vector); }
+.path .graph { color: var(--graph); } .path .lane i.graph { background: var(--graph); }
+.path .lane i.fuse { background: var(--hit); }
+.path .lane i.error { background: var(--error); }
+.probe .summary { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.probe .summary b { color: var(--fg); font-weight: 500; }
+.probe .summary a { color: var(--lexical); text-decoration: underline; }
+.probe table.data a { color: var(--fg); }
+.probe table.data a:hover { color: var(--lexical); text-decoration: underline; }

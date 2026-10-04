@@ -19,6 +19,7 @@ import type {
   ServiceHealth,
 } from "@/lib/types";
 import { AgentsView, GraphView, MemoryView, RetrievalView, ServiceView } from "./OpsViews";
+import { SearchProbe } from "./SearchProbe";
 
 const VIEWS = [
   { id: "agents", label: "Agents" },
@@ -160,7 +161,12 @@ export function OpsPanel() {
       {!current && !error ? <p className="muted">Loading…</p> : null}
       {current?.view === "agents" ? <AgentsView data={current.data} /> : null}
       {current?.view === "memory" ? <MemoryView data={current.data} /> : null}
-      {current?.view === "retrieval" ? <RetrievalView data={current.data} /> : null}
+      {current?.view === "retrieval" ? (
+        <RetrievalView
+          data={current.data}
+          probe={<SearchProbe organization={tenant || fullest} organizations={organizations} />}
+        />
+      ) : null}
       {current?.view === "graph" ? <GraphView data={current.data} /> : null}
       {current?.view === "service" ? <ServiceView data={current.data} /> : null}
     </div>

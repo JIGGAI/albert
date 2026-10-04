@@ -1,7 +1,7 @@
 import type {
   AgentActivity,
   Backends,
-  MapSearchHit,
+  ConsoleSearchResult,
   MapSnapshot,
   MemoryDetail,
   MemoryHealth,
@@ -59,7 +59,8 @@ export async function searchMap(body: {
   workspace_id?: string;
   query: string;
   limit?: number;
-}): Promise<{ hits: MapSearchHit[]; degraded: string[] }> {
+  include_graph?: boolean;
+}): Promise<ConsoleSearchResult> {
   const response = await fetch(`${base}/search`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -69,7 +70,7 @@ export async function searchMap(body: {
   if (!response.ok) {
     throw new Error(`${response.status} ${await response.text()}`);
   }
-  return (await response.json()) as { hits: MapSearchHit[]; degraded: string[] };
+  return (await response.json()) as ConsoleSearchResult;
 }
 export const getOverview = () => get<Overview>("/overview");
 export const listOrganizations = () => get<{ items: Organization[] }>("/organizations");

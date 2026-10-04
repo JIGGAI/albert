@@ -6,6 +6,7 @@ content read and every search here is audited. Traces still hold ids only.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +29,7 @@ from albert.models import (
     Organization,
     Workspace,
 )
+from albert.recorder import current_recorder
 from albert.schemas import SearchRequest
 from albert.search import hybrid_search
 from albert.security import AuthContext
@@ -40,6 +42,7 @@ TITLE_SOURCE_CHARACTERS = 400
 CONTENT_LIMIT = 50_000
 RELATED_LIMIT = 40
 RECENT_RECALLS = 10
+RETRIEVAL_STEPS = ("lexical", "vector", "graph", "fuse")
 ALL_SENSITIVITIES = ["public", "internal", "confidential", "restricted"]
 
 
@@ -368,6 +371,9 @@ class ConsoleSearch(BaseModel):
     workspace_id: UUID | None = None
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=20, ge=1, le=50)
+    # The map searches memories only; the retrieval probe adds the graph leg so
+    # an operator sees what an agent's search would see.
+    include_graph: bool = False
 
 
 @router.post("/search")
@@ -379,14 +385,20 @@ def console_search(
     """Operator search across every sensitivity in one tenant scope.
 
     Recorded under its own trace name, so it never counts toward recall statistics.
+    Alongside the hits it returns the path the request took: each retrieval step
+    with its timing and how many candidates it produced, and the trace id for
+    the full replay.
     """
+    started = time.perf_counter()
     _require_organization(session, data.organization_id)
     request = SearchRequest(
         query=data.query,
         limit=data.limit,
         sensitivity=ALL_SENSITIVITIES,
-        include_graph=False,
-        include_content=False,
+        include_graph=data.include_graph,
+        # Relationship hits are titled from their sentence; memory bodies are
+        # never returned from here either way.
+        include_content=data.include_graph,
     )
     result = hybrid_search(
         session,
@@ -399,14 +411,31 @@ def console_search(
     memories = (
         {m.id: m for m in session.scalars(select(Memory).where(Memory.id.in_(ids)))} if ids else {}
     )
-    hits = []
+    hits: list[dict[str, Any]] = []
     for hit in result.hits:
         memory = memories.get(hit.memory_id) if hit.memory_id is not None else None
+        if hit.kind == "relationship":
+            hits.append(
+                {
+                    "id": str(hit.metadata.get("relationship_id") or ""),
+                    "kind": "relationship",
+                    "memory_id": str(memory.id) if memory is not None else None,
+                    "rank": len(hits) + 1,
+                    "title": hit.content[:TITLE_LIMIT],
+                    "type": hit.subject,
+                    "sensitivity": str(hit.metadata.get("sensitivity") or ""),
+                    "score": hit.score,
+                    "backends": hit.backends,
+                }
+            )
+            continue
         if memory is None:
             continue
         hits.append(
             {
                 "id": str(memory.id),
+                "kind": "memory",
+                "memory_id": str(memory.id),
                 "rank": len(hits) + 1,
                 "title": clean_title(memory.subject, memory.content),
                 "type": memory.memory_type,
@@ -415,6 +444,23 @@ def console_search(
                 "backends": hit.backends,
             }
         )
+    recorder = current_recorder()
+    path = [
+        {
+            "name": step["name"],
+            "status": step["status"],
+            "started_offset_ms": step["started_offset_ms"],
+            "duration_ms": step["duration_ms"],
+            "candidates": (
+                len(hits)
+                if step["name"] == "fuse"
+                else int((step.get("detail") or {}).get("candidates_total") or 0)
+            ),
+            "error": (step.get("detail") or {}).get("error"),
+        }
+        for step in (recorder.spans if recorder is not None else [])
+        if step["name"] in RETRIEVAL_STEPS
+    ]
     audit(
         session,
         auth,
@@ -424,4 +470,10 @@ def console_search(
         detail={"console": True, "result_count": len(hits), "degraded": result.degraded},
     )
     session.commit()
-    return {"hits": hits, "degraded": result.degraded}
+    return {
+        "hits": hits,
+        "degraded": result.degraded,
+        "path": path,
+        "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+        "trace_id": str(recorder.id) if recorder is not None else None,
+    }
