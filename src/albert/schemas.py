@@ -354,3 +354,5 @@ class HealthResponse(BaseModel):
     embedding_model: str
     embedding_dimensions: int
     classifier_provider: str
+    graph_store: str = "postgres"
+    graph_builder: str = "regex"

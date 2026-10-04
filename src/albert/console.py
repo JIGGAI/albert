@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal, engine, get_session
-from albert.models import Entity, Job, Memory, Organization, Relationship, Trace
+from albert.graph_store import StoredRelationship, get_graph_store
+from albert.models import Job, Memory, Organization, Trace
 from albert.security import AuthContext, authenticate
 from albert.services import audit
 from albert.trace_feed import TraceFeed, parse_event_id, trace_summary
@@ -186,11 +187,11 @@ def get_trace(
     return {**_trace_summary(trace), "spans": trace.spans}
 
 
-def _edge(relationship: Relationship) -> dict[str, Any]:
+def _edge(relationship: StoredRelationship) -> dict[str, Any]:
     return {
         "id": str(relationship.id),
-        "source": str(relationship.source_entity_id),
-        "target": str(relationship.target_entity_id),
+        "source": str(relationship.source.id),
+        "target": str(relationship.target.id),
         "relation_type": relationship.relation_type,
         "sensitivity": relationship.sensitivity,
         "valid_from": _iso(relationship.valid_from),
@@ -201,15 +202,13 @@ def _edge(relationship: Relationship) -> dict[str, Any]:
 
 def _graph_version(session: Session, organization_id: UUID) -> str:
     """A cheap fingerprint of everything the graph snapshot is built from."""
-    parts = []
-    for model in (Memory, Entity, Relationship):
-        count, latest = session.execute(
-            select(func.count(model.id), func.max(model.updated_at)).where(
-                model.organization_id == organization_id
-            )
-        ).one()
-        parts.append(f"{count}:{latest}")
-    return "|".join(parts)
+    count, latest = session.execute(
+        select(func.count(Memory.id), func.max(Memory.updated_at)).where(
+            Memory.organization_id == organization_id
+        )
+    ).one()
+    graph = get_graph_store().fingerprint(session, organization_id=organization_id)
+    return f"{count}:{latest}|{graph}"
 
 
 @router.get("/graph")
@@ -236,41 +235,29 @@ def graph_snapshot(
         return cached
     when = temporal_as_of or datetime.now(UTC)
 
-    entity_scope = [Entity.organization_id == organization_id]
     memory_scope = [Memory.organization_id == organization_id, Memory.status == "active"]
     if workspace_id is not None:
-        entity_scope.append(Entity.workspace_id == workspace_id)
         memory_scope.append(Memory.workspace_id == workspace_id)
 
-    entities = session.scalars(
-        select(Entity).where(*entity_scope).order_by(Entity.created_at.desc()).limit(limit + 1)
-    ).all()
-    truncated = len(entities) > limit
-    entities = entities[:limit]
+    entities, relationships, truncated = get_graph_store().snapshot(
+        session,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        when=when,
+        limit=limit,
+    )
     nodes: list[dict[str, Any]] = [
         {
             "id": str(e.id),
             "kind": "entity",
-            "label": e.display_name,
+            "label": e.name,
             "type": e.entity_type,
             "sensitivity": None,
             "workspace_id": _opt(e.workspace_id),
         }
         for e in entities
     ]
-    edges: list[dict[str, Any]] = []
-    entity_ids = {e.id for e in entities}
-    if entity_ids:
-        relationships = session.scalars(
-            select(Relationship).where(
-                Relationship.organization_id == organization_id,
-                Relationship.source_entity_id.in_(entity_ids),
-                Relationship.target_entity_id.in_(entity_ids),
-                Relationship.valid_from <= when,
-                or_(Relationship.valid_until.is_(None), Relationship.valid_until > when),
-            )
-        ).all()
-        edges = [_edge(r) for r in relationships]
+    edges = [_edge(r) for r in relationships]
 
     remaining = limit - len(nodes)
     if remaining > 0:
@@ -328,21 +315,15 @@ def list_organizations(
         )
         return {organization_id: int(count) for organization_id, count in rows}
 
-    now = datetime.now(UTC)
     memories = counts(Memory, Memory.status == "active")
-    entities = counts(Entity)
-    relationships = counts(
-        Relationship,
-        Relationship.valid_from <= now,
-        or_(Relationship.valid_until.is_(None), Relationship.valid_until > now),
-    )
+    graph = get_graph_store().counts(session, when=datetime.now(UTC))
     items = [
         {
             "id": str(organization.id),
             "name": organization.name,
             "memories": memories.get(organization.id, 0),
-            "entities": entities.get(organization.id, 0),
-            "relationships": relationships.get(organization.id, 0),
+            "entities": graph.get(organization.id, (0, 0))[0],
+            "relationships": graph.get(organization.id, (0, 0))[1],
         }
         for organization in session.scalars(select(Organization).order_by(Organization.name))
     ]
@@ -402,7 +383,7 @@ def operator_entity(
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    entity = session.get(Entity, entity_id)
+    entity = get_graph_store().get_entity(session, entity_id=entity_id)
     if entity is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     audit(
@@ -416,7 +397,7 @@ def operator_entity(
     session.commit()
     return {
         "id": str(entity.id),
-        "name": entity.display_name,
+        "name": entity.name,
         "entity_type": entity.entity_type,
         "description": entity.description[:500],
         "confidence": entity.confidence,

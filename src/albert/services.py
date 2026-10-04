@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ from albert.classifier import (
 )
 from albert.config import get_settings
 from albert.embeddings import get_embedder
-from albert.graph import add_relationship
+from albert.graph_store import StoredRelationship, get_graph_store
 from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
 from albert.models import (
     AuditEvent,
@@ -30,7 +30,6 @@ from albert.models import (
     MemoryChunk,
     MemoryRecall,
     MemoryStat,
-    Relationship,
     ResourceLock,
     WorkingMemory,
     Workspace,
@@ -240,16 +239,7 @@ def update_memory(
     if metadata is not None:
         memory.metadata_ = metadata
     text_changed = data.content is not None or data.subject is not None
-    extracted_edges = [
-        relationship
-        for relationship in session.scalars(
-            select(Relationship).where(
-                Relationship.organization_id == auth.organization_id,
-                Relationship.source_memory_id == memory.id,
-            )
-        )
-        if (relationship.metadata_ or {}).get("extracted")
-    ]
+    graph = get_graph_store()
     if text_changed:
         # Old chunks describe text that no longer exists; drop them now rather
         # than serve them from vector search until the worker catches up.
@@ -258,16 +248,23 @@ def update_memory(
         memory.embedding_model = None
         # The facts themselves may have changed: close the old edges now and let
         # re-enrichment extract the current ones.
-        now = utcnow()
-        for relationship in extracted_edges:
-            if relationship.valid_until is None or _as_utc(relationship.valid_until) > now:
-                relationship.valid_until = now
+        graph.close_memory_edges(
+            session,
+            organization_id=auth.organization_id,
+            memory_id=memory.id,
+            at=utcnow(),
+            extracted_only=True,
+        )
         enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
     elif {"sensitivity", "valid_until"}.intersection(changes):
         # The facts are unchanged; their visibility window follows the memory.
-        for relationship in extracted_edges:
-            relationship.sensitivity = memory.sensitivity
-            relationship.valid_until = memory.valid_until
+        graph.retarget_memory_edges(
+            session,
+            organization_id=auth.organization_id,
+            memory_id=memory.id,
+            sensitivity=memory.sensitivity,
+            valid_until=memory.valid_until,
+        )
     audit(session, auth, "memory.updated", resource_type="memory", resource_id=str(memory.id))
     session.commit()
     session.refresh(memory)
@@ -344,11 +341,13 @@ def _scrub_memory(session: Session, memory: Memory, now: datetime) -> None:
     session.query(MemoryStat).filter(MemoryStat.memory_id == memory.id).delete(
         synchronize_session=False
     )
-    session.query(Relationship).filter(
-        Relationship.organization_id == memory.organization_id,
-        Relationship.source_memory_id == memory.id,
-        or_(Relationship.valid_until.is_(None), Relationship.valid_until > now),
-    ).update({Relationship.valid_until: now}, synchronize_session=False)
+    get_graph_store().close_memory_edges(
+        session,
+        organization_id=memory.organization_id,
+        memory_id=memory.id,
+        at=now,
+        extracted_only=False,
+    )
 
 
 def delete_memory(session: Session, auth: AuthContext, memory_id: UUID) -> None:
@@ -393,7 +392,7 @@ def delete_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Non
 
 def add_explicit_relationship(
     session: Session, auth: AuthContext, data: RelationshipCreate
-) -> Relationship:
+) -> StoredRelationship:
     auth.require("graph.write")
     reject_secrets(
         data.source.name,
@@ -422,7 +421,7 @@ def add_explicit_relationship(
         ),
         confidence=data.confidence,
     )
-    relationship, _created = add_relationship(
+    relationship, _created = get_graph_store().add_relationship(
         session,
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -441,7 +440,6 @@ def add_explicit_relationship(
         resource_id=str(relationship.id),
     )
     session.commit()
-    session.refresh(relationship)
     return relationship
 
 
@@ -723,21 +721,17 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
     }
     now = utcnow()
     with span("write_edges") as edges_span:
-        closed = 0
-        for existing in session.scalars(
-            select(Relationship).where(
-                Relationship.organization_id == memory.organization_id,
-                Relationship.source_memory_id == memory.id,
-            )
-        ):
-            if (existing.metadata_ or {}).get("extracted") and (
-                existing.valid_until is None or _as_utc(existing.valid_until) > now
-            ):
-                existing.valid_until = now
-                closed += 1
+        graph = get_graph_store()
+        closed = graph.close_memory_edges(
+            session,
+            organization_id=memory.organization_id,
+            memory_id=memory.id,
+            at=now,
+            extracted_only=True,
+        )
         written = 0
         for relationship in result.relationships:
-            _edge, created = add_relationship(
+            _edge, created = graph.add_relationship(
                 session,
                 organization_id=memory.organization_id,
                 workspace_id=memory.workspace_id,
@@ -780,7 +774,7 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     with span("write_edges") as edges_span:
         written = 0
         for relationship in result.relationships:
-            _edge, created = add_relationship(
+            _edge, created = get_graph_store().add_relationship(
                 session,
                 organization_id=episode.organization_id,
                 workspace_id=episode.workspace_id,

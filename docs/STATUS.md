@@ -72,9 +72,10 @@ a compliance-certified public SaaS platform.
 
 - PostgreSQL is canonical storage.
 - PostgreSQL/pgvector provides vector indexing.
-- The first temporal knowledge graph is implemented with transactional entity
-  and relationship tables in PostgreSQL. Its service boundary permits a future
-  Graphiti, FalkorDB, or Neo4j adapter without changing REST or MCP contracts.
+- Graph storage sits behind a `GraphStore` interface (`ALBERT_GRAPH_STORE`).
+  PostgreSQL is the only store shipped; FalkorDB, Neo4j and a Graphiti builder
+  are planned adapters that will not change REST or MCP contracts. See
+  [graph backends](GRAPH_BACKENDS.md).
 - The default hashing embedder avoids downloads but is lexical rather than
   semantic. Operators must select `sentence-transformers` or an OpenAI-compatible
   embedding endpoint for semantic retrieval.
