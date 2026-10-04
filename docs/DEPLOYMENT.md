@@ -67,8 +67,10 @@ Endpoints:
 
 The console is an operator UI shipped with Albert: a live feed of every request
 and worker job, a step-by-step replay of any trace with the fusion math behind
-each result, and a 3D explorer of entities, memories and edges with a time
-slider. It sees every tenant, so it is for operators, not end users.
+each result, and a memory map: every memory as a node, linked to the ones it
+resembles, follows or is recalled with, gathered into named clusters, pulsing
+as agents recall and store. Selecting a memory opens it in full. It sees every
+tenant, so it is for operators, not end users.
 
 Issue it a key on a dedicated service principal, then start it:
 
@@ -94,6 +96,19 @@ Open `http://127.0.0.1:8082`. The key stays inside the console container; the
 browser only ever talks to the console. Like the API and MCP, the console binds
 to loopback by default; put it behind the same TLS reverse proxy before exposing
 it, and treat anyone who can reach it as an operator.
+
+After upgrading an install that already holds memories, build the map's links
+once (new memories are linked as they are indexed):
+
+```bash
+docker compose exec api albert-admin rebuild-links
+```
+
+`ALBERT_LINK_NEIGHBORS` (5) and `ALBERT_LINK_SIMILARITY_MIN` (0.78) control how
+many `similar` links a memory gets and how alike two memories must be; rerun
+`rebuild-links` after changing them. `ALBERT_HOUSEKEEPING_SECONDS` (60) is how
+often recall counts catch up with traces, and `ALBERT_MAP_NODE_LIMIT` (1500) is
+how many of the newest memories one map draws.
 
 Traces hold ids, scores, timings and the search query text, never memory
 subjects or content. `ALBERT_TRACE_SAMPLE_RATE` (default `1.0`) is the dial

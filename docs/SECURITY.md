@@ -29,7 +29,12 @@ make supplied memory content trustworthy.
   identity to REST; stdio uses its process-local `ALBERT_MCP_API_KEY`.
 - Lock tokens are stored using the same one-way construction.
 - The console's operator key is held by the console server process only; the
-  browser never receives it. Console detail reads are audited like any read.
+  browser never receives it. Its proxy forwards only `/v1/console/*` reads and
+  the operator search.
+- The console map shows memory titles and its reading pane full content, across
+  every sensitivity. Each map load, memory read and operator search writes an
+  audit event. Traces, recall rows and link rows still hold ids, scores and
+  query text only, never subjects or content.
 - Secrets belong in environment-backed secret management, never memory.
 
 ## Memory poisoning and model output

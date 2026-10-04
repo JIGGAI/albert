@@ -1,15 +1,23 @@
-"""Exercise vector and graph behavior against a migrated PostgreSQL database."""
+"""Exercise vector, graph and memory-link behavior against a migrated PostgreSQL database."""
 
 from __future__ import annotations
 
 import sys
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from albert.db import SessionLocal, engine
 from albert.graph import query_relationships
-from albert.models import Organization, Principal, Workspace
+from albert.links import process_recall_traces, rebuild_links
+from albert.models import (
+    MemoryLink,
+    MemoryStat,
+    Organization,
+    Principal,
+    Trace,
+    Workspace,
+)
 from albert.schemas import EpisodeCreate, MemoryCreate, SearchRequest
 from albert.search import hybrid_search
 from albert.security import AuthContext
@@ -142,7 +150,64 @@ def main() -> None:
         if not relationships or relationships[0].target_name != "PostgreSQL":
             raise RuntimeError("graph extraction or query did not return the expected edge")
 
-    print("PostgreSQL vector and graph smoke test passed")
+        # Memory links: nearest neighbours through pgvector, then recall processing.
+        topic = "Brand voice posts sound sharp confident masculine friendly persuasive bold"
+        linked = []
+        for index in range(3):
+            item = create_memory(
+                session, auth, MemoryCreate(subject=f"Voice {index}", content=f"{topic} v{index}")
+            )
+            enrich_memory(session, item.id)
+            linked.append(item.id)
+        session.commit()
+
+        def similar_links() -> int:
+            return int(
+                session.scalar(
+                    select(func.count(MemoryLink.id)).where(
+                        MemoryLink.organization_id == organization.id,
+                        MemoryLink.kind == "similar",
+                    )
+                )
+                or 0
+            )
+
+        if similar_links() < 2:
+            raise RuntimeError(f"indexing wrote {similar_links()} similar links, expected >= 2")
+        rebuilt = rebuild_links(session, organization.id)
+        session.commit()
+        if rebuilt["similar"] < 3 or similar_links() != rebuilt["similar"]:
+            raise RuntimeError(f"rebuild-links produced {rebuilt}, stored {similar_links()}")
+        session.add(
+            Trace(
+                kind="request",
+                name="POST /v1/search",
+                organization_id=organization.id,
+                principal_id=principal.id,
+                status="ok",
+                http_status=200,
+                duration_ms=1.0,
+                summary={"query": "brand voice", "memory_ids": [str(i) for i in linked]},
+                spans=[],
+            )
+        )
+        session.commit()
+        while process_recall_traces(session, settle_seconds=0):
+            pass
+        if process_recall_traces(session, settle_seconds=0) != 0:
+            raise RuntimeError("recall processing is not idempotent")
+        stat = session.get(MemoryStat, linked[0])
+        recalled = session.scalar(
+            select(func.count(MemoryLink.id)).where(
+                MemoryLink.organization_id == organization.id, MemoryLink.kind == "recalled"
+            )
+        )
+        if stat is None or stat.recall_count != 1 or recalled != 3:
+            raise RuntimeError(
+                f"recall processing wrote stat={stat and stat.recall_count}, links={recalled}"
+            )
+
+    print("PostgreSQL vector, graph and memory-link smoke test passed")
 
 
 if __name__ == "__main__":
@@ -151,8 +216,7 @@ if __name__ == "__main__":
     except Exception as exc:
         message = str(exc).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(
-            f"::error title=PostgreSQL vector and graph smoke test failed::"
-            f"{type(exc).__name__}: {message}",
+            f"::error title=PostgreSQL smoke test failed::{type(exc).__name__}: {message}",
             file=sys.stderr,
         )
         raise

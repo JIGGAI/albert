@@ -29,7 +29,7 @@ The command prints the API key once. Store it securely.
 
 REST documentation is available at `http://localhost:8080/docs`, MCP uses
 streamable HTTP at `http://localhost:8081/mcp`, and the operator console (live
-traces, replay, 3D memory explorer) runs at `http://localhost:8082` once
+traces, replay, memory map) runs at `http://localhost:8082` once
 `ALBERT_CONSOLE_API_KEY` is set (see [deployment](docs/DEPLOYMENT.md)). HTTP MCP clients authenticate
 with their own Albert API key as a bearer credential.
 
