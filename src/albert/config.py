@@ -23,9 +23,13 @@ class Settings(BaseSettings):
     embedding_request_dimensions: bool = False
 
     # Where the knowledge graph is stored. See docs/GRAPH_BACKENDS.md.
-    graph_store: Literal["postgres", "falkordb"] = "postgres"
+    graph_store: Literal["postgres", "falkordb", "neo4j"] = "postgres"
     falkordb_url: str = "redis://localhost:6379"
     falkordb_graph: str = Field(default="albert", pattern=r"^[A-Za-z0-9_]{1,64}$")
+    neo4j_url: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: SecretStr | None = None
+    neo4j_database: str = "neo4j"
 
     llm_provider: Literal["none", "openai-compatible"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -75,7 +79,7 @@ class Settings(BaseSettings):
         """What turns memory text into entities and edges."""
         return "regex" if self.llm_provider == "none" else "llm-classifier"
 
-    @field_validator("openai_api_key", "classification_model", mode="before")
+    @field_validator("openai_api_key", "classification_model", "neo4j_password", mode="before")
     @classmethod
     def empty_optional_strings(cls, value: object) -> object | None:
         if isinstance(value, str) and not value.strip():
@@ -84,6 +88,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider_configuration(self) -> Settings:
+        if self.graph_store == "neo4j" and self.neo4j_password is None:
+            raise ValueError("ALBERT_NEO4J_PASSWORD is required when ALBERT_GRAPH_STORE=neo4j")
         if self.embedding_provider == "openai-compatible" and self.openai_api_key is None:
             raise ValueError("ALBERT_OPENAI_API_KEY is required for openai-compatible embeddings")
         if self.llm_provider == "openai-compatible":

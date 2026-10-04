@@ -1,7 +1,8 @@
 """One behavioural contract, run against every graph store that is reachable.
 
-PostgreSQL always runs. FalkorDB runs when ALBERT_TEST_FALKORDB_URL points at a
-server (CI starts one); otherwise that parameter is skipped.
+PostgreSQL always runs. FalkorDB and Neo4j run when ALBERT_TEST_FALKORDB_URL or
+ALBERT_TEST_NEO4J_URL point at a server (CI starts both); otherwise that
+parameter is skipped.
 """
 
 from __future__ import annotations
@@ -18,18 +19,36 @@ from albert.graph import PostgresGraphStore
 from albert.models import Memory
 
 FALKORDB_URL = os.environ.get("ALBERT_TEST_FALKORDB_URL")
+NEO4J_URL = os.environ.get("ALBERT_TEST_NEO4J_URL")
+NEO4J_PASSWORD = os.environ.get("ALBERT_TEST_NEO4J_PASSWORD", "")
 ALL = ["public", "internal", "confidential", "restricted"]
 
 
-@pytest.fixture(params=["postgres", "falkordb"])
+@pytest.fixture(scope="module")
+def neo4j_store():  # type: ignore[no-untyped-def]
+    from albert.graph_cypher import Neo4jGraphStore
+
+    return Neo4jGraphStore(NEO4J_URL, user="neo4j", password=NEO4J_PASSWORD)
+
+
+@pytest.fixture(params=["postgres", "falkordb", "neo4j"])
 def store(request):  # type: ignore[no-untyped-def]
     if request.param == "postgres":
         return PostgresGraphStore()
+    if request.param == "neo4j":
+        if not NEO4J_URL:
+            pytest.skip("ALBERT_TEST_NEO4J_URL is not set")
+        # Tests share one database; every test works in organizations of its own.
+        return request.getfixturevalue("neo4j_store")
     if not FALKORDB_URL:
         pytest.skip("ALBERT_TEST_FALKORDB_URL is not set")
-    from albert.graph_falkordb import FalkorDBGraphStore
+    from albert.graph_cypher import FalkorDBGraphStore
 
     return FalkorDBGraphStore(FALKORDB_URL, graph_name=f"contract_{uuid4().hex}")
+
+
+def test_ping_reports_a_version(store, session) -> None:  # type: ignore[no-untyped-def]
+    assert store.ping(session) not in ("", "unknown")
 
 
 @pytest.fixture()
@@ -277,7 +296,7 @@ async def test_the_api_works_end_to_end_on_falkordb(client, identity) -> None:  
     """Indexing, graph query, hybrid search, traversal and forgetting through FalkorDB."""
     if not FALKORDB_URL:
         pytest.skip("ALBERT_TEST_FALKORDB_URL is not set")
-    from albert.graph_falkordb import FalkorDBGraphStore
+    from albert.graph_cypher import FalkorDBGraphStore
     from albert.graph_store import set_graph_store
 
     from .conftest import drain_jobs

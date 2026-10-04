@@ -45,16 +45,9 @@ def test_default_store_is_postgres_and_is_described() -> None:
     assert GRAPH_STORES["postgres"].available is True
     assert GRAPH_STORES["falkordb"].available is True
     assert Settings(graph_store="falkordb").graph_store == "falkordb"
+    assert all(option.available and option.enable for option in GRAPH_STORES.values())
     for option in GRAPH_STORES.values():
         assert option.summary and option.choose_when
-
-
-@pytest.mark.parametrize("planned", ["neo4j"])
-def test_a_planned_store_is_refused_with_an_explanation(planned: str) -> None:
-    with pytest.raises(ValidationError) as error:
-        Settings(graph_store=planned)  # type: ignore[arg-type]
-    assert "not available in this build" in str(error.value)
-    assert "GRAPH_BACKENDS.md" in str(error.value)
 
 
 def test_an_unknown_store_is_refused() -> None:

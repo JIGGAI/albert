@@ -309,6 +309,9 @@ def reindex_memories(
     all_memories: bool = typer.Option(
         False, "--all", help="Re-enrich every active memory, including current embeddings"
     ),
+    workspace: str | None = typer.Option(
+        None, help="Limit to workspaces with this name (in every organization)"
+    ),
 ) -> None:
     """Queue active memories whose chunks are absent or embedded by another model."""
     embedder = get_embedder()
@@ -318,6 +321,13 @@ def reindex_memories(
             statement = statement.where(
                 or_(Memory.embedding_model.is_(None), Memory.embedding_model != embedder.name)
             )
+        if workspace is not None:
+            workspace_ids = list(
+                session.scalars(select(Workspace.id).where(Workspace.name == workspace))
+            )
+            if not workspace_ids:
+                raise typer.BadParameter("Workspace not found")
+            statement = statement.where(Memory.workspace_id.in_(workspace_ids))
         selected = list(session.scalars(statement))
         for memory in selected:
             session.add(

@@ -34,6 +34,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/ci-neo4j-password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://localhost:7474 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,9 +53,11 @@ jobs:
           cache: pip
       - run: pip install --constraint constraints.txt -e '.[dev]'
       - run: ruff check .
-      - name: Test (the graph store contract also runs against FalkorDB)
+      - name: Test (the graph store contract also runs against FalkorDB and Neo4j)
         env:
           ALBERT_TEST_FALKORDB_URL: redis://127.0.0.1:6379
+          ALBERT_TEST_NEO4J_URL: bolt://127.0.0.1:7687
+          ALBERT_TEST_NEO4J_PASSWORD: ci-neo4j-password
         run: pytest --cov=albert --cov-report=term-missing
       - name: Validate Compose configuration
         env:

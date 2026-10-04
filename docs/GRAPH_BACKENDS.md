@@ -102,7 +102,7 @@ quality lever: a better store does not help a graph nothing fills.
 Every graph read and write goes through the `GraphStore` interface in
 `src/albert/graph_store.py`. The PostgreSQL implementation is
 `PostgresGraphStore` in `src/albert/graph.py` and the FalkorDB one is
-`FalkorDBGraphStore` in `src/albert/graph_falkordb.py`; a test fails if any
+`FalkorDBGraphStore` in `src/albert/graph_cypher.py`; a test fails if any
 other module reaches for the graph tables directly.
 
 A new store implements these operations:

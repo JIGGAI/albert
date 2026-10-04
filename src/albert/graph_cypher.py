@@ -1,10 +1,13 @@
-"""The FalkorDB graph store: entities and edges in one FalkorDB graph.
+"""Graph stores that speak Cypher: FalkorDB and Neo4j.
 
-FalkorDB cannot join Albert's PostgreSQL transaction, so every write here is
+Neither can join Albert's PostgreSQL transaction, so every write here is
 idempotent (the worker retries failed jobs) and every read carries the
 organization, workspace, sensitivity and validity filters itself. Times are
 stored as epoch seconds and ids as strings; relation types are a property on a
 single `REL` edge type, because Cypher cannot parameterize an edge type.
+
+The queries are shared. A subclass only connects, creates indexes and runs a
+query, returning rows whose nodes are plain property mappings.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import re
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
@@ -53,8 +56,7 @@ def _uuid(value: str | None) -> UUID | None:
     return UUID(value) if value else None
 
 
-def _entity(node: Any) -> GraphEntity:
-    data = node.properties
+def _entity(data: Any) -> GraphEntity:
     return GraphEntity(
         id=UUID(data["id"]),
         organization_id=UUID(data["organization_id"]),
@@ -97,35 +99,18 @@ def _stored(row: list[Any]) -> StoredRelationship:
     )
 
 
-class FalkorDBGraphStore:
-    """`GraphStore` over FalkorDB. The SQLAlchemy session argument is unused."""
+class CypherGraphStore:
+    """`GraphStore` over a Cypher database. The SQLAlchemy session argument is unused."""
 
-    name = "falkordb"
-
-    def __init__(self, url: str, *, graph_name: str = "albert") -> None:
-        try:
-            from falkordb import FalkorDB
-        except ImportError as exc:  # pragma: no cover - exercised only without the extra
-            raise RuntimeError(
-                "ALBERT_GRAPH_STORE=falkordb needs the 'falkordb' Python package installed"
-            ) from exc
-        parsed = urlparse(url)
-        self._db = FalkorDB(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 6379,
-            username=parsed.username or None,
-            password=parsed.password or None,
-        )
-        self._graph = self._db.select_graph(graph_name)
-        for label_property in ("id", "organization_id", "canonical_name"):
-            try:
-                self._graph.create_node_range_index("Entity", label_property)
-            except Exception as exc:  # the index already exists
-                if "already indexed" not in str(exc).lower():
-                    raise
+    name = "cypher"
 
     def _run(self, query: str, **params: Any) -> list[list[Any]]:
-        return self._graph.query(query, params).result_set
+        """Run one query; nodes in the returned rows are property mappings."""
+        raise NotImplementedError
+
+    def ping(self, session: Session) -> str:
+        """Round-trip to the server; returns its version string."""
+        raise NotImplementedError
 
     def _upsert_entity(
         self, organization_id: UUID, workspace_id: UUID | None, entity: ExtractedEntity
@@ -453,3 +438,82 @@ class FalkorDBGraphStore:
             org=org,
         )
         return f"{nodes[0][0]}:{nodes[0][1]}|{edges[0][0]}:{edges[0][1]}"
+
+
+INDEXED_PROPERTIES = ("id", "organization_id", "canonical_name")
+
+
+class FalkorDBGraphStore(CypherGraphStore):
+    name = "falkordb"
+
+    def __init__(self, url: str, *, graph_name: str = "albert") -> None:
+        try:
+            from falkordb import FalkorDB
+        except ImportError as exc:  # pragma: no cover - exercised only without the package
+            raise RuntimeError(
+                "ALBERT_GRAPH_STORE=falkordb needs the 'falkordb' Python package installed"
+            ) from exc
+        parsed = urlparse(url)
+        self._db = FalkorDB(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 6379,
+            username=parsed.username or None,
+            password=unquote(parsed.password) if parsed.password else None,
+            socket_connect_timeout=5,
+            socket_timeout=30,
+        )
+        self._graph = self._db.select_graph(graph_name)
+        for name in INDEXED_PROPERTIES:
+            try:
+                self._graph.create_node_range_index("Entity", name)
+            except Exception as exc:  # the index already exists
+                if "already indexed" not in str(exc).lower():
+                    raise
+
+    def _run(self, query: str, **params: Any) -> list[list[Any]]:
+        rows = self._graph.query(query, params).result_set
+        return [
+            [value.properties if hasattr(value, "properties") else value for value in row]
+            for row in rows
+        ]
+
+    def ping(self, session: Session) -> str:
+        modules = self._db.connection.execute_command("MODULE", "LIST")
+        for module in modules:
+            fields = dict(zip(module[::2], module[1::2], strict=False))
+            name = fields.get("name", fields.get(b"name"))
+            if name in ("graph", b"graph"):
+                version = int(fields.get("ver", fields.get(b"ver", 0)))
+                return f"{version // 10000}.{version // 100 % 100}.{version % 100}"
+        return "unknown"
+
+
+class Neo4jGraphStore(CypherGraphStore):
+    name = "neo4j"
+
+    def __init__(self, url: str, *, user: str, password: str, database: str = "neo4j") -> None:
+        try:
+            from neo4j import GraphDatabase
+        except ImportError as exc:  # pragma: no cover - exercised only without the package
+            raise RuntimeError(
+                "ALBERT_GRAPH_STORE=neo4j needs the 'neo4j' Python package installed"
+            ) from exc
+        self._driver = GraphDatabase.driver(url, auth=(user, password), connection_timeout=5)
+        self._database = database
+        for name in INDEXED_PROPERTIES:
+            self._run(
+                f"CREATE INDEX albert_entity_{name} IF NOT EXISTS FOR (e:Entity) ON (e.{name})"
+            )
+
+    def _run(self, query: str, **params: Any) -> list[list[Any]]:
+        records, _summary, _keys = self._driver.execute_query(
+            query, params, database_=self._database
+        )
+        return [
+            [dict(value) if hasattr(value, "labels") else value for value in record.values()]
+            for record in records
+        ]
+
+    def ping(self, session: Session) -> str:
+        rows = self._run("CALL dbms.components() YIELD versions RETURN versions[0]")
+        return str(rows[0][0]) if rows else "unknown"

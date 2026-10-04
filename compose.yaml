@@ -34,6 +34,23 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Only started with `--profile neo4j`, for ALBERT_GRAPH_STORE=neo4j.
+  neo4j:
+    image: neo4j:5.26-community
+    profiles: ["neo4j"]
+    environment:
+      NEO4J_AUTH: neo4j/${ALBERT_NEO4J_PASSWORD:-}
+      NEO4J_server_memory_heap_max__size: ${ALBERT_NEO4J_HEAP:-512m}
+      NEO4J_server_memory_pagecache_size: ${ALBERT_NEO4J_PAGECACHE:-256m}
+    volumes:
+      - albert-neo4j:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
   migrate:
     build: *albert-build
     environment: &albert-env
@@ -45,6 +62,8 @@ services:
       ALBERT_EMBEDDING_REQUEST_DIMENSIONS: ${ALBERT_EMBEDDING_REQUEST_DIMENSIONS:-false}
       ALBERT_GRAPH_STORE: ${ALBERT_GRAPH_STORE:-postgres}
       ALBERT_FALKORDB_URL: ${ALBERT_FALKORDB_URL:-redis://falkordb:6379}
+      ALBERT_NEO4J_URL: ${ALBERT_NEO4J_URL:-bolt://neo4j:7687}
+      ALBERT_NEO4J_PASSWORD: ${ALBERT_NEO4J_PASSWORD:-}
       ALBERT_LLM_PROVIDER: ${ALBERT_LLM_PROVIDER:-none}
       ALBERT_OPENAI_BASE_URL: ${ALBERT_OPENAI_BASE_URL:-https://api.openai.com/v1}
       ALBERT_OPENAI_API_KEY: ${ALBERT_OPENAI_API_KEY:-}
@@ -127,5 +146,6 @@ services:
 
 volumes:
   albert-falkordb:
+  albert-neo4j:
   albert-postgres:
   albert-model-cache:
