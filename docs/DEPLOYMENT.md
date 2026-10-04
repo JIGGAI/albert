@@ -118,6 +118,22 @@ for busy installs; error and degraded traces are always kept.
 `ALBERT_TRACE_RETENTION_DAYS` (default `14`) bounds the table; the worker's
 housekeeping pass prunes older traces about once a minute.
 
+## Upgrading to 0.4
+
+1. Back up, then pull and rebuild: `docker compose up -d --build`. Migration
+   `0005` adds the link, recall and statistics tables.
+2. Build links for the memories you already have:
+   `docker compose exec api albert-admin rebuild-links`.
+3. Optional: to build the knowledge graph with a model, set
+   `ALBERT_LLM_PROVIDER`, `ALBERT_OPENAI_API_KEY` and
+   `ALBERT_CLASSIFICATION_MODEL`, restart `api` and `worker`, then re-index:
+   `docker compose exec api albert-admin reindex-memories --all`
+   (add `--workspace NAME` to limit it). Each memory is one model call.
+4. Optional: to move the graph to FalkorDB or Neo4j, follow
+   [graph backends](GRAPH_BACKENDS.md). Existing edges are not migrated.
+
+The console's Explorer is replaced by Map; `/explorer` redirects.
+
 ## Upgrading to 0.3
 
 Migration `0003` moves embeddings from `memories` to a `memory_chunks` table and
