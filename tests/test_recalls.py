@@ -186,3 +186,27 @@ async def test_old_recalls_are_pruned_with_traces(client: httpx.AsyncClient, ide
         )
         assert len(remaining) == 1
         assert remaining[0].recalled_at.replace(tzinfo=UTC) > now - timedelta(days=1)
+
+
+async def test_a_trace_cannot_record_the_same_memory_twice(
+    client: httpx.AsyncClient, identity
+) -> None:  # type: ignore[no-untyped-def]
+    from sqlalchemy.exc import IntegrityError
+
+    _key, organization, _workspace = identity
+    memory_id = await _remember(client, "Neck strips are replaced for every client.")
+    trace_id = uuid4()
+    with SessionLocal() as session:
+        for _ in range(2):
+            session.add(
+                MemoryRecall(
+                    memory_id=UUID(memory_id),
+                    organization_id=organization.id,
+                    trace_id=trace_id,
+                    recalled_at=datetime.now(UTC),
+                    rank=1,
+                    query="strips",
+                )
+            )
+        with pytest.raises(IntegrityError):
+            session.commit()

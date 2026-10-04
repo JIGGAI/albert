@@ -340,6 +340,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
         ) : (
           <div className="map-stage">
             <MapView
+              key={`${organization}|${workspace}`}
               snapshot={visible}
               colorBy={colorBy}
               selectedId={selected}

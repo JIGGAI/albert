@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from albert.clusters import cluster_nodes, name_clusters
 from albert.config import get_settings
@@ -36,6 +36,7 @@ from albert.services import audit
 router = APIRouter(prefix="/v1/console", tags=["console"])
 MAP_NODE_CAP = 3000
 TITLE_LIMIT = 120
+TITLE_SOURCE_CHARACTERS = 400
 CONTENT_LIMIT = 50_000
 RELATED_LIMIT = 40
 RECENT_RECALLS = 10
@@ -51,9 +52,12 @@ def clean_title(subject: str | None, content: str | None) -> str:
     return "Untitled"
 
 
-def _source(memory: Memory, episode: Episode | None) -> dict[str, Any]:
+EpisodeSource = tuple[dict[str, Any] | None, str]  # (extra, source_uri)
+
+
+def _source(memory: Memory, episode: EpisodeSource | None) -> dict[str, Any]:
     """Team, role and source of a memory from its own fields and its episode's."""
-    extra: dict[str, Any] = {**((episode.extra if episode is not None else None) or {})}
+    extra: dict[str, Any] = {**((episode[0] if episode is not None else None) or {})}
     extra.update(memory.metadata_ or {})
     task_ref = memory.task_ref or ""
     role = extra.get("role") or (task_ref[5:] if task_ref.startswith("role:") else None)
@@ -61,19 +65,19 @@ def _source(memory: Memory, episode: Episode | None) -> dict[str, Any]:
     return {
         "team": str(extra.get("team") or memory.project_ref or "") or None,
         "role": str(role) if role else None,
-        "source_uri": (episode.source_uri if episode is not None else "") or None,
+        "source_uri": (episode[1] if episode is not None else "") or None,
         "path": str(path) if path else None,
     }
 
 
-def _episodes(session: Session, memories: list[Memory]) -> dict[UUID, Episode]:
-    ids = {memory.episode_id for memory in memories if memory.episode_id is not None}
-    if not ids:
+def _episodes(session: Session, episode_ids: set[UUID]) -> dict[UUID, EpisodeSource]:
+    """Source fields of episodes, without loading their (possibly very large) content."""
+    if not episode_ids:
         return {}
-    return {
-        episode.id: episode
-        for episode in session.scalars(select(Episode).where(Episode.id.in_(ids)))
-    }
+    rows = session.execute(
+        select(Episode.id, Episode.extra, Episode.source_uri).where(Episode.id.in_(episode_ids))
+    )
+    return {episode_id: (extra, source_uri) for episode_id, extra, source_uri in rows}
 
 
 def _map_version(session: Session, organization_id: UUID) -> str:
@@ -155,24 +159,24 @@ def memory_map(
     scope = [Memory.organization_id == organization_id, Memory.status == "active"]
     if workspace_id is not None:
         scope.append(Memory.workspace_id == workspace_id)
-    memories = list(
-        session.scalars(
-            select(Memory)
-            .where(*scope)
-            .order_by(Memory.created_at.desc(), Memory.id.desc())
-            .limit(limit + 1)
-        )
-    )
-    truncated = len(memories) > limit
-    memories = memories[:limit]
+    # A title needs the subject or the first line, never the whole body.
+    rows = session.execute(
+        select(Memory, func.substr(Memory.content, 1, TITLE_SOURCE_CHARACTERS))
+        .options(defer(Memory.content))
+        .where(*scope)
+        .order_by(Memory.created_at.desc(), Memory.id.desc())
+        .limit(limit + 1)
+    ).all()
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    memories = [memory for memory, _head in rows]
+    heads = {memory.id: head for memory, head in rows}
     present = {memory.id for memory in memories}
-    episodes = _episodes(session, memories)
+    episodes = _episodes(session, {m.episode_id for m in memories if m.episode_id is not None})
     stats = (
         {
             stat.memory_id: stat
-            for stat in session.scalars(
-                select(MemoryStat).where(MemoryStat.organization_id == organization_id)
-            )
+            for stat in session.scalars(select(MemoryStat).where(MemoryStat.memory_id.in_(present)))
         }
         if memories
         else {}
@@ -185,7 +189,11 @@ def memory_map(
                 MemoryLink.target_memory_id,
                 MemoryLink.kind,
                 MemoryLink.weight,
-            ).where(MemoryLink.organization_id == organization_id)
+            ).where(
+                MemoryLink.organization_id == organization_id,
+                MemoryLink.source_memory_id.in_(present),
+                MemoryLink.target_memory_id.in_(present),
+            )
         ).all()
         if memories
         else []
@@ -193,11 +201,10 @@ def memory_map(
     links = [
         {"source": str(source), "target": str(target), "kind": kind, "weight": float(weight)}
         for source, target, kind, weight in link_rows
-        if source in present and target in present
     ]
     links.sort(key=lambda link: (link["kind"], link["source"], link["target"]))
 
-    titles = {str(memory.id): clean_title(memory.subject, memory.content) for memory in memories}
+    titles = {str(memory.id): clean_title(memory.subject, heads[memory.id]) for memory in memories}
     assignment = cluster_nodes(
         list(titles),
         [
@@ -263,7 +270,11 @@ def operator_memory(
         detail={"console": True},
     )
     session.commit()
-    episode = session.get(Episode, memory.episode_id) if memory.episode_id is not None else None
+    episode = (
+        _episodes(session, {memory.episode_id}).get(memory.episode_id)
+        if memory.episode_id is not None
+        else None
+    )
 
     link_rows = session.scalars(
         select(MemoryLink).where(

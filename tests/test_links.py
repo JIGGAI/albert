@@ -111,6 +111,13 @@ async def test_dated_entries_form_a_sequence(client: httpx.AsyncClient) -> None:
     assert len(links) == 1
     assert str(links[0].source_memory_id) == memories[ids[0]]
     assert str(links[0].target_memory_id) == memories[ids[1]]
+    # Editing the earlier entry re-indexes it; the chain to the later one must survive.
+    edited = await client.patch(
+        f"/v1/memories/{memories[ids[0]]}", json={"content": "Friday notes, corrected"}
+    )
+    assert edited.status_code == 200, edited.text
+    drain_jobs()
+    assert len(_links(memories[ids[1]], kind="sequence")) == 1
 
 
 async def test_deleting_a_memory_removes_its_links(client: httpx.AsyncClient) -> None:

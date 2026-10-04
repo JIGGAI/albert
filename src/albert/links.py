@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Float, and_, cast, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
@@ -114,13 +115,22 @@ def drop_links_for_memory(session: Session, memory_id: UUID) -> None:
     ).delete(synchronize_session=False)
 
 
-def refresh_similar_links(session: Session, memory: Memory) -> int:
-    """Replace the memory's `similar` links with its current nearest neighbours."""
-    settings = get_settings()
-    session.query(MemoryLink).filter(*_touching(memory.id, "similar")).delete(
+def drop_similar_links(session: Session, memory_id: UUID) -> None:
+    """Remove a memory's `similar` links; they describe text that has just changed.
+
+    `sequence` and `recalled` links stay: they come from where the memory sits
+    and how it has been used, not from what it currently says.
+    """
+    session.query(MemoryLink).filter(*_touching(memory_id, "similar")).delete(
         synchronize_session=False
     )
     session.flush()
+
+
+def refresh_similar_links(session: Session, memory: Memory) -> int:
+    """Replace the memory's `similar` links with its current nearest neighbours."""
+    settings = get_settings()
+    drop_similar_links(session, memory.id)
     neighbours = nearest_memories(
         session, memory, k=settings.link_neighbors, minimum=settings.link_similarity_min
     )
@@ -268,22 +278,37 @@ RECALL_CURSOR_KEY = "recall_cursor"
 RECALL_PAIR_DEPTH = 5
 
 
-def _read_cursor(session: Session) -> tuple[datetime, UUID] | None:
-    state = session.get(ConsoleState, RECALL_CURSOR_KEY)
-    raw = (state.value or {}).get("cursor") if state is not None else None
+def _lock_cursor(session: Session) -> ConsoleState | None:
+    """The cursor row, locked for this transaction; None when another worker holds it.
+
+    Two workers running housekeeping at once would otherwise read the same
+    cursor and count the same traces twice.
+    """
+    statement = select(ConsoleState).where(ConsoleState.key == RECALL_CURSOR_KEY)
+    if _is_postgres(session):
+        statement = statement.with_for_update(skip_locked=True)
+    state = session.scalar(statement)
+    if state is not None:
+        return state
+    exists = session.scalar(select(ConsoleState.key).where(ConsoleState.key == RECALL_CURSOR_KEY))
+    if exists is not None:
+        return None  # present but locked by another worker
+    try:
+        with session.begin_nested():
+            state = ConsoleState(key=RECALL_CURSOR_KEY, value={})
+            session.add(state)
+            session.flush()
+    except IntegrityError:
+        return None  # another worker created it first and is processing
+    return state
+
+
+def _cursor_of(state: ConsoleState) -> tuple[datetime, UUID] | None:
+    raw = (state.value or {}).get("cursor")
     if not raw:
         return None
     written_at, _, trace_id = str(raw).partition("|")
     return datetime.fromisoformat(written_at), UUID(trace_id)
-
-
-def _write_cursor(session: Session, trace: Trace) -> None:
-    value = {"cursor": f"{trace.written_at.isoformat()}|{trace.id}"}
-    state = session.get(ConsoleState, RECALL_CURSOR_KEY)
-    if state is None:
-        session.add(ConsoleState(key=RECALL_CURSOR_KEY, value=value))
-    else:
-        state.value = value
 
 
 def _record_recall(session: Session, trace: Trace) -> None:
@@ -376,7 +401,11 @@ def process_recall_traces(
     restart never double counts. Traces younger than `settle_seconds` wait for
     the next pass: the trace writer stamps `written_at` just before it commits.
     """
-    cursor = _read_cursor(session)
+    state = _lock_cursor(session)
+    if state is None:
+        session.rollback()
+        return 0
+    cursor = _cursor_of(state)
     statement = select(Trace).where(
         Trace.name.in_(COUNTED_TRACE_NAMES),
         Trace.status.in_(COUNTED_STATUSES),
@@ -394,6 +423,6 @@ def process_recall_traces(
     for trace in traces:
         _record_recall(session, trace)
     if traces:
-        _write_cursor(session, traces[-1])
+        state.value = {"cursor": f"{traces[-1].written_at.isoformat()}|{traces[-1].id}"}
     session.commit()
     return len(traces)

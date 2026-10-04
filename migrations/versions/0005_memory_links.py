@@ -62,6 +62,7 @@ def upgrade() -> None:
         sa.Column("rank", sa.Integer(), nullable=False),
         sa.Column("query", sa.String(500), nullable=False),
         sa.Column("principal_id", sa.Uuid(), nullable=True),
+        sa.UniqueConstraint("trace_id", "memory_id", name="uq_memory_recalls_trace_memory"),
     )
     for name, columns in (
         ("ix_memory_recalls_organization_id", ["organization_id"]),

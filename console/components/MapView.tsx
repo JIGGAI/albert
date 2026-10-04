@@ -41,6 +41,7 @@ interface ChargeForce {
 
 const HULL_PAD = 16;
 const LABEL_ZOOM = 1.7;
+const MAX_LABELS = 160;
 const INK = "232, 237, 244";
 const LINK_RGB: Record<LinkKind, string> = {
   similar: "138, 151, 170",
@@ -353,6 +354,17 @@ export function MapView({
         (highlight?.hits.has(node.id) ? 1e5 : 0) +
         (neighbours.has(node.id) ? 1e4 : 0) +
         node.recalls;
+      const instance = graph.current;
+      if (!instance) return;
+      const corner = instance.screen2GraphCoords(0, 0);
+      const opposite = instance.screen2GraphCoords(size.width, size.height);
+      const margin = 40 / zoom;
+      const view = {
+        left: corner.x - margin,
+        top: corner.y - margin,
+        right: opposite.x + margin,
+        bottom: opposite.y + margin,
+      };
       const candidates = data.nodes
         .filter(
           (node) =>
@@ -361,10 +373,17 @@ export function MapView({
               searchHits.has(node.id) ||
               (zoom >= LABEL_ZOOM && !dimmed(node.id))),
         )
-        .sort((a, b) => priority(b) - priority(a) || a.id.localeCompare(b.id));
-      const size = 11 / zoom;
+        .filter((node) => {
+          // Only titles that can be seen are worth measuring and placing.
+          const x = node.x as number;
+          const y = node.y as number;
+          return x >= view.left && x <= view.right && y >= view.top && y <= view.bottom;
+        })
+        .sort((a, b) => priority(b) - priority(a) || a.id.localeCompare(b.id))
+        .slice(0, MAX_LABELS);
+      const textSize = 11 / zoom;
       const placed: [number, number, number, number][] = [];
-      ctx.font = `${size}px ${canvasFont()}`;
+      ctx.font = `${textSize}px ${canvasFont()}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       for (const node of candidates) {
@@ -372,7 +391,7 @@ export function MapView({
         const width = ctx.measureText(text).width;
         const left = (node.x as number) - width / 2;
         const top = (node.y as number) + radius(node) + 4 / zoom + 2;
-        const box: [number, number, number, number] = [left, top, left + width, top + size * 1.25];
+        const box: [number, number, number, number] = [left, top, left + width, top + textSize * 1.25];
         if (placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) {
           continue;
         }
@@ -386,7 +405,7 @@ export function MapView({
         ctx.fillText(text, node.x as number, top);
       }
     },
-    [data.nodes, selectedId, searchHits, highlight, neighbours, dimmed, radius],
+    [data.nodes, selectedId, searchHits, highlight, neighbours, dimmed, radius, size],
   );
 
   const drawPulses = useCallback(

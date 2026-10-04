@@ -108,7 +108,7 @@ export function ReplayBar({
   const current = loaded?.key === key ? loaded : null;
 
   useEffect(() => {
-    if (!playing || !current) return;
+    if (!playing || !current || mode !== "replay") return;
     const timer = setInterval(() => {
       const from = position.current;
       const to = Math.min(current.end, from + speed * TICK_MS);
@@ -121,7 +121,7 @@ export function ReplayBar({
       if (to >= current.end) setPlaying(false);
     }, TICK_MS);
     return () => clearInterval(timer);
-  }, [playing, speed, current]);
+  }, [playing, speed, current, mode]);
 
   const marks = useMemo(() => {
     if (!current) return [];
@@ -155,7 +155,10 @@ export function ReplayBar({
   return (
     <div className="replay-bar" data-mode={mode}>
       <div className="segmented" role="group" aria-label="Map time">
-        <button type="button" aria-pressed={mode === "live"} onClick={() => onMode("live")}>
+        <button type="button" aria-pressed={mode === "live"} onClick={() => {
+            setPlaying(false);
+            onMode("live");
+          }}>
           Live
         </button>
         <button type="button" aria-pressed={mode === "replay"} onClick={() => onMode("replay")}>

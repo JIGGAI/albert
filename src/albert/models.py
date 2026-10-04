@@ -366,7 +366,10 @@ class MemoryRecall(Base):
     """One memory returned by one counted search. Query text only, never content."""
 
     __tablename__ = "memory_recalls"
-    __table_args__ = (Index("ix_memory_recalls_memory_time", "memory_id", "recalled_at"),)
+    __table_args__ = (
+        UniqueConstraint("trace_id", "memory_id", name="uq_memory_recalls_trace_memory"),
+        Index("ix_memory_recalls_memory_time", "memory_id", "recalled_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     memory_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("memories.id", ondelete="CASCADE"))

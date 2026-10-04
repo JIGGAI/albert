@@ -21,7 +21,7 @@ from albert.classifier import (
 from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph import add_relationship
-from albert.links import drop_links_for_memory, refresh_links_for_memory
+from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
 from albert.models import (
     AuditEvent,
     Episode,
@@ -254,7 +254,7 @@ def update_memory(
         # Old chunks describe text that no longer exists; drop them now rather
         # than serve them from vector search until the worker catches up.
         _drop_chunks(session, memory.id)
-        drop_links_for_memory(session, memory.id)
+        drop_similar_links(session, memory.id)
         memory.embedding_model = None
         # The facts themselves may have changed: close the old edges now and let
         # re-enrichment extract the current ones.
