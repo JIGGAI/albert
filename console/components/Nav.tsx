@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const links = [
   { href: "/", label: "Live" },
-  { href: "/explorer", label: "Explorer" },
+  { href: "/map", label: "Map" },
 ];
 
 export function Nav() {
@@ -24,7 +24,7 @@ export function Nav() {
           </Link>
         );
       })}
-      <div className="foot">Traces hold ids and scores, never memory text.</div>
+      <div className="foot">Traces hold ids and scores, never memory text. Every memory you open here is audited.</div>
     </nav>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { getTrace, shortId } from "@/lib/api";
 import type { TraceDetail } from "@/lib/types";
@@ -8,7 +8,7 @@ import { FusionTable } from "@/components/FusionTable";
 import { SpanDetail } from "@/components/SpanDetail";
 import { StatusPill } from "@/components/StatusPill";
 import { Waterfall } from "@/components/Waterfall";
-import { ExplorerPanel } from "@/components/ExplorerPanel";
+import { MapPanel } from "@/components/MapPanel";
 
 export default function TracePage() {
   const { id } = useParams<{ id: string }>();
@@ -66,7 +66,9 @@ export default function TracePage() {
           <FusionTable spans={trace.spans} />
         </div>
         <div className="replay-right">
-          <ExplorerPanel trace={trace} />
+          <Suspense fallback={null}>
+            <MapPanel trace={trace} />
+          </Suspense>
         </div>
       </div>
     </>
