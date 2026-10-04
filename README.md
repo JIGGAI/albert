@@ -184,13 +184,14 @@ and the fusion math behind the final ranking.
 or is recalled with, gathered into named clusters. Nodes pulse as agents recall
 and store. Click one to read it in full.
 
-**Operations** answers four questions: who is using memory, what does it hold,
-are searches finding things, and is the service healthy.
+**Operations** answers five questions: who is using memory, what does it hold,
+are searches finding things, is the knowledge graph being built, and is the
+service healthy.
 
 ![Retrieval quality: which backend earns the hits, which searches found nothing](docs/images/console-operations.png)
 
-**Backends** shows which graph store and graph builder are in use, proves they
-are reachable and working, and gives the exact steps to switch.
+**Backends** shows which graph store and graph builder are in use, proves the
+store is reachable, and gives the exact steps to switch.
 
 ![Backends: stores and builders with live status and how to turn each on](docs/images/console-backends.png)
 
