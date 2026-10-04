@@ -231,3 +231,45 @@ async def test_stream_releases_its_database_session(identity) -> None:  # type: 
     response = stream(FakeRequest(), auth, FakeSession())  # type: ignore[arg-type]
     await response.body_iterator.aclose()
     assert closed == [True]
+
+
+async def test_organizations_lists_names_and_counts(
+    client: httpx.AsyncClient, console_key: str, identity
+) -> None:  # type: ignore[no-untyped-def]
+    _key, organization, _workspace = identity
+    await client.post("/v1/memories", json={"content": "Counted Service uses Counted Store."})
+    drain_jobs()
+    async with _console_client(console_key) as console:
+        response = await console.get("/v1/console/organizations")
+        assert response.status_code == 200, response.text
+        rows = {row["id"]: row for row in response.json()["items"]}
+    mine = rows[str(organization.id)]
+    assert mine["name"] == organization.name
+    assert mine["memories"] >= 1
+    assert mine["entities"] >= 2
+    assert mine["relationships"] >= 1
+    expected = {"id", "name", "memories", "entities", "relationships"}
+    assert all(expected <= set(row) for row in rows.values())
+
+
+async def test_organizations_requires_console_capability(client: httpx.AsyncClient) -> None:
+    assert (await client.get("/v1/console/organizations")).status_code == 403
+
+
+async def test_graph_snapshot_is_not_served_stale_after_new_data(console_key: str) -> None:
+    """A tenant viewed while empty must show its first memory at once, not after the cache TTL."""
+    from .conftest import create_identity
+
+    key, organization, _workspace = create_identity("Fresh Tenant")
+    org = str(organization.id)
+    async with _console_client(console_key) as console, _console_client(key) as tenant:
+        empty = await console.get("/v1/console/graph", params={"organization_id": org})
+        assert empty.json()["nodes"] == []
+        created = await tenant.post(
+            "/v1/memories", json={"content": "Fresh Service uses Fresh Store."}
+        )
+        assert created.status_code == 201
+        drain_jobs()
+        after = await console.get("/v1/console/graph", params={"organization_id": org})
+    kinds = {node["kind"] for node in after.json()["nodes"]}
+    assert {"memory", "entity"} <= kinds

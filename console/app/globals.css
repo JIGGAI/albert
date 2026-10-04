@@ -215,3 +215,13 @@ table.data .kind { margin-left: 8px; }
 .detail-panel dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0 0; }
 .detail-panel dt { color: var(--muted); }
 .detail-panel dd { margin: 0; overflow-wrap: anywhere; }
+
+.graph-empty { position: absolute; inset: 0; display: grid; align-content: center; justify-items: start; gap: 8px; padding: 0 12%; }
+.graph-empty h2 { font-size: 18px; }
+.graph-empty p { margin: 0; max-width: 62ch; color: var(--fg); }
+.graph-empty p.muted { color: var(--muted); }
+.graph-empty code { background: var(--panel-raised); padding: 1px 5px; border-radius: 4px; }
+.swatch.entity { background: #8a97aa; }
+.swatch.internal { background: var(--internal); }
+.swatch.confidential { background: var(--confidential); }
+.swatch.restricted { background: var(--restricted); }

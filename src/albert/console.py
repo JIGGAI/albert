@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal, engine, get_session
-from albert.models import Entity, Job, Memory, Relationship, Trace
+from albert.models import Entity, Job, Memory, Organization, Relationship, Trace
 from albert.security import AuthContext, authenticate
 from albert.services import audit
 from albert.trace_feed import TraceFeed, parse_event_id, trace_summary
@@ -199,6 +199,19 @@ def _edge(relationship: Relationship) -> dict[str, Any]:
     }
 
 
+def _graph_version(session: Session, organization_id: UUID) -> str:
+    """A cheap fingerprint of everything the graph snapshot is built from."""
+    parts = []
+    for model in (Memory, Entity, Relationship):
+        count, latest = session.execute(
+            select(func.count(model.id), func.max(model.updated_at)).where(
+                model.organization_id == organization_id
+            )
+        ).one()
+        parts.append(f"{count}:{latest}")
+    return "|".join(parts)
+
+
 @router.get("/graph")
 def graph_snapshot(
     organization_id: UUID,
@@ -213,7 +226,11 @@ def graph_snapshot(
     Memory nodes are labelled by type only; subjects and content stay behind the
     audited detail endpoint.
     """
-    key = f"{organization_id}|{workspace_id}|{temporal_as_of}|{limit}"
+    # The tenant's data version is part of the key, so a cached snapshot is only
+    # reused while nothing in that tenant has changed. Without it, a tenant viewed
+    # while empty kept showing empty for the whole TTL after its first memory.
+    version = _graph_version(session, organization_id)
+    key = f"{organization_id}|{workspace_id}|{temporal_as_of}|{limit}|{version}"
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -294,6 +311,42 @@ def graph_snapshot(
     result = {"nodes": nodes, "edges": edges, "truncated": truncated}
     _cache_put(key, result)
     return result
+
+
+@router.get("/organizations")
+def list_organizations(
+    _auth: AuthContext = Depends(_operator),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Every tenant by name with how much it holds, for the console's tenant picker."""
+
+    def counts(model: Any, *conditions: Any) -> dict[UUID, int]:
+        rows = session.execute(
+            select(model.organization_id, func.count(model.id))
+            .where(*conditions)
+            .group_by(model.organization_id)
+        )
+        return {organization_id: int(count) for organization_id, count in rows}
+
+    now = datetime.now(UTC)
+    memories = counts(Memory, Memory.status == "active")
+    entities = counts(Entity)
+    relationships = counts(
+        Relationship,
+        Relationship.valid_from <= now,
+        or_(Relationship.valid_until.is_(None), Relationship.valid_until > now),
+    )
+    items = [
+        {
+            "id": str(organization.id),
+            "name": organization.name,
+            "memories": memories.get(organization.id, 0),
+            "entities": entities.get(organization.id, 0),
+            "relationships": relationships.get(organization.id, 0),
+        }
+        for organization in session.scalars(select(Organization).order_by(Organization.name))
+    ]
+    return {"items": items}
 
 
 @router.get("/overview")

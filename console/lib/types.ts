@@ -67,6 +67,14 @@ export interface GraphSnapshot {
   truncated: boolean;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  memories: number;
+  entities: number;
+  relationships: number;
+}
+
 export interface Overview {
   traces_per_minute: { minute: string; count: number; errors: number; degraded: number }[];
   jobs: Record<string, number>;
