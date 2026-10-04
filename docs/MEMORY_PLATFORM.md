@@ -1,8 +1,21 @@
 # Albert: Independent Agent Memory Platform
 
-Status: architecture and implementation brief  
+Status: **the original design brief, kept as a record.** It was written before
+the code and is no longer the description of the system.  
 Repository: `JIGGAI/albert`  
-Last updated: 2026-10-02
+Brief written: 2026-10-02
+
+> For how Albert works today, read [Architecture](ARCHITECTURE.md) and
+> [Status](STATUS.md). Where this brief disagrees with them or with the code,
+> they are right. The main differences from what was proposed here:
+>
+> | This brief proposed | What was built |
+> |---|---|
+> | Graphiti with FalkorDB or Neo4j as the graph | A `GraphStore` interface with PostgreSQL as the default store and FalkorDB and Neo4j as options. Graphiti is not built. |
+> | Embeddings on the memory row | Per-chunk embeddings in `memory_chunks` |
+> | A delivery plan in phases 0 to 4 | Phases 1 to 3 are implemented; see Status for what remains |
+> | No operator tooling | A flight recorder and a console (Live, Replay, Map, Operations, Backends) |
+> | No links between memories | Derived `similar`, `sequence` and `recalled` links and recall statistics |
 
 ## 1. Executive summary
 

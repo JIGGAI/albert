@@ -2,8 +2,9 @@
 
 ## Ready now
 
-Albert 0.3 is ready for an isolated self-hosted deployment and integration
-testing through REST and MCP.
+Albert 0.4 is ready for an isolated self-hosted deployment and integration
+testing through REST and MCP. [Architecture](ARCHITECTURE.md) describes how it
+is built.
 
 Implemented and tested:
 
@@ -13,7 +14,8 @@ Implemented and tested:
 - Peppered one-way API-key and lock-token storage
 - Canonical episodes and explicit durable memories
 - Asynchronous job worker with retry and stale-job recovery
-- Deterministic classification and optional OpenAI-compatible classification
+- Deterministic classification and optional OpenAI-compatible classification,
+  with model output validated, bounded and never able to fail indexing
 - Dependency-free development embeddings
 - Local sentence-transformer and OpenAI-compatible semantic embedding options
 - Deployment-time provider probes, vector-dimension validation, and reindex tooling
@@ -50,11 +52,16 @@ Implemented and tested:
   Playwright-covered
 - Operations views in the console: agent activity, memory health, retrieval
   quality and service health
+- Backends view in the console: graph stores and builders in use, reachable
+  and working, with the steps to switch
+- Pluggable graph store: PostgreSQL, FalkorDB and Neo4j behind one interface,
+  verified by one contract test suite run against real servers in CI
 - Derived memory links and recall statistics, rebuildable with
   `albert-admin rebuild-links`
 - Workspace, principal, API-key listing, issuance, and revocation commands
-- Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
-  ingestion, deletion, and locks
+- 166 unit and integration tests for retrieval, graph behavior, isolation,
+  sensitivity, ingestion, deletion, locks, links, recall statistics, the
+  recorder and the console API; Playwright coverage of every console screen
 - Integration handbook covering Codex, Claude Desktop/Code, Cursor, OpenClaw,
   direct REST clients, agent instructions, workflows, handoffs, and diagnostics
 
@@ -75,14 +82,26 @@ a compliance-certified public SaaS platform.
 - PostgreSQL is canonical storage.
 - PostgreSQL/pgvector provides vector indexing.
 - Graph storage sits behind a `GraphStore` interface (`ALBERT_GRAPH_STORE`).
-  PostgreSQL (default), FalkorDB and Neo4j stores ship; a Graphiti builder is
-  a planned adapter that will not change REST or MCP contracts. See
+  PostgreSQL (default), FalkorDB and Neo4j stores ship. A Graphiti builder is
+  not built; it is on hold until a self-hosted model is available. See
   [graph backends](GRAPH_BACKENDS.md).
 - The default hashing embedder avoids downloads but is lexical rather than
   semantic. Operators must select `sentence-transformers` or an OpenAI-compatible
   embedding endpoint for semantic retrieval.
 - Model classification is optional; deterministic behavior remains available
   when no external model is configured.
+
+## Known gaps
+
+- The regex graph builder finds little in ordinary prose; a useful graph needs
+  the LLM classifier.
+- Switching graph stores does not migrate existing edges; memories must be
+  re-indexed.
+- FalkorDB and Neo4j writes are not transactional with the memory they came
+  from.
+- The console has no login of its own; access is controlled by the network it
+  is published on.
+- Neo4j is exercised in CI, not yet in a long-running deployment.
 
 ## Work required before untrusted public SaaS operation
 
