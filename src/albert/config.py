@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     embedding_request_dimensions: bool = False
 
     # Where the knowledge graph is stored. See docs/GRAPH_BACKENDS.md.
-    graph_store: Literal["postgres"] = "postgres"
+    graph_store: Literal["postgres", "falkordb"] = "postgres"
+    falkordb_url: str = "redis://localhost:6379"
+    falkordb_graph: str = Field(default="albert", pattern=r"^[A-Za-z0-9_]{1,64}$")
 
     llm_provider: Literal["none", "openai-compatible"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"

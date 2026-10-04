@@ -9,7 +9,7 @@ the baseline every install has; the rest are options on top.
 | Piece | Setting | Status |
 |---|---|---|
 | Store: PostgreSQL | `ALBERT_GRAPH_STORE=postgres` (default) | Available |
-| Store: FalkorDB | `ALBERT_GRAPH_STORE=falkordb` | Planned; refused at startup with an explanation |
+| Store: FalkorDB | `ALBERT_GRAPH_STORE=falkordb` | Available |
 | Store: Neo4j | `ALBERT_GRAPH_STORE=neo4j` | Planned; refused at startup with an explanation |
 | Builder: regex | `ALBERT_LLM_PROVIDER=none` (default) | Available |
 | Builder: LLM classifier | `ALBERT_LLM_PROVIDER=openai-compatible` | Available |
@@ -31,7 +31,7 @@ already uses.
   graphs; measure before relying on it past a few hundred thousand edges.
 - Choose it unless you have a specific reason below.
 
-**FalkorDB** (planned). A Redis-based graph database queried with Cypher.
+**FalkorDB.** A Redis-based graph database queried with Cypher.
 
 - Built for deep multi-hop traversal, with a small memory footprint.
 - The lightest database Graphiti can build on.
@@ -47,6 +47,28 @@ already uses.
 - Choose it when you need that ecosystem or already operate Neo4j.
 - Costs: the heaviest option (a JVM service, typically 1-2 GB of memory or
   more), plus the same loss of transactional writes as FalkorDB.
+
+### Running with FalkorDB
+
+```bash
+# .env
+ALBERT_GRAPH_STORE=falkordb
+
+docker compose --profile falkordb up -d
+```
+
+The `falkordb` service only starts with that profile, so a default install runs
+nothing extra. Albert keeps the whole graph in one FalkorDB graph
+(`ALBERT_FALKORDB_GRAPH`, default `albert`) and filters every query by
+organization and workspace. Point `ALBERT_FALKORDB_URL` at an existing server
+to use one you already run.
+
+Switching stores does not move data. Edges written to PostgreSQL stay there;
+re-index memories (or re-import explicit relationships) to populate the new
+store. Back up the `albert-falkordb` volume alongside the database.
+
+Both stores run the same behavioural tests (`tests/test_graph_contract.py`),
+and CI runs them against a real FalkorDB.
 
 ## Choosing a builder
 
@@ -79,8 +101,9 @@ quality lever: a better store does not help a graph nothing fills.
 
 Every graph read and write goes through the `GraphStore` interface in
 `src/albert/graph_store.py`. The PostgreSQL implementation is
-`PostgresGraphStore` in `src/albert/graph.py`; a test fails if any other module
-reaches for the graph tables directly.
+`PostgresGraphStore` in `src/albert/graph.py` and the FalkorDB one is
+`FalkorDBGraphStore` in `src/albert/graph_falkordb.py`; a test fails if any
+other module reaches for the graph tables directly.
 
 A new store implements these operations:
 
@@ -109,5 +132,6 @@ Rules for a store that is not PostgreSQL:
 
 1. Store interface with PostgreSQL behind it. Done.
 2. An LLM for the classifier. Every builder beyond regex needs one.
-3. FalkorDB store adapter, then Graphiti as a builder on top of it.
-4. Neo4j store adapter when a deployment needs it.
+3. FalkorDB store adapter. Done.
+4. Graphiti as a builder on top of FalkorDB.
+5. Neo4j store adapter when a deployment needs it.

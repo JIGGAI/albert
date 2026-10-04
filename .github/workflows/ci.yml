@@ -25,6 +25,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      falkordb:
+        image: falkordb/falkordb:6.0.1
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +42,10 @@ jobs:
           cache: pip
       - run: pip install --constraint constraints.txt -e '.[dev]'
       - run: ruff check .
-      - run: pytest --cov=albert --cov-report=term-missing
+      - name: Test (the graph store contract also runs against FalkorDB)
+        env:
+          ALBERT_TEST_FALKORDB_URL: redis://127.0.0.1:6379
+        run: pytest --cov=albert --cov-report=term-missing
       - name: Validate Compose configuration
         env:
           ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters

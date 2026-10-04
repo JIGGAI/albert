@@ -205,9 +205,10 @@ GRAPH_STORES: dict[str, GraphStoreOption] = {
         summary="A Redis-based graph database queried with Cypher.",
         choose_when=(
             "Deep multi-hop traversal is a core workload and you want a small footprint "
-            "on a single host. Also the lightest database Graphiti can build on."
+            "on a single host. Also the lightest database Graphiti can build on. "
+            "Graph writes no longer commit with the memory they came from."
         ),
-        available=False,
+        available=True,
     ),
     "neo4j": GraphStoreOption(
         summary="The established graph database: Cypher, graph algorithms, clustering.",
@@ -240,6 +241,13 @@ def get_graph_store() -> GraphStore:
             from albert.graph import PostgresGraphStore
 
             _instances[name] = PostgresGraphStore()
+        elif name == "falkordb":
+            from albert.graph_falkordb import FalkorDBGraphStore
+
+            settings = get_settings()
+            _instances[name] = FalkorDBGraphStore(
+                settings.falkordb_url, graph_name=settings.falkordb_graph
+            )
         else:  # the setting's validator refuses anything not shipped
             raise RuntimeError(f"Graph store {name!r} is not available in this build")
     return _instances[name]
