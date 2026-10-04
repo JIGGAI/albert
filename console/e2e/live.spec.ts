@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("live feed shows a search trace", async ({ page, request }) => {
-  const api = process.env.ALBERT_API_URL ?? "http://127.0.0.1:8080";
+  const api = process.env.ALBERT_API_URL ?? "http://127.0.0.1:18080";
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Live" })).toBeVisible();
   const response = await request.post(`${api}/v1/search`, {

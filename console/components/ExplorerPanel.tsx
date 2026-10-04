@@ -1,32 +1,36 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getGraph, listTraces, shortId } from "@/lib/api";
+import { getGraph, listOrganizations } from "@/lib/api";
 import { EMPTY_HIGHLIGHT, highlightCount, highlightFromTrace } from "@/lib/highlight";
-import type { GraphNode, GraphSnapshot, TraceDetail } from "@/lib/types";
+import type { GraphNode, GraphSnapshot, Organization, TraceDetail } from "@/lib/types";
 import { DetailPanel } from "./DetailPanel";
 import { Graph3D } from "./Graph3D";
 import { TimeSlider } from "./TimeSlider";
 
 const EMPTY: GraphSnapshot = { nodes: [], edges: [], truncated: false };
 
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 export function ExplorerPanel({ trace }: { trace?: TraceDetail }) {
-  const [organizations, setOrganizations] = useState<string[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [organization, setOrganization] = useState<string>(trace?.organization_id ?? "");
   const [snapshot, setSnapshot] = useState<GraphSnapshot>(EMPTY);
+  const [loaded, setLoaded] = useState(false);
   const [asOf, setAsOf] = useState<number | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Tenants are discovered from recent traces; the console has no tenant list of its own.
   useEffect(() => {
-    listTraces({ limit: 200 })
-      .then((page) => {
-        const ids = Array.from(
-          new Set(page.items.map((t) => t.organization_id).filter((id): id is string => !!id)),
-        );
-        setOrganizations(ids);
-        setOrganization((current) => current || ids[0] || "");
+    listOrganizations()
+      .then(({ items }) => {
+        setOrganizations(items);
+        // Default to the tenant with the most in it, so the first view is never
+        // an empty one when something exists to look at.
+        const fullest = [...items].sort((a, b) => b.memories - a.memories)[0];
+        setOrganization((current) => current || fullest?.id || "");
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -41,6 +45,7 @@ export function ExplorerPanel({ trace }: { trace?: TraceDetail }) {
       .then((data) => {
         if (cancelled) return;
         setSnapshot(data);
+        setLoaded(true);
         setError(null);
         if (asOf === null) {
           const starts = data.edges.map((e) => new Date(e.valid_from).getTime());
@@ -56,6 +61,9 @@ export function ExplorerPanel({ trace }: { trace?: TraceDetail }) {
 
   const highlight = useMemo(() => (trace ? highlightFromTrace(trace) : null), [trace]);
   const hits = highlightCount(highlight ?? EMPTY_HIGHLIGHT);
+  const current = organizations.find((o) => o.id === organization);
+  const isEmpty = loaded && snapshot.nodes.length === 0;
+  const rewound = asOf !== null && range !== null && asOf < range.max - 1000;
 
   return (
     <div className="explorer">
@@ -66,19 +74,19 @@ export function ExplorerPanel({ trace }: { trace?: TraceDetail }) {
           onChange={(e) => {
             setOrganization(e.target.value);
             setAsOf(null);
+            setLoaded(false);
+            setSelected(null);
           }}
         >
-          {organization && !organizations.includes(organization) ? (
-            <option value={organization}>{shortId(organization)}</option>
-          ) : null}
-          {organizations.map((id) => (
-            <option key={id} value={id}>
-              tenant {shortId(id)}
+          {organization && !current ? <option value={organization}>selected tenant</option> : null}
+          {organizations.map((o) => (
+            <option key={o.id} value={o.id}>
+              {`${o.name} · ${plural(o.memories, "memory", "memories")}`}
             </option>
           ))}
           {organizations.length === 0 && !organization ? <option value="">no tenants yet</option> : null}
         </select>
-        {range ? (
+        {range && !isEmpty ? (
           <TimeSlider min={range.min} max={range.max} value={asOf ?? range.max} onChange={setAsOf} />
         ) : null}
         <span className="spacer" />
@@ -103,10 +111,55 @@ export function ExplorerPanel({ trace }: { trace?: TraceDetail }) {
             <i className="swatch hit" /> final hits <b data-testid="highlight-hit-count">{hits}</b>
           </span>
         </div>
-      ) : null}
+      ) : (
+        <div className="legend" aria-label="Node colors">
+          <span>
+            <i className="swatch entity" /> entity
+          </span>
+          <span>
+            <i className="swatch internal" /> memory, internal
+          </span>
+          <span>
+            <i className="swatch confidential" /> confidential
+          </span>
+          <span>
+            <i className="swatch restricted" /> restricted
+          </span>
+          {current ? (
+            <span>
+              {plural(current.entities, "entity", "entities")},{" "}
+              {plural(current.relationships, "live edge", "live edges")} in this tenant
+            </span>
+          ) : null}
+        </div>
+      )}
       {error ? <div className="error-box">Graph could not be loaded: {error}</div> : null}
       <div className="graph-frame">
-        <Graph3D snapshot={snapshot} highlight={highlight} onSelect={setSelected} />
+        {isEmpty ? (
+          <div className="graph-empty" data-testid="graph-empty">
+            {rewound && current && current.memories > 0 ? (
+              <>
+                <h2>Nothing existed at this point in time</h2>
+                <p>Move the slider right to see {current.name} as it is now.</p>
+              </>
+            ) : (
+              <>
+                <h2>No memories in {current?.name ?? "this tenant"} yet</h2>
+                <p>
+                  Memories appear here as agents store them with <code>memory_remember</code> or{" "}
+                  <code>memory_ingest</code>. Entities and the edges between them appear once a
+                  memory states a relationship, such as one thing using or owning another.
+                </p>
+                <p className="muted">
+                  The Live screen shows every request as it happens, including ones that stored
+                  nothing.
+                </p>
+              </>
+            )}
+          </div>
+        ) : (
+          <Graph3D snapshot={snapshot} highlight={highlight} onSelect={setSelected} />
+        )}
         <DetailPanel node={selected} onClose={() => setSelected(null)} />
       </div>
     </div>

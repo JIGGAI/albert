@@ -1,4 +1,4 @@
-import type { GraphSnapshot, Overview, TraceDetail, TraceSummary } from "./types";
+import type { GraphSnapshot, Organization, Overview, TraceDetail, TraceSummary } from "./types";
 
 const base = "/api/albert/v1/console";
 
@@ -30,6 +30,7 @@ export const getGraph = (params: {
   limit?: number;
 }) => get<GraphSnapshot>("/graph", params);
 export const getOverview = () => get<Overview>("/overview");
+export const listOrganizations = () => get<{ items: Organization[] }>("/organizations");
 export const getMemory = (id: string) => get<Record<string, unknown>>(`/memories/${id}`);
 export const getEntity = (id: string) => get<Record<string, unknown>>(`/entities/${id}`);
 
