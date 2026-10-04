@@ -155,3 +155,107 @@ export interface Overview {
   traces_dropped: number;
   worker_last_seen: string | null;
 }
+
+export interface AgentActivity {
+  window_hours: number;
+  bucket_hours: number;
+  principals: {
+    id: string;
+    name: string;
+    type: string | null;
+    organization_id: string | null;
+    requests: number;
+    searches: number;
+    stores: number;
+    errors: number;
+    zero_hit_searches: number;
+    avg_hits: number;
+    last_seen: string | null;
+  }[];
+  series: { bucket: string; recalls: number; stores: number; errors: number }[];
+  truncated: boolean;
+}
+
+export interface CountLabel {
+  label: string;
+  count: number;
+}
+
+export interface MemoryHealth {
+  total: number;
+  by_type: CountLabel[];
+  by_sensitivity: CountLabel[];
+  by_workspace: { id: string | null; name: string; count: number }[];
+  never_recalled: number;
+  unindexed: number;
+  unlinked: number;
+  near_duplicate_pairs: number;
+  added: { day: string; count: number }[];
+  top_recalled: { id: string; title: string; recalls: number; last: string | null }[];
+  near_duplicates: {
+    a: { id: string; title: string };
+    b: { id: string; title: string };
+    similarity: number;
+  }[];
+}
+
+export interface ServiceHealth {
+  window_hours: number;
+  endpoints: {
+    kind: "request" | "job";
+    name: string;
+    count: number;
+    errors: number;
+    degraded: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  }[];
+  totals: { requests: number; errors: number; error_rate: number; job_runs: number };
+  jobs: {
+    by_status: Record<string, number>;
+    oldest_pending_seconds: number | null;
+    recent_failures: {
+      id: string;
+      job_type: string;
+      status: string;
+      attempts: number;
+      error: string | null;
+      at: string | null;
+    }[];
+  };
+  traces: { stored: number; dropped: number; retention_days: number; sample_rate: number };
+  worker_last_seen: string | null;
+  database_bytes: number | null;
+  config: {
+    embedding_provider: string;
+    embedding_model: string;
+    classifier: string;
+    classification_model: string | null;
+    graph_store: string;
+  };
+  truncated: boolean;
+}
+
+export interface RetrievalQuality {
+  window_hours: number;
+  searches: number;
+  errors: number;
+  zero_hit: number;
+  zero_hit_rate: number;
+  degraded: number;
+  degraded_rate: number;
+  avg_hits: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  backends: {
+    name: "lexical" | "vector" | "graph";
+    hit_share: number;
+    solo_share: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+    failures: number;
+  }[];
+  zero_hit_queries: { query: string; count: number; last: string | null }[];
+  slowest: { trace_id: string; query: string; duration_ms: number; hits: number; at: string | null }[];
+  truncated: boolean;
+}

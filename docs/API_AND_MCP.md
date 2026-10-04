@@ -83,6 +83,29 @@ Operator endpoints under `/v1/console`, gated by `console.read` (implied by
 - `GET /v1/console/entities/{id}`: audited detail read, description truncated
   to 500 characters
 
+### Operations views
+
+Computed on request from traces, jobs and the link and recall tables. `hours`
+is the window (1 to 720, default 24); at most the newest 20,000 traces in it are
+read (3,000 for retrieval, which reads spans), and `truncated` says when that
+cap was hit.
+
+- `GET /v1/console/ops/agents?organization_id=…&hours=…`: per principal,
+  searches, searches that found nothing, average hits, stores, failures and
+  last seen; plus recalls and stores per hour (per day past 48 hours)
+- `GET /v1/console/ops/memory?organization_id=…&workspace_id=…`: totals by
+  type, sensitivity and workspace; never recalled, unlinked, unindexed and
+  near-duplicate counts; memories added per day; most recalled and
+  near-duplicate pairs with titles (audited)
+- `GET /v1/console/ops/retrieval?organization_id=…&hours=…`: zero-hit and
+  degraded rates, hits per search, latency percentiles, each backend's share of
+  final hits and the share only it found, searches that found nothing, slowest
+  searches
+- `GET /v1/console/ops/service?hours=…`: count, failures and latency
+  percentiles per endpoint and job type, the job queue and recent job failures
+  (error type only), trace storage, worker last run, database size and the
+  active providers
+
 ### Memory links
 
 Links between memories are derived data, rebuildable with
