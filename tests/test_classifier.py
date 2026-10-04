@@ -113,3 +113,72 @@ def test_model_classifier_parses_typed_graph_output(monkeypatch) -> None:  # typ
     assert result.memory_type == "decision"
     assert result.relationships[0].relation_type == "uses"
     assert result.relationships[0].target.entity_type == "database"
+
+
+def _model_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        llm_provider="openai-compatible",
+        openai_base_url="https://provider.example/v1",
+        openai_api_key=SecretStr("test-secret"),
+        classification_model="classifier-model",
+    )
+
+
+def test_model_prompt_lists_the_allowed_types_and_sensitivities(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(classifier, "get_settings", _model_settings)
+    sent: dict = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": '{"memory_type":"fact"}'}}]}
+
+    def post(_url: str, **kwargs):  # type: ignore[no-untyped-def]
+        sent.update(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr(classifier.httpx, "post", post)
+    classifier.classify("Albert uses PostgreSQL.")
+    system = sent["messages"][0]["content"]
+    for allowed in (*classifier.MEMORY_TYPES, *classifier.SENSITIVITIES):
+        assert allowed in system
+
+
+def test_model_output_outside_the_vocabulary_is_coerced_not_fatal() -> None:
+    result = classifier._parse_model_classification(
+        {
+            "memory_type": "Policy",
+            "sensitivity": "secret-ish",
+            "confidence": "high",
+            "entities": [
+                {"name": "Lead Triage", "entity_type": "process", "confidence": None},
+                "not-an-object",
+                {"name": ""},
+            ],
+            "relationships": [
+                {"source": "Lead Triage", "relation_type": "Runs Every", "target": "Nobody"},
+                None,
+            ],
+        }
+    )
+    # An unusable label must not fail indexing: the memory keeps a safe default.
+    assert result.memory_type == "fact"
+    assert result.sensitivity == "internal"
+    assert result.confidence == 0.7
+    assert [entity.name for entity in result.entities] == ["Lead Triage"]
+    assert result.relationships == []  # an edge to an unknown entity is dropped
+
+
+def test_model_output_is_bounded() -> None:
+    entities = [{"name": f"Entity {i}", "entity_type": "thing"} for i in range(200)]
+    relationships = [
+        {"source": "Entity 0", "relation_type": "links", "target": f"Entity {i}"}
+        for i in range(1, 200)
+    ]
+    result = classifier._parse_model_classification(
+        {"memory_type": "fact", "entities": entities, "relationships": relationships}
+    )
+    assert len(result.entities) == classifier.MAX_ENTITIES
+    assert len(result.relationships) <= classifier.MAX_RELATIONSHIPS
