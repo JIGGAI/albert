@@ -83,6 +83,16 @@ Operator endpoints under `/v1/console`, gated by `console.read` (implied by
 - `GET /v1/console/entities/{id}`: audited detail read, description truncated
   to 500 characters
 
+### Backends
+
+- `GET /v1/console/backends?hours=…`: every graph store and builder with its
+  description, whether it ships in this build and whether it is in use; for
+  the active store a live reachability check, version and entity and edge
+  counts; the embedding setup; and activity in the window (memories indexed,
+  relationships written and superseded, failures, extraction and graph-write
+  latency, graph lookups made by searches). Connection settings are never
+  returned.
+
 ### Operations views
 
 Computed on request from traces, jobs and the link and recall tables. `hours`

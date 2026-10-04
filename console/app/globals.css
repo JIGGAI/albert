@@ -398,3 +398,34 @@ table.data td.graph { color: var(--graph); }
 .config { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .config dt { color: var(--muted); }
 .config dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Backends */
+.backends { gap: 22px; }
+.backends > section { display: flex; flex-direction: column; gap: 10px; }
+.section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.section-head h2 { font-size: 15px; }
+.section-head .spacer { flex: 1; }
+.section-head select { background: var(--panel); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 4px 8px; font: inherit; }
+.backend-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .backend-grid { grid-template-columns: 1fr; } }
+.backend { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.backend.on { border-color: var(--ok); }
+.backend.bad { border-color: var(--error); }
+.backend.off { opacity: 0.75; }
+.backend header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.backend h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.backend p { margin: 0; }
+.backend .when { font-size: 12px; }
+.badge { flex: none; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--muted); }
+.badge.on { color: var(--ok); border-color: var(--ok); }
+.badge.bad { color: var(--error); border-color: var(--error); }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.facts dd.ok { color: var(--ok); }
+.facts dd.bad { color: var(--error); }
+.steps { margin-top: auto; font-size: 12px; }
+.steps summary { cursor: pointer; color: var(--lexical); }
+.steps summary:focus-visible { outline: 2px solid var(--lexical); outline-offset: 2px; }
+.steps ol { margin: 8px 0; padding-left: 18px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.columns i.graph { background: var(--graph); }

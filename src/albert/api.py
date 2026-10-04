@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from albert import __version__
 from albert.config import get_settings
 from albert.console import router as console_router
+from albert.console_backends import router as console_backends_router
 from albert.console_map import router as console_map_router
 from albert.console_ops import router as console_ops_router
 from albert.db import get_session
@@ -92,6 +93,7 @@ app = FastAPI(
 )
 app.add_middleware(RecordingMiddleware)
 app.include_router(console_router)
+app.include_router(console_backends_router)
 app.include_router(console_map_router)
 app.include_router(console_ops_router)
 

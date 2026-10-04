@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -512,3 +512,8 @@ class PostgresGraphStore:
             ).one()
             parts.append(f"{count}:{latest}")
         return "|".join(parts)
+
+    def ping(self, session: Session) -> str:
+        if session.bind is not None and session.bind.dialect.name == "postgresql":
+            return str(session.scalar(text("SHOW server_version")))
+        return f"SQLite {session.scalar(text('SELECT sqlite_version()'))}"

@@ -7,6 +7,7 @@ const links = [
   { href: "/", label: "Live" },
   { href: "/map", label: "Map" },
   { href: "/ops", label: "Operations" },
+  { href: "/backends", label: "Backends" },
 ];
 
 export function Nav() {

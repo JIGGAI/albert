@@ -182,26 +182,37 @@ class GraphStore(Protocol):
         """Changes whenever the organization's graph does; used as a cache key."""
         ...
 
+    def ping(self, session: Session) -> str:
+        """Round-trip to the backend; returns its version. Raises when unreachable."""
+        ...
+
 
 @dataclass(frozen=True)
-class GraphStoreOption:
+class BackendOption:
+    """One selectable backend, described for operators."""
+
+    label: str
     summary: str
     choose_when: str
     available: bool
+    enable: tuple[str, ...] = ()
 
 
-# The catalogue is the single source for docs, health output and the setting's
-# error message. A store is `available` only when its adapter ships in this build.
-GRAPH_STORES: dict[str, GraphStoreOption] = {
-    "postgres": GraphStoreOption(
+# The catalogues are the single source for docs, the console's Backends page and
+# the settings' error messages. `available` means the adapter ships in this build.
+GRAPH_STORES: dict[str, BackendOption] = {
+    "postgres": BackendOption(
+        label="PostgreSQL",
         summary="Entities and edges as tables in Albert's own PostgreSQL database.",
         choose_when=(
-            "The default. One database to run and back up, graph writes commit with the "
-            "memory they came from. Suits lookups of one or two hops."
+            "The default. One database to run and back up, and graph writes commit with "
+            "the memory they came from. Suits lookups of one or two hops."
         ),
         available=True,
+        enable=("Set ALBERT_GRAPH_STORE=postgres in .env (this is the default).",),
     ),
-    "falkordb": GraphStoreOption(
+    "falkordb": BackendOption(
+        label="FalkorDB",
         summary="A Redis-based graph database queried with Cypher.",
         choose_when=(
             "Deep multi-hop traversal is a core workload and you want a small footprint "
@@ -209,14 +220,67 @@ GRAPH_STORES: dict[str, GraphStoreOption] = {
             "Graph writes no longer commit with the memory they came from."
         ),
         available=True,
+        enable=(
+            "Set ALBERT_GRAPH_STORE=falkordb in .env.",
+            "Start it with the others: docker compose --profile falkordb up -d",
+            "Re-index so the new store fills: docker compose exec api albert-admin "
+            "reindex-memories --all",
+        ),
     ),
-    "neo4j": GraphStoreOption(
+    "neo4j": BackendOption(
+        label="Neo4j",
         summary="The established graph database: Cypher, graph algorithms, clustering.",
         choose_when=(
             "You need its ecosystem (graph data science, visual tooling, enterprise "
-            "support) or already operate it. The heaviest option to run."
+            "support) or already operate it. The heaviest option to run: allow it at "
+            "least 1-2 GB of memory."
+        ),
+        available=True,
+        enable=(
+            "Set ALBERT_GRAPH_STORE=neo4j and ALBERT_NEO4J_PASSWORD=<a strong password> in .env.",
+            "Start it with the others: docker compose --profile neo4j up -d",
+            "Re-index so the new store fills: docker compose exec api albert-admin "
+            "reindex-memories --all",
+        ),
+    ),
+}
+
+GRAPH_BUILDERS: dict[str, BackendOption] = {
+    "regex": BackendOption(
+        label="Regex",
+        summary='Pattern matching for statements like "A uses B". No model.',
+        choose_when=(
+            "No model is available. Free and deterministic, but finds little in ordinary "
+            "prose; explicit relationships written through the API still work fully."
+        ),
+        available=True,
+        enable=("Set ALBERT_LLM_PROVIDER=none in .env (this is the default).",),
+    ),
+    "llm-classifier": BackendOption(
+        label="LLM classifier",
+        summary="Albert's own extractor, using any OpenAI-compatible model.",
+        choose_when=(
+            "The first step up from regex: typed entities and relationships from every "
+            "memory, written to whichever store is configured. One model call per memory."
+        ),
+        available=True,
+        enable=(
+            "Set ALBERT_LLM_PROVIDER=openai-compatible, ALBERT_OPENAI_API_KEY and "
+            "ALBERT_CLASSIFICATION_MODEL in .env.",
+            "Restart: docker compose up -d api worker",
+            "Re-index existing memories: docker compose exec api albert-admin "
+            "reindex-memories --all",
+        ),
+    ),
+    "graphiti": BackendOption(
+        label="Graphiti",
+        summary="A temporal knowledge-graph framework that tracks facts as they change.",
+        choose_when=(
+            "Facts that change over time are central and plain extraction is not enough. "
+            "Needs FalkorDB or Neo4j and several model calls per memory."
         ),
         available=False,
+        enable=("Not built yet. Planned to run on a self-hosted model.",),
     ),
 }
 
@@ -242,11 +306,22 @@ def get_graph_store() -> GraphStore:
 
             _instances[name] = PostgresGraphStore()
         elif name == "falkordb":
-            from albert.graph_falkordb import FalkorDBGraphStore
+            from albert.graph_cypher import FalkorDBGraphStore
 
             settings = get_settings()
             _instances[name] = FalkorDBGraphStore(
                 settings.falkordb_url, graph_name=settings.falkordb_graph
+            )
+        elif name == "neo4j":
+            from albert.graph_cypher import Neo4jGraphStore
+
+            settings = get_settings()
+            assert settings.neo4j_password is not None  # enforced by Settings
+            _instances[name] = Neo4jGraphStore(
+                settings.neo4j_url,
+                user=settings.neo4j_user,
+                password=settings.neo4j_password.get_secret_value(),
+                database=settings.neo4j_database,
             )
         else:  # the setting's validator refuses anything not shipped
             raise RuntimeError(f"Graph store {name!r} is not available in this build")
