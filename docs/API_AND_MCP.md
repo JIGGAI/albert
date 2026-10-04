@@ -66,12 +66,45 @@ Operator endpoints under `/v1/console`, gated by `console.read` (implied by
 - `GET /v1/console/graph?organization_id=…`: capped graph snapshot (entities,
   memories by type only, edges) at an optional `temporal_as_of`
 - `GET /v1/console/overview`: traces per minute, job counts, writer drops
-- `GET /v1/console/memories/{id}` and `/entities/{id}`: audited detail reads
-  with content truncated to 500 characters
+- `GET /v1/console/workspaces?organization_id=…`: a tenant's workspaces with
+  active-memory counts
+- `GET /v1/console/map?organization_id=…&workspace_id=…&limit=…`: the memory
+  map. `nodes` (id, title, type, team, role, sensitivity, recalls,
+  last_recalled_at, created_at, cluster), `links` (source, target, kind,
+  weight), `clusters` (id, label, size) and `truncated`. Newest memories first;
+  default `ALBERT_MAP_NODE_LIMIT`, maximum 3,000. One audit event per load.
+- `GET /v1/console/memories/{id}`: audited full read for the reading pane.
+  Content up to 50,000 characters with a `truncated` flag, source, team, role,
+  chunk count, `related` memories with link kind and weight, and `recalls`
+  (count, last, the ten most recent with query, rank and trace id)
+- `POST /v1/console/search` `{organization_id, workspace_id?, query, limit}`:
+  operator search across every sensitivity in that scope, returning ranked hits
+  with titles and backends. Audited, and never counted as a recall
+- `GET /v1/console/entities/{id}`: audited detail read, description truncated
+  to 500 characters
+
+### Memory links
+
+Links between memories are derived data, rebuildable with
+`albert-admin rebuild-links`:
+
+| kind | meaning | written |
+|---|---|---|
+| `similar` | nearest neighbours by chunk-embedding cosine similarity in the same workspace | when a memory is indexed (`ALBERT_LINK_NEIGHBORS`, `ALBERT_LINK_SIMILARITY_MIN`) |
+| `sequence` | the previous dated entry (`YYYY-MM-DD` in the file name) from the same source directory | when an episode is indexed |
+| `recalled` | returned together among the top five results of one search; weight is the count | by the worker, from traces |
+
+The worker turns `POST /v1/search` and `POST /v1/context/assemble` traces into
+per-memory recall counts every `ALBERT_HOUSEKEEPING_SECONDS`. Clusters are
+computed per map snapshot from `similar` links and named from the most
+distinctive words in their members' titles.
 
 Every request and worker job is recorded as a trace with ordered spans
 (`auth`, `resolve_scope`, `lexical`, `vector`, `graph`, `fuse`; jobs:
-`classify`, `chunk`, `embed`, `write_edges`). Retrieval spans carry up to 50
+`classify`, `chunk`, `embed`, `write_edges`, `link`). Search and context
+summaries list the final `memory_ids`; memory creation and indexing-job
+summaries list `stored_ids`. Ids only, so the live map can pulse the right
+nodes straight from the event stream. Retrieval spans carry up to 50
 candidates as `{id, kind, score, rank}` and `fuse` carries each final hit's
 per-backend reciprocal-rank contribution.
 

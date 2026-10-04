@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 from albert import __version__
 from albert.config import get_settings
 from albert.console import router as console_router
+from albert.console_map import router as console_map_router
 from albert.db import get_session
 from albert.graph import query_relationships, subgraph
 from albert.models import Entity, Episode, Relationship
 from albert.portability import export_bundle, import_bundle
-from albert.recorder import cap_candidates, current_recorder, span
+from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, span
 from albert.schemas import (
     ContextRequest,
     ContextResponse,
@@ -90,6 +91,16 @@ app = FastAPI(
 )
 app.add_middleware(RecordingMiddleware)
 app.include_router(console_router)
+app.include_router(console_map_router)
+
+
+def _memory_ids(result: SearchResponse) -> list[str]:
+    """Final memory hits in rank order, ids only, for the trace summary."""
+    ids: list[str] = []
+    for hit in result.hits:
+        if hit.memory_id is not None and str(hit.memory_id) not in ids:
+            ids.append(str(hit.memory_id))
+    return ids[:CANDIDATE_LIMIT]
 
 
 def _note(**fields: object) -> None:
@@ -171,7 +182,9 @@ def post_memory(
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
 ):  # type: ignore[no-untyped-def]
-    return create_memory(session, auth, data)
+    memory = create_memory(session, auth, data)
+    _note(stored_ids=[str(memory.id)])
+    return memory
 
 
 @app.get("/v1/memories/{memory_id}", response_model=MemoryRead, tags=["memories"])
@@ -226,7 +239,7 @@ def search_memories(
         request=effective,
         allowed_sensitivities=allowed_sensitivities,
     )
-    _note(hits=len(result.hits), degraded=result.degraded)
+    _note(hits=len(result.hits), degraded=result.degraded, memory_ids=_memory_ids(result))
     audit(
         session,
         auth,
@@ -257,7 +270,7 @@ def assemble_context(
         request=effective,
         allowed_sensitivities=allowed_sensitivities,
     )
-    _note(hits=len(result.hits), degraded=result.degraded)
+    _note(hits=len(result.hits), degraded=result.degraded, memory_ids=_memory_ids(result))
     sections: list[str] = []
     citations: list[dict] = []
     used = 0

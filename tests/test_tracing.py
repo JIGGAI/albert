@@ -84,7 +84,13 @@ async def test_enrichment_job_is_traced(client: httpx.AsyncClient) -> None:
     await client.post("/v1/memories", json={"content": "Job tracer uses Chunker."})
     drain_jobs()
     trace = _latest("enrich_memory")
-    assert [s["name"] for s in trace.spans] == ["classify", "chunk", "embed", "write_edges"]
+    assert [s["name"] for s in trace.spans] == [
+        "classify",
+        "chunk",
+        "embed",
+        "write_edges",
+        "link",
+    ]
     assert trace.kind == "job"
     assert trace.spans[1]["detail"]["chunks"] == 1
     assert trace.spans[3]["detail"]["edges_written"] == 1

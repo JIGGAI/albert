@@ -1,4 +1,13 @@
-import type { GraphSnapshot, Organization, Overview, TraceDetail, TraceSummary } from "./types";
+import type {
+  MapSearchHit,
+  MapSnapshot,
+  MemoryDetail,
+  Organization,
+  Overview,
+  TraceDetail,
+  TraceSummary,
+  Workspace,
+} from "./types";
 
 const base = "/api/albert/v1/console";
 
@@ -23,22 +32,43 @@ async function get<T>(path: string, params?: Params): Promise<T> {
 export const listTraces = (params: Params) =>
   get<{ items: TraceSummary[]; next_cursor: string | null }>("/traces", params);
 export const getTrace = (id: string) => get<TraceDetail>(`/traces/${id}`);
-export const getGraph = (params: {
+export const listWorkspaces = (organization_id: string) =>
+  get<{ items: Workspace[]; unscoped_memories: number }>("/workspaces", { organization_id });
+export const getMap = (params: { organization_id: string; workspace_id?: string; limit?: number }) =>
+  get<MapSnapshot>("/map", params);
+export const getMemory = (id: string) => get<MemoryDetail>(`/memories/${id}`);
+
+export async function searchMap(body: {
   organization_id: string;
   workspace_id?: string;
-  temporal_as_of?: string;
+  query: string;
   limit?: number;
-}) => get<GraphSnapshot>("/graph", params);
+}): Promise<{ hits: MapSearchHit[]; degraded: string[] }> {
+  const response = await fetch(`${base}/search`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) as { hits: MapSearchHit[]; degraded: string[] };
+}
 export const getOverview = () => get<Overview>("/overview");
 export const listOrganizations = () => get<{ items: Organization[] }>("/organizations");
-export const getMemory = (id: string) => get<Record<string, unknown>>(`/memories/${id}`);
-export const getEntity = (id: string) => get<Record<string, unknown>>(`/entities/${id}`);
 
-export function openTraceStream(onEvent: (trace: TraceSummary) => void): () => void {
+export function openTraceStream(
+  onEvent: (trace: TraceSummary) => void,
+  onState?: (open: boolean) => void,
+): () => void {
   const source = new EventSource(`${base}/stream`);
   source.addEventListener("trace", (event) => {
     onEvent(JSON.parse((event as MessageEvent<string>).data) as TraceSummary);
   });
+  // EventSource reconnects by itself; these only report whether it is connected.
+  source.onopen = () => onState?.(true);
+  source.onerror = () => onState?.(false);
   return () => source.close();
 }
 

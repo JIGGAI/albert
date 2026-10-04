@@ -10,7 +10,13 @@ export interface TraceSummary {
   http_status: number | null;
   started_at: string;
   duration_ms: number;
-  summary: Record<string, unknown> & { query?: string; hits?: number; degraded?: string[] };
+  summary: Record<string, unknown> & {
+    query?: string;
+    hits?: number;
+    degraded?: string[];
+    memory_ids?: string[];
+    stored_ids?: string[];
+  };
 }
 
 export interface Span {
@@ -41,30 +47,96 @@ export interface FusedHit {
   backends: string[];
 }
 
-export interface GraphNode {
+export type LinkKind = "similar" | "sequence" | "recalled";
+
+export interface MapNode {
   id: string;
-  kind: "entity" | "memory";
-  label: string;
+  title: string;
   type: string;
-  sensitivity: string | null;
+  team: string | null;
+  role: string | null;
+  sensitivity: string;
   workspace_id: string | null;
+  recalls: number;
+  last_recalled_at: string | null;
+  created_at: string;
+  cluster: number | null;
 }
 
-export interface GraphEdge {
-  id: string;
+export interface MapLink {
   source: string;
   target: string;
-  relation_type: string;
-  sensitivity: string;
-  valid_from: string;
-  valid_until: string | null;
-  source_memory_id: string | null;
+  kind: LinkKind;
+  weight: number;
 }
 
-export interface GraphSnapshot {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+export interface MapCluster {
+  id: number;
+  label: string;
+  size: number;
+}
+
+export interface MapSnapshot {
+  nodes: MapNode[];
+  links: MapLink[];
+  clusters: MapCluster[];
   truncated: boolean;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  memories: number;
+}
+
+export interface RelatedMemory {
+  id: string;
+  title: string;
+  type: string;
+  kind: LinkKind;
+  weight: number;
+  direction: "next" | "previous" | null;
+}
+
+export interface RecallEvent {
+  trace_id: string;
+  at: string;
+  query: string;
+  rank: number;
+  principal_id: string | null;
+}
+
+export interface MemoryDetail {
+  id: string;
+  title: string;
+  subject: string;
+  content: string;
+  truncated: boolean;
+  memory_type: string;
+  sensitivity: string;
+  workspace_id: string | null;
+  organization_id: string;
+  created_at: string;
+  valid_from: string | null;
+  valid_until: string | null;
+  embedding_model: string | null;
+  chunk_count: number;
+  team: string | null;
+  role: string | null;
+  source_uri: string | null;
+  path: string | null;
+  related: RelatedMemory[];
+  recalls: { count: number; last: string | null; recent: RecallEvent[] };
+}
+
+export interface MapSearchHit {
+  id: string;
+  rank: number;
+  title: string;
+  type: string;
+  sensitivity: string;
+  score: number;
+  backends: string[];
 }
 
 export interface Organization {

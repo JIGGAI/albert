@@ -331,3 +331,79 @@ class Trace(Base):
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     spans: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+
+class MemoryLink(Base, TimestampMixin):
+    """A derived connection between two memories; rebuildable from chunks and traces.
+
+    kind `similar` and `recalled` are stored once per pair with the smaller id as
+    the source; `sequence` runs from the earlier entry to the later one.
+    """
+
+    __tablename__ = "memory_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_memory_id", "target_memory_id", "kind", name="uq_memory_links_pair_kind"
+        ),
+        Index("ix_memory_links_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column()
+    source_memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True
+    )
+    target_memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class MemoryRecall(Base):
+    """One memory returned by one counted search. Query text only, never content."""
+
+    __tablename__ = "memory_recalls"
+    __table_args__ = (
+        UniqueConstraint("trace_id", "memory_id", name="uq_memory_recalls_trace_memory"),
+        Index("ix_memory_recalls_memory_time", "memory_id", "recalled_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("memories.id", ondelete="CASCADE"))
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    trace_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    recalled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    query: Mapped[str] = mapped_column(String(500), default="")
+    principal_id: Mapped[uuid.UUID | None] = mapped_column()
+
+
+class MemoryStat(Base):
+    """Running recall totals per memory; the map sizes nodes by this."""
+
+    __tablename__ = "memory_stats"
+
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    recall_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_recalled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ConsoleState(Base):
+    """Small key/value store for derived-data cursors."""
+
+    __tablename__ = "console_state"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

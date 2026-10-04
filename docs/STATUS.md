@@ -44,8 +44,12 @@ Implemented and tested:
 - Flight recorder: every request and worker job traced with retrieval
   candidates and fusion math, off-thread writes, sampling and retention
 - Live trace feed over server-sent events
-- Operator console (Next.js): Live feed, trace Replay, 3D memory Explorer with
-  a time slider and retrieval-path highlighting; Playwright-covered
+- Operator console (Next.js): Live feed, trace Replay, and a 2D memory Map with
+  similarity/sequence/recalled-together links, named clusters, live recall and
+  store pulses, replay, operator search and a full-content reading pane;
+  Playwright-covered
+- Derived memory links and recall statistics, rebuildable with
+  `albert-admin rebuild-links`
 - Workspace, principal, API-key listing, issuance, and revocation commands
 - Unit/integration tests for retrieval, graph behavior, isolation, sensitivity,
   ingestion, deletion, and locks

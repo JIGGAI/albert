@@ -13,13 +13,24 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import SessionLocal
-from albert.models import Episode, Job, ResourceLock, Trace, WorkingMemory, utcnow
+from albert.links import process_recall_traces
+from albert.models import (
+    Episode,
+    Job,
+    MemoryRecall,
+    ResourceLock,
+    Trace,
+    WorkingMemory,
+    utcnow,
+)
 from albert.services import enrich_episode, enrich_memory
 from albert.trace_writer import get_trace_writer
 from albert.tracing import traced_job
 
 logger = logging.getLogger("albert.worker")
 _stop = False
+RECALL_BATCH = 500
+RECALL_BATCHES_PER_PASS = 10
 
 
 def _stop_handler(_signum, _frame) -> None:  # type: ignore[no-untyped-def]
@@ -105,7 +116,17 @@ def housekeeping(session: Session) -> None:
     session.query(Trace).filter(Trace.started_at < now - retention).delete(
         synchronize_session=False
     )
+    session.query(MemoryRecall).filter(MemoryRecall.recalled_at < now - retention).delete(
+        synchronize_session=False
+    )
     session.commit()
+    try:
+        for _ in range(RECALL_BATCHES_PER_PASS):
+            if process_recall_traces(session) < RECALL_BATCH:
+                break
+    except Exception:  # derived data; never stop the worker over it
+        session.rollback()
+        logger.exception("recall processing failed")
 
 
 def run() -> None:
@@ -118,7 +139,7 @@ def run() -> None:
     logger.info("Albert worker started", extra={"worker_id": worker_id})
     while not _stop:
         with SessionLocal() as session:
-            if time.monotonic() - last_housekeeping > 60:
+            if time.monotonic() - last_housekeeping > get_settings().housekeeping_seconds:
                 housekeeping(session)
                 last_housekeeping = time.monotonic()
             job = claim_job(session, worker_id)

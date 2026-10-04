@@ -331,5 +331,26 @@ def reindex_memories(
     typer.echo(f"queued {len(selected)} memories for enrichment with {embedder.name}")
 
 
+@app.command("rebuild-links")
+def rebuild_links_command(
+    organization: str | None = typer.Option(None, help="Limit to one organization by name"),
+) -> None:
+    """Recompute the memory map's similarity and sequence links from stored chunks."""
+    from albert.links import rebuild_links
+
+    with SessionLocal() as session:
+        organization_id = None
+        if organization is not None:
+            org = session.scalar(select(Organization).where(Organization.name == organization))
+            if org is None:
+                raise typer.BadParameter("Organization not found")
+            organization_id = org.id
+        result = rebuild_links(session, organization_id)
+        session.commit()
+    typer.echo(
+        f"memories={result['memories']} similar={result['similar']} sequence={result['sequence']}"
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -7,7 +7,7 @@ rm -f "$db"
 export ALBERT_DATABASE_URL="sqlite:///$db.sqlite3"
 export ALBERT_API_KEY_PEPPER=e2e-pepper-that-is-longer-than-thirty-two-characters
 export ALBERT_EMBEDDING_PROVIDER=hashing ALBERT_EMBEDDING_DIMENSIONS=64
-export ALBERT_WORKER_POLL_SECONDS=0.2
+export ALBERT_WORKER_POLL_SECONDS=0.2 ALBERT_HOUSEKEEPING_SECONDS=1
 cd "$root"
 .venv/bin/alembic upgrade head >/dev/null
 key=$(.venv/bin/albert-admin bootstrap --organization E2E --workspace Default | tail -1)

@@ -2,7 +2,7 @@
 
 Everything here is read-only and operator-scoped: it crosses tenants on purpose
 and is gated by the console.read capability. Memory content is returned only by
-the explicit detail endpoints, truncated and audited.
+the explicit detail endpoints, audited (memory detail lives in console_map).
 """
 
 from __future__ import annotations
@@ -393,38 +393,6 @@ def overview(
         "trace_count": int(session.scalar(select(func.count(Trace.id))) or 0),
         "traces_dropped": get_trace_writer().dropped,
         "worker_last_seen": _iso(last_job),
-    }
-
-
-@router.get("/memories/{memory_id}")
-def operator_memory(
-    memory_id: UUID,
-    auth: AuthContext = Depends(_operator),
-    session: Session = Depends(get_session),
-) -> dict[str, Any]:
-    memory = session.get(Memory, memory_id)
-    if memory is None or memory.status == "deleted":
-        raise HTTPException(status_code=404, detail="Memory not found")
-    audit(
-        session,
-        auth,
-        "memory.read",
-        resource_type="memory",
-        resource_id=str(memory.id),
-        detail={"console": True},
-    )
-    session.commit()
-    return {
-        "id": str(memory.id),
-        "subject": memory.subject,
-        "content": memory.content[:500],
-        "memory_type": memory.memory_type,
-        "sensitivity": memory.sensitivity,
-        "workspace_id": _opt(memory.workspace_id),
-        "organization_id": str(memory.organization_id),
-        "valid_from": _iso(memory.valid_from),
-        "valid_until": _iso(memory.valid_until),
-        "embedding_model": memory.embedding_model,
     }
 
 
