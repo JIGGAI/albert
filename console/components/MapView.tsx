@@ -322,7 +322,13 @@ export function MapView({
         points.push([node.x, node.y]);
         groups.set(node.cluster, points);
       }
-      for (const cluster of snapshot.clusters) {
+      // Largest clusters claim their label spot first; a smaller one that would
+      // collide tries below its hull, then goes unlabelled (the chip row lists all).
+      const placed: [number, number, number, number][] = [];
+      const collides = (box: [number, number, number, number]) =>
+        placed.some((p) => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1]);
+      const textSize = 12 / zoom;
+      for (const cluster of [...snapshot.clusters].sort((a, b) => b.size - a.size || a.id - b.id)) {
         const points = groups.get(cluster.id);
         if (!points) continue;
         const color = clusterColor(cluster.id);
@@ -332,13 +338,25 @@ export function MapView({
         ctx.lineWidth = 1 / zoom;
         ctx.strokeStyle = withAlpha(color, highlight ? 0.12 : 0.28);
         ctx.stroke();
-        const top = Math.min(...points.map((p) => p[1])) - HULL_PAD - 5 / zoom;
+        const ys = points.map((p) => p[1]);
         const center = points.reduce((sum, p) => sum + p[0], 0) / points.length;
-        ctx.font = `500 ${12 / zoom}px ${canvasFont()}`;
+        ctx.font = `500 ${textSize}px ${canvasFont()}`;
+        const half = ctx.measureText(cluster.label).width / 2 + 4 / zoom;
+        const above = Math.min(...ys) - HULL_PAD - 5 / zoom;
+        const below = Math.max(...ys) + HULL_PAD + 5 / zoom + textSize;
+        const spot = [above, below].find(
+          (baseline) => !collides([center - half, baseline - textSize * 1.2, center + half, baseline]),
+        );
+        if (spot === undefined) continue;
+        placed.push([center - half, spot - textSize * 1.2, center + half, spot]);
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 3 / zoom;
+        ctx.strokeStyle = "rgba(14, 20, 32, 0.85)";
+        ctx.strokeText(cluster.label, center, spot);
         ctx.fillStyle = withAlpha(color, 0.95);
-        ctx.fillText(cluster.label, center, top);
+        ctx.fillText(cluster.label, center, spot);
       }
     },
     [data.nodes, snapshot.clusters, highlight],

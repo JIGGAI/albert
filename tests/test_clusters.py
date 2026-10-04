@@ -83,3 +83,37 @@ def test_cluster_names_are_unique() -> None:
     titles = {"a": "Payout export", "b": "Payout export", "c": "Payout export"}
     names = name_clusters(titles, {"a": 0, "b": 1, "c": 2})
     assert len(set(names.values())) == 3
+
+
+def test_names_skip_note_prefixes_dates_and_timezones() -> None:
+    titles = {
+        "a": "reference_yot_roster_vs_report_names",
+        "b": "reference yot revenue backfill",
+        "c": "reference_yot_holiday_location_scoping",
+        "d": "Lead Triage Loop - 2026-03-28 03:32 UTC",
+        "e": "Lead Triage Log — 2026-03-27 22:03 UTC",
+        "f": "Lead Triage Execution - 14:32 UTC (Friday, March 27th, 2026)",
+        "g": "Daily Memory - March 28, 2026",
+        "h": "Daily Memory - March 27, 2026",
+        "i": "Daily Log - March 26, 2026",
+    }
+    assignment = {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1, "f": 1, "g": 2, "h": 2, "i": 2}
+    names = name_clusters(titles, assignment)
+    # One strong term beats padding the name with a word few members share.
+    assert names[0] == "YOT"
+    assert names[1] == "Lead Triage"
+    assert names[2] == "Daily Memory"
+
+
+def test_a_shared_subject_word_can_name_a_cluster() -> None:
+    titles = {
+        "a": "Team Memory Policy (File-first)",
+        "b": "Memory Policy — hmx-social-team",
+        "c": "Team Memory Policy (File-first)",
+        "d": "Goals folder — hmx-social-team",
+        "e": "Goals — hmx-marketing-team",
+        "f": "Goals folder — hmx-marketing-team",
+    }
+    names = name_clusters(titles, {"a": 0, "b": 0, "c": 0, "d": 1, "e": 1, "f": 1})
+    assert names[0] == "Memory Policy"
+    assert names[1].startswith("Goals")

@@ -12,6 +12,8 @@ from collections import Counter, defaultdict
 
 MAX_ROUNDS = 20
 NAME_TERMS = 2
+# A second word joins a name only when at least this share of members carry it.
+SECOND_TERM_SHARE = 0.5
 _TERM = re.compile(r"[a-z][a-z0-9'-]*")
 STOP_WORDS = frozenset(
     """
@@ -22,7 +24,12 @@ STOP_WORDS = frozenset(
     out over own per same she should so some such than that the their them then there these
     they this those through to too under until up use used uses using very via was we were
     what when where which while who why will with without would you your
-    new note notes memory memories update updated updates misc general
+    new note notes update updated updates misc general
+    reference project feedback user
+    january february march april may june july august september october november december
+    jan feb mar apr jun jul aug sep sept oct nov dec
+    monday tuesday wednesday thursday friday saturday sunday
+    utc gmt est edt cst cdt mst mdt pst pdt
     """.split()
 )
 
@@ -111,8 +118,12 @@ def name_clusters(titles: dict[str, str], assignment: dict[str, int]) -> dict[in
         )
         ranked = [term for _score, term in scored]
         name = ""
-        # Prefer the two strongest terms; widen only to keep names distinct.
-        for width in range(min(NAME_TERMS, len(ranked)), len(ranked) + 1):
+        # One strong word beats a name padded with a word few members share.
+        start = min(NAME_TERMS, len(ranked))
+        if start == 2 and frequency[cluster][ranked[1]] / sizes[cluster] < SECOND_TERM_SHARE:
+            start = 1
+        # Widen only to keep names distinct.
+        for width in range(start, len(ranked) + 1):
             # Read like the titles do: order the chosen terms by where they usually sit.
             chosen = sorted(
                 ranked[:width],

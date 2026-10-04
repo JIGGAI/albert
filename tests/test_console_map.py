@@ -312,3 +312,17 @@ async def test_map_endpoints_require_console_capability(tenant) -> None:  # type
         assert (
             await client.post("/v1/console/search", json={"organization_id": org, "query": "x"})
         ).status_code == 403
+
+
+def test_clean_title_makes_slugs_readable() -> None:
+    from albert.console_map import clean_title
+
+    assert (
+        clean_title("reference_yot_roster_vs_report_names", "")
+        == "reference yot roster vs report names"
+    )
+    assert clean_title("# Team Memory Policy (File-first)", "") == "Team Memory Policy (File-first)"
+    assert clean_title("snake_case stays when there are spaces", "") == (
+        "snake_case stays when there are spaces"
+    )
+    assert clean_title("", "---\n\n# Real heading\nbody") == "Real heading"
