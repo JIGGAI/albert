@@ -326,3 +326,52 @@ def test_clean_title_makes_slugs_readable() -> None:
         "snake_case stays when there are spaces"
     )
     assert clean_title("", "---\n\n# Real heading\nbody") == "Real heading"
+
+
+async def test_console_search_reports_the_path_it_took(tenant) -> None:  # type: ignore[no-untyped-def]
+    from albert.models import Trace
+
+    key, console_key, organization, _workspace = tenant
+    async with _agent(key) as client:
+        await client.post("/v1/memories", json={"content": "Probe Service uses Probe Store."})
+        await _seed_group(client, "Brand voice", VOICE, 2)
+        drain_jobs()
+    async with _console(console_key) as console:
+        plain = await console.post(
+            "/v1/console/search",
+            json={"organization_id": str(organization.id), "query": "probe store"},
+        )
+        probed = await console.post(
+            "/v1/console/search",
+            json={
+                "organization_id": str(organization.id),
+                "query": "probe store",
+                "include_graph": True,
+            },
+        )
+    assert plain.status_code == 200 and probed.status_code == 200, probed.text
+    # Without the graph leg (what the map uses) only memories come back.
+    assert {hit["kind"] for hit in plain.json()["hits"]} == {"memory"}
+    assert [step["name"] for step in plain.json()["path"]] == ["lexical", "vector", "fuse"]
+
+    body = probed.json()
+    steps = {step["name"]: step for step in body["path"]}
+    assert list(steps) == ["lexical", "vector", "graph", "fuse"]
+    for step in steps.values():
+        assert step["status"] == "ok" and step["duration_ms"] >= 0
+        assert step["started_offset_ms"] >= 0
+    assert steps["lexical"]["candidates"] >= 1 and steps["graph"]["candidates"] >= 1
+    assert steps["fuse"]["candidates"] == len(body["hits"])
+    assert body["duration_ms"] > 0
+    edge = next(hit for hit in body["hits"] if hit["kind"] == "relationship")
+    assert edge["title"] == "Probe Service uses Probe Store" and edge["backends"] == ["graph"]
+    assert edge["memory_id"]
+    memory = next(hit for hit in body["hits"] if hit["kind"] == "memory")
+    assert memory["id"] == memory["memory_id"] and memory["title"]
+    assert [hit["rank"] for hit in body["hits"]] == list(range(1, len(body["hits"]) + 1))
+    # The full step-by-step record can be opened in replay.
+    get_trace_writer().flush()
+    with SessionLocal() as session:
+        trace = session.get(Trace, __import__("uuid").UUID(body["trace_id"]))
+        assert trace is not None and trace.name == "POST /v1/console/search"
+        assert "content" not in str(trace.spans)

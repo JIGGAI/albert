@@ -77,9 +77,13 @@ Operator endpoints under `/v1/console`, gated by `console.read` (implied by
   Content up to 50,000 characters with a `truncated` flag, source, team, role,
   chunk count, `related` memories with link kind and weight, and `recalls`
   (count, last, the ten most recent with query, rank and trace id)
-- `POST /v1/console/search` `{organization_id, workspace_id?, query, limit}`:
-  operator search across every sensitivity in that scope, returning ranked hits
-  with titles and backends. Audited, and never counted as a recall
+- `POST /v1/console/search` `{organization_id, workspace_id?, query, limit,
+  include_graph?}`: operator search across every sensitivity in that scope.
+  Returns ranked hits with titles and backends (memories, plus relationships
+  when `include_graph` is true), the `path` the request took (each retrieval
+  step with its timing, status and candidate count), the total `duration_ms`
+  and the `trace_id` for the full replay. Audited, and never counted as a
+  recall. The console's Retrieval tab uses it for "Try a search"
 - `GET /v1/console/entities/{id}`: audited detail read, description truncated
   to 500 characters
 
