@@ -35,3 +35,11 @@ jobs:
 
       - name: Record digest-qualified image
         run: echo 'ghcr.io/jiggai/albert@${{ steps.build.outputs.digest }}' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Make the public-repository image publicly readable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh api --method PATCH
+          /orgs/JIGGAI/packages/container/albert
+          -f visibility=public
