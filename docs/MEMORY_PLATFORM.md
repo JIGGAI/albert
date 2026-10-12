@@ -11,7 +11,7 @@ Brief written: 2026-10-02
 >
 > | This brief proposed | What was built |
 > |---|---|
-> | Graphiti with FalkorDB or Neo4j as the graph | A `GraphStore` interface with PostgreSQL as the default store and FalkorDB and Neo4j as options. Graphiti is not built. |
+> | Graphiti with FalkorDB or Neo4j as the graph | A `GraphStore` interface with PostgreSQL as the default store and FalkorDB and Neo4j as options; Graphiti now ships as an explicit temporal builder for FalkorDB/Neo4j. |
 > | Embeddings on the memory row | Per-chunk embeddings in `memory_chunks` |
 > | A delivery plan in phases 0 to 4 | Phases 1 to 3 are implemented; see Status for what remains |
 > | No operator tooling | A flight recorder and a console (Live, Replay, Map, Operations, Backends) |

@@ -55,6 +55,38 @@ def test_an_unknown_store_is_refused() -> None:
         Settings(graph_store="oracle")  # type: ignore[arg-type]
 
 
+def test_graph_builder_is_explicit_and_graphiti_fails_closed() -> None:
+    assert Settings().graph_builder == "regex"
+    configured = Settings(
+        graph_builder="llm-classifier",
+        llm_provider="openai-compatible",
+        openai_api_key="test-key",
+        classification_model="test-model",
+    )
+    assert configured.graph_builder == "llm-classifier"
+    with pytest.raises(ValidationError, match="ALBERT_GRAPH_STORE=falkordb or neo4j"):
+        Settings(graph_builder="graphiti")
+    with pytest.raises(ValidationError, match="ALBERT_LLM_PROVIDER=openai-compatible"):
+        Settings(graph_builder="graphiti", graph_store="falkordb")
+    with pytest.raises(ValidationError, match="ALBERT_EMBEDDING_PROVIDER=openai-compatible"):
+        Settings(
+            graph_builder="graphiti",
+            graph_store="falkordb",
+            llm_provider="openai-compatible",
+            openai_api_key="test-key",
+            classification_model="test-model",
+        )
+    graphiti = Settings(
+        graph_builder="graphiti",
+        graph_store="falkordb",
+        llm_provider="openai-compatible",
+        embedding_provider="openai-compatible",
+        openai_api_key="test-key",
+        classification_model="test-model",
+    )
+    assert graphiti.graph_builder == "graphiti"
+
+
 async def test_health_reports_the_graph_store_and_builder(client: httpx.AsyncClient) -> None:
     body = (await client.get("/v1/health/live")).json()
     assert body["graph_store"] == "postgres"

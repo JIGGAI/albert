@@ -115,6 +115,8 @@ def _note(**fields: object) -> None:
 
 @app.get("/v1/health/live", response_model=HealthResponse, tags=["health"])
 def live() -> HealthResponse:
+    from albert.graph_builders import get_graph_builder
+
     settings = get_settings()
     return HealthResponse(
         status="ok",
@@ -126,6 +128,7 @@ def live() -> HealthResponse:
         classifier_provider=settings.llm_provider,
         graph_store=get_graph_store().name,
         graph_builder=settings.graph_builder,
+        graph_builder_version=get_graph_builder().version,
     )
 
 
@@ -135,7 +138,15 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
         session.execute(text("SELECT 1"))
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    from albert.graph_builders import get_graph_builder
+
     settings = get_settings()
+    try:
+        get_graph_store().ping(session)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail=f"Graph backend unavailable ({type(exc).__name__})"
+        ) from exc
     return HealthResponse(
         status="ok",
         database="ok",
@@ -146,6 +157,7 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
         classifier_provider=settings.llm_provider,
         graph_store=get_graph_store().name,
         graph_builder=settings.graph_builder,
+        graph_builder_version=get_graph_builder().version,
     )
 
 

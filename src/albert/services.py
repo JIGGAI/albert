@@ -20,6 +20,7 @@ from albert.classifier import (
 )
 from albert.config import get_settings
 from albert.embeddings import get_embedder
+from albert.graph_builders import BuildRequest, get_graph_builder
 from albert.graph_store import StoredRelationship, get_graph_store
 from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
 from albert.models import (
@@ -714,12 +715,28 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
         **(memory.metadata_ or {}),
         "classification": {
             "provider": get_settings().llm_provider,
+            "graph_builder": get_settings().graph_builder,
             "confidence": result.confidence,
             "suggested_sensitivity": result.sensitivity,
             "original_sensitivity": original_sensitivity,
         },
     }
     now = utcnow()
+    builder = get_graph_builder()
+    built_relationships = builder.build(
+        BuildRequest(
+            memory_id=memory.id,
+            organization_id=memory.organization_id,
+            workspace_id=memory.workspace_id,
+            subject=memory.subject,
+            content=memory.content,
+            occurred_at=memory.valid_from,
+            content_fingerprint=hashlib.sha256(
+                f"{memory.subject}\n{memory.content}".encode()
+            ).hexdigest(),
+        ),
+        result.relationships,
+    )
     with span("write_edges") as edges_span:
         graph = get_graph_store()
         closed = graph.close_memory_edges(
@@ -730,20 +747,29 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
             extracted_only=True,
         )
         written = 0
-        for relationship in result.relationships:
+        for built in built_relationships:
+            if built.close_only:
+                closed += graph.close_external_edges(
+                    session,
+                    organization_id=memory.organization_id,
+                    builder="graphiti",
+                    external_ids=[str(built.metadata["graphiti_edge_id"])],
+                    at=built.valid_until or now,
+                )
+                continue
             _edge, created = graph.add_relationship(
                 session,
                 organization_id=memory.organization_id,
                 workspace_id=memory.workspace_id,
-                extracted=relationship,
+                extracted=built.relationship,
                 source_memory_id=memory.id,
                 sensitivity=memory.sensitivity,
-                valid_from=memory.valid_from,
-                valid_until=memory.valid_until,
-                metadata={"extracted": True},
+                valid_from=built.valid_from,
+                valid_until=built.valid_until or memory.valid_until,
+                metadata={"extracted": True, **built.metadata},
             )
             written += int(created)
-        edges_span.set(edges_closed=closed, edges_written=written)
+        edges_span.set(edges_closed=closed, edges_written=written, builder=builder.name)
     refresh_links_for_memory(session, memory)
 
 
@@ -771,21 +797,55 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     session.add(memory)
     session.flush()
     index_memory_chunks(session, memory)
+    builder = get_graph_builder()
+    built_relationships = builder.build(
+        BuildRequest(
+            memory_id=episode.id,
+            organization_id=episode.organization_id,
+            workspace_id=episode.workspace_id,
+            subject=memory.subject,
+            content=episode.content,
+            occurred_at=episode.occurred_at,
+            content_fingerprint=episode.content_hash,
+        ),
+        result.relationships,
+    )
     with span("write_edges") as edges_span:
+        graph = get_graph_store()
+        closed = 0
         written = 0
-        for relationship in result.relationships:
-            _edge, created = get_graph_store().add_relationship(
+        for built in built_relationships:
+            if built.close_only:
+                closed += graph.close_external_edges(
+                    session,
+                    organization_id=episode.organization_id,
+                    builder="graphiti",
+                    external_ids=[str(built.metadata["graphiti_edge_id"])],
+                    at=built.valid_until or utcnow(),
+                )
+                continue
+            _edge, created = graph.add_relationship(
                 session,
                 organization_id=episode.organization_id,
                 workspace_id=episode.workspace_id,
-                extracted=relationship,
+                extracted=built.relationship,
                 source_memory_id=memory.id,
                 sensitivity=memory.sensitivity,
-                valid_from=episode.occurred_at,
-                metadata={"extracted": True, "episode_id": str(episode.id)},
+                valid_from=built.valid_from,
+                valid_until=built.valid_until,
+                metadata={
+                    "extracted": True,
+                    "episode_id": str(episode.id),
+                    **built.metadata,
+                },
             )
             written += int(created)
-        edges_span.set(edges_closed=0, edges_written=written, memory_id=str(memory.id))
+        edges_span.set(
+            edges_closed=closed,
+            edges_written=written,
+            memory_id=str(memory.id),
+            builder=builder.name,
+        )
     refresh_links_for_memory(session, memory)
     episode.enrichment_status = "complete"
     episode.enrichment_error = None

@@ -349,6 +349,33 @@ class PostgresGraphStore:
         session.flush()
         return closed
 
+    def close_external_edges(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        builder: str,
+        external_ids: list[str],
+        at: datetime,
+    ) -> int:
+        if not external_ids:
+            return 0
+        wanted = set(external_ids)
+        closed = 0
+        edges = session.scalars(
+            select(Relationship).where(
+                Relationship.organization_id == organization_id,
+                Relationship.valid_until.is_(None),
+            )
+        )
+        for edge in edges:
+            metadata = edge.metadata_ or {}
+            if metadata.get("builder") == builder and metadata.get("graphiti_edge_id") in wanted:
+                edge.valid_until = at
+                closed += 1
+        session.flush()
+        return closed
+
     def retarget_memory_edges(
         self,
         session: Session,

@@ -82,8 +82,9 @@ a compliance-certified public SaaS platform.
 - PostgreSQL is canonical storage.
 - PostgreSQL/pgvector provides vector indexing.
 - Graph storage sits behind a `GraphStore` interface (`ALBERT_GRAPH_STORE`).
-  PostgreSQL (default), FalkorDB and Neo4j stores ship. A Graphiti builder is
-  not built; it is on hold until a self-hosted model is available. See
+  PostgreSQL (default), FalkorDB and Neo4j stores ship. The explicit
+  `ALBERT_GRAPH_BUILDER` selects regex, the LLM classifier, or Graphiti temporal
+  extraction over FalkorDB/Neo4j. See
   [graph backends](GRAPH_BACKENDS.md).
 - The default hashing embedder avoids downloads but is lexical rather than
   semantic. Operators must select `sentence-transformers` or an OpenAI-compatible

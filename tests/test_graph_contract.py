@@ -202,6 +202,34 @@ def test_validity_closing_and_time_travel(store, session) -> None:  # type: igno
     )
 
 
+def test_temporal_builder_can_close_a_fact_by_external_id(store, session) -> None:  # type: ignore[no-untyped-def]
+    org, ws = uuid4(), uuid4()
+    _add(
+        store,
+        session,
+        org,
+        ws,
+        _edge("Albert", "runs_on", "FalkorDB"),
+        metadata={
+            "extracted": True,
+            "builder": "graphiti",
+            "graphiti_edge_id": "graphiti-edge-1",
+        },
+    )
+    at = datetime.now(UTC) + timedelta(seconds=1)
+    assert (
+        store.close_external_edges(
+            session,
+            organization_id=org,
+            builder="graphiti",
+            external_ids=["graphiti-edge-1"],
+            at=at,
+        )
+        == 1
+    )
+    assert _query(store, session, org, "FalkorDB", temporal_as_of=at + timedelta(seconds=1)) == []
+
+
 def test_retarget_moves_only_extracted_edges(store, session) -> None:  # type: ignore[no-untyped-def]
     org, ws = uuid4(), uuid4()
     memory = _memory(session, org)

@@ -21,6 +21,7 @@ from albert.config import get_settings
 from albert.console import _operator
 from albert.console_ops import _aware, _traces, percentile
 from albert.db import get_session
+from albert.graph_builders import get_graph_builder
 from albert.graph_store import GRAPH_BUILDERS, GRAPH_STORES, BackendOption, get_graph_store
 from albert.links import COUNTED_TRACE_NAMES
 from albert.models import Memory, MemoryChunk, Trace
@@ -85,7 +86,17 @@ def backends(
         entry = _option(identifier, option, active=identifier == settings.graph_builder)
         entry["model"] = (
             settings.classification_model
-            if entry["active"] and identifier == "llm-classifier"
+            if entry["active"] and identifier in {"llm-classifier", "graphiti"}
+            else None
+        )
+        entry["version"] = get_graph_builder().version if entry["active"] else None
+        entry["status"] = (
+            {
+                "ready": bool(status["reachable"]),
+                "version": get_graph_builder().version,
+                "error": status["error"],
+            }
+            if entry["active"]
             else None
         )
         builders.append(entry)

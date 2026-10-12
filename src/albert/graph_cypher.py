@@ -233,6 +233,34 @@ class CypherGraphStore:
         )
         return int(rows[0][0]) if rows else 0
 
+    def close_external_edges(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        builder: str,
+        external_ids: list[str],
+        at: datetime,
+    ) -> int:
+        if not external_ids:
+            return 0
+        rows = self._run(
+            """
+            MATCH (:Entity)-[r:REL]->(:Entity)
+            WHERE r.organization_id = $org AND r.valid_until IS NULL
+              AND any(external_id IN $external_ids WHERE r.metadata CONTAINS external_id)
+              AND r.metadata CONTAINS $builder_marker
+            SET r.valid_until = $at, r.updated_at = $now
+            RETURN count(r)
+            """,
+            org=str(organization_id),
+            external_ids=external_ids,
+            builder_marker=f'"builder": "{builder}"',
+            at=_epoch(at),
+            now=time.time(),
+        )
+        return int(rows[0][0]) if rows else 0
+
     def retarget_memory_edges(
         self,
         session: Session,
@@ -415,7 +443,10 @@ class CypherGraphStore:
     def counts(self, session: Session, *, when: datetime) -> dict[UUID, tuple[int, int]]:
         entities = {
             org: int(count)
-            for org, count in self._run("MATCH (e:Entity) RETURN e.organization_id, count(e)")
+            for org, count in self._run(
+                "MATCH (e:Entity) WHERE e.organization_id IS NOT NULL "
+                "RETURN e.organization_id, count(e)"
+            )
         }
         edges = {
             org: int(count)

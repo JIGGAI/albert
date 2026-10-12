@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # Where the knowledge graph is stored. See docs/GRAPH_BACKENDS.md.
     graph_store: Literal["postgres", "falkordb", "neo4j"] = "postgres"
+    graph_builder: Literal["regex", "llm-classifier", "graphiti"] | None = None
     falkordb_url: str = "redis://localhost:6379"
     falkordb_graph: str = Field(default="albert", pattern=r"^[A-Za-z0-9_]{1,64}$")
     neo4j_url: str = "bolt://localhost:7687"
@@ -74,11 +75,6 @@ class Settings(BaseSettings):
             )
         return name
 
-    @property
-    def graph_builder(self) -> str:
-        """What turns memory text into entities and edges."""
-        return "regex" if self.llm_provider == "none" else "llm-classifier"
-
     @field_validator("openai_api_key", "classification_model", "neo4j_password", mode="before")
     @classmethod
     def empty_optional_strings(cls, value: object) -> object | None:
@@ -88,6 +84,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider_configuration(self) -> Settings:
+        if self.graph_builder is None:
+            self.graph_builder = "regex" if self.llm_provider == "none" else "llm-classifier"
         if self.graph_store == "neo4j" and self.neo4j_password is None:
             raise ValueError("ALBERT_NEO4J_PASSWORD is required when ALBERT_GRAPH_STORE=neo4j")
         if self.embedding_provider == "openai-compatible" and self.openai_api_key is None:
@@ -100,6 +98,24 @@ class Settings(BaseSettings):
             if self.classification_model is None:
                 raise ValueError(
                     "ALBERT_CLASSIFICATION_MODEL is required for openai-compatible classification"
+                )
+        if self.graph_builder == "llm-classifier" and self.llm_provider != "openai-compatible":
+            raise ValueError(
+                "ALBERT_GRAPH_BUILDER=llm-classifier requires ALBERT_LLM_PROVIDER=openai-compatible"
+            )
+        if self.graph_builder == "graphiti":
+            if self.graph_store not in {"falkordb", "neo4j"}:
+                raise ValueError(
+                    "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_GRAPH_STORE=falkordb or neo4j"
+                )
+            if self.llm_provider != "openai-compatible":
+                raise ValueError(
+                    "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_LLM_PROVIDER=openai-compatible"
+                )
+            if self.embedding_provider != "openai-compatible":
+                raise ValueError(
+                    "ALBERT_GRAPH_BUILDER=graphiti requires "
+                    "ALBERT_EMBEDDING_PROVIDER=openai-compatible"
                 )
         return self
 

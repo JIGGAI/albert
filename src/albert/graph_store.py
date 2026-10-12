@@ -106,6 +106,18 @@ class GraphStore(Protocol):
         """End the validity of a memory's still-open edges at `at`; returns how many."""
         ...
 
+    def close_external_edges(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        builder: str,
+        external_ids: list[str],
+        at: datetime,
+    ) -> int:
+        """End edges superseded by a temporal builder's stable external ids."""
+        ...
+
     def retarget_memory_edges(
         self,
         session: Session,
@@ -279,8 +291,12 @@ GRAPH_BUILDERS: dict[str, BackendOption] = {
             "Facts that change over time are central and plain extraction is not enough. "
             "Needs FalkorDB or Neo4j and several model calls per memory."
         ),
-        available=False,
-        enable=("Not built yet. Planned to run on a self-hosted model.",),
+        available=True,
+        enable=(
+            "Set ALBERT_GRAPH_BUILDER=graphiti with ALBERT_GRAPH_STORE=falkordb or neo4j.",
+            "Configure openai-compatible classification and embedding models.",
+            "Restart api and worker, then run albert-admin reindex-memories --all.",
+        ),
     ),
 }
 
