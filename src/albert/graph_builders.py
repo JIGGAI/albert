@@ -128,6 +128,30 @@ class GraphitiGraphBuilder:
                 accepted by FalkorDB 6.0.1 and keeps index creation idempotent.
                 """
 
+                def clone(self, database: str) -> Any:
+                    """Keep Albert's compatible DDL on request-scoped drivers.
+
+                    Graphiti's Falkor driver constructs the base class here,
+                    which loses this subclass's index implementation. Cache the
+                    scoped driver as well so episode preparation and
+                    ``add_episode`` share one initialized request scope.
+                    """
+                    if database == self._database:
+                        return self
+                    clones = getattr(self, "_albert_scoped_drivers", None)
+                    if clones is None:
+                        clones = {}
+                        self._albert_scoped_drivers = clones
+                    if database not in clones:
+                        clone_database = (
+                            "default_db" if database == self.default_group_id else database
+                        )
+                        clones[database] = type(self)(
+                            falkor_db=self.client,
+                            database=clone_database,
+                        )
+                    return clones[database]
+
                 async def build_indices_and_constraints(
                     self, delete_existing: bool = False
                 ) -> None:
@@ -259,6 +283,9 @@ class GraphitiGraphBuilder:
             await init_task
 
         _, driver, _ = client._resolve_request_scope(group_id)
+        scoped_init_task = getattr(driver, "_init_task", None)
+        if scoped_init_task is not None:
+            await scoped_init_task
         previous = await client.retrieve_episodes(
             request.occurred_at,
             group_ids=[group_id],
@@ -292,18 +319,20 @@ class GraphitiGraphBuilder:
         return previous_ids
 
     @staticmethod
-    async def _settle_background_tasks() -> None:
-        """Cancel and collect orphan tasks before their graph driver is closed."""
-        current = asyncio.current_task()
-        pending = [
+    async def _settle_background_tasks(client: Any) -> None:
+        """Await and retrieve request-scoped driver initialization results."""
+        drivers = getattr(client.driver, "_albert_scoped_drivers", {}).values()
+        tasks = [
             task
-            for task in asyncio.all_tasks()
-            if task is not current and not task.done()
+            for driver in drivers
+            if (task := getattr(driver, "_init_task", None)) is not None
         ]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        if not tasks:
+            return
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def _build(self, request: BuildRequest) -> list[BuiltRelationship]:
         client = self._client()
@@ -362,8 +391,10 @@ class GraphitiGraphBuilder:
                 )
             return built
         finally:
-            await self._settle_background_tasks()
-            await client.close()
+            try:
+                await self._settle_background_tasks(client)
+            finally:
+                await client.close()
 
     def build(
         self, request: BuildRequest, fallback: list[ExtractedRelationship]

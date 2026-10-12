@@ -145,6 +145,23 @@ def test_graphiti_episode_identity_is_stable_for_retries_and_changes_for_edits()
     assert validate_group_id(group_id) is True
 
 
+def test_graphiti_surfaces_scoped_driver_background_failures() -> None:
+    async def verify() -> None:
+        async def fail_initialization() -> None:
+            raise RuntimeError("scoped index initialization failed")
+
+        task = asyncio.create_task(fail_initialization())
+        scoped_driver = SimpleNamespace(_init_task=task)
+        client = SimpleNamespace(
+            driver=SimpleNamespace(_albert_scoped_drivers={"scope": scoped_driver})
+        )
+
+        with pytest.raises(RuntimeError, match="scoped index initialization failed"):
+            await GraphitiGraphBuilder._settle_background_tasks(client)
+
+    asyncio.run(verify())
+
+
 def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:
     if not FALKORDB_URL:
         pytest.skip("ALBERT_TEST_FALKORDB_URL is not set")
@@ -187,7 +204,7 @@ def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:
             assert first_previous == []
             assert retry_previous == []
         finally:
-            await builder._settle_background_tasks()
+            await builder._settle_background_tasks(client)
             await client.close()
 
     asyncio.run(verify())
@@ -253,7 +270,7 @@ def test_graphiti_live_builder_first_write_and_retry() -> None:
             assert stored.uuid == episode_uuid
             assert [episode.uuid for episode in episodes].count(episode_uuid) == 1
         finally:
-            await builder._settle_background_tasks()
+            await builder._settle_background_tasks(client)
             await client.close()
 
     asyncio.run(verify())
