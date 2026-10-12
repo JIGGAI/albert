@@ -227,6 +227,72 @@ class GraphitiGraphBuilder:
 
         return EpisodeType.text
 
+    async def _prepare_episode(
+        self,
+        client: Any,
+        request: BuildRequest,
+        episode_uuid: str,
+        group_id: str,
+    ) -> list[str]:
+        """Upsert Graphiti's deterministic episode and return prior context IDs.
+
+        Graphiti 0.30.2 interprets a supplied ``add_episode`` UUID as an
+        existing-node lookup.  Saving the episode first preserves stable retry
+        identity while using that API as intended.  The new node is excluded
+        from its own temporal context.
+        """
+        from graphiti_core.errors import NodeNotFoundError
+        from graphiti_core.nodes import EpisodicNode
+
+        init_task = getattr(client.driver, "_init_task", None)
+        if init_task is not None:
+            await init_task
+
+        previous = await client.retrieve_episodes(
+            request.occurred_at,
+            group_ids=[group_id],
+            source=self._episode_type(),
+        )
+        previous_ids = [episode.uuid for episode in previous if episode.uuid != episode_uuid]
+        try:
+            episode = await client.nodes.episode.get_by_uuid(episode_uuid)
+        except NodeNotFoundError:
+            episode = EpisodicNode(
+                uuid=episode_uuid,
+                name=request.subject or f"memory-{request.memory_id}",
+                group_id=group_id,
+                labels=[],
+                source=self._episode_type(),
+                content=request.content,
+                source_description="Albert memory",
+                valid_at=request.occurred_at,
+            )
+        else:
+            # Successful processing clears raw content. Restore this revision's
+            # body before a retry so Graphiti reprocesses the same input.
+            episode.name = request.subject or f"memory-{request.memory_id}"
+            episode.group_id = group_id
+            episode.source = self._episode_type()
+            episode.content = request.content
+            episode.source_description = "Albert memory"
+            episode.valid_at = request.occurred_at
+        await client.nodes.episode.save(episode)
+        return previous_ids
+
+    @staticmethod
+    async def _settle_background_tasks() -> None:
+        """Cancel and collect orphan tasks before their graph driver is closed."""
+        current = asyncio.current_task()
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not current and not task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     async def _build(self, request: BuildRequest) -> list[BuiltRelationship]:
         client = self._client()
         try:
@@ -236,14 +302,19 @@ class GraphitiGraphBuilder:
                     f"{request.memory_id}:{request.content_fingerprint}",
                 )
             )
+            group_id = _graphiti_group_id(request.organization_id, request.workspace_id)
+            previous_episode_uuids = await self._prepare_episode(
+                client, request, episode_uuid, group_id
+            )
             result = await client.add_episode(
                 name=request.subject or f"memory-{request.memory_id}",
                 episode_body=request.content,
                 source_description="Albert memory",
                 reference_time=request.occurred_at,
                 source=self._episode_type(),
-                group_id=_graphiti_group_id(request.organization_id, request.workspace_id),
+                group_id=group_id,
                 uuid=episode_uuid,
+                previous_episode_uuids=previous_episode_uuids,
                 custom_extraction_instructions=(
                     "Extract only facts supported by this memory. Do not extract credentials or "
                     "secrets. Preserve changes and contradictions as temporal facts."
@@ -279,6 +350,7 @@ class GraphitiGraphBuilder:
                 )
             return built
         finally:
+            await self._settle_background_tasks()
             await client.close()
 
     def build(
