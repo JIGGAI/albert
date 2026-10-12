@@ -82,6 +82,12 @@ def _entity_type(node: Any) -> str:
     return next((label for label in labels if label != "entity"), "concept")[:100]
 
 
+def _graphiti_group_id(organization_id: UUID, workspace_id: UUID | None) -> str:
+    """Encode Albert's scope using Graphiti's restricted group-id alphabet."""
+    workspace = str(workspace_id) if workspace_id is not None else "global"
+    return f"org_{organization_id}_workspace_{workspace}"
+
+
 class GraphitiGraphBuilder:
     name = "graphiti"
 
@@ -236,7 +242,7 @@ class GraphitiGraphBuilder:
                 source_description="Albert memory",
                 reference_time=request.occurred_at,
                 source=self._episode_type(),
-                group_id=f"{request.organization_id}:{request.workspace_id or '*'}",
+                group_id=_graphiti_group_id(request.organization_id, request.workspace_id),
                 uuid=episode_uuid,
                 custom_extraction_instructions=(
                     "Extract only facts supported by this memory. Do not extract credentials or "

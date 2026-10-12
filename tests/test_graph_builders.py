@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+from graphiti_core.helpers import validate_group_id
+
 from albert.graph_builders import BuildRequest, GraphitiGraphBuilder
 
 
@@ -61,7 +63,9 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     )
 
     assert fake.closed is True
-    assert fake.calls[0]["group_id"] == f"{organization_id}:{workspace_id}"
+    group_id = fake.calls[0]["group_id"]
+    assert group_id == f"org_{organization_id}_workspace_{workspace_id}"
+    assert validate_group_id(group_id) is True
     assert fake.calls[0]["uuid"]
     assert len(built) == 1
     fact = built[0]
@@ -93,4 +97,6 @@ def test_graphiti_episode_identity_is_stable_for_retries_and_changes_for_edits()
     ids = [call["uuid"] for call in fake.calls]
     assert ids[0] == ids[1]
     assert ids[1] != ids[2]
-    assert fake.calls[0]["group_id"].endswith(":*")
+    group_id = fake.calls[0]["group_id"]
+    assert group_id == f"org_{base['organization_id']}_workspace_global"
+    assert validate_group_id(group_id) is True
