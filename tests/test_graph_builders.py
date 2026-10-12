@@ -4,7 +4,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from graphiti_core.errors import NodeNotFoundError
@@ -14,6 +14,10 @@ from albert.config import Settings
 from albert.graph_builders import BuildRequest, GraphitiGraphBuilder
 
 FALKORDB_URL = os.environ.get("ALBERT_TEST_FALKORDB_URL")
+GRAPHITI_API_KEY = os.environ.get("ALBERT_TEST_GRAPHITI_API_KEY")
+GRAPHITI_BASE_URL = os.environ.get("ALBERT_TEST_GRAPHITI_BASE_URL")
+GRAPHITI_CHAT_MODEL = os.environ.get("ALBERT_TEST_GRAPHITI_CHAT_MODEL")
+GRAPHITI_EMBEDDING_MODEL = os.environ.get("ALBERT_TEST_GRAPHITI_EMBEDDING_MODEL")
 
 
 class TestGraphitiBuilder(GraphitiGraphBuilder):
@@ -21,6 +25,17 @@ class TestGraphitiBuilder(GraphitiGraphBuilder):
 
     def _episode_type(self) -> str:
         return "text"
+
+    @staticmethod
+    async def _get_episode(driver, episode_uuid):  # type: ignore[no-untyped-def]
+        try:
+            return driver.episodes[episode_uuid]
+        except KeyError as exc:
+            raise NodeNotFoundError(episode_uuid) from exc
+
+    @staticmethod
+    async def _save_episode(driver, episode):  # type: ignore[no-untyped-def]
+        driver.episodes[episode.uuid] = episode
 
 
 class FakeGraphiti:
@@ -30,11 +45,16 @@ class FakeGraphiti:
         self.closed = False
         self.episodes: dict[str, object] = {}
         self.driver = SimpleNamespace(_init_task=None)
-        self.nodes = SimpleNamespace(episode=FakeEpisodeNodes(self.episodes))
+        self.scoped_driver = SimpleNamespace(episodes=self.episodes)
+        self.retrieve_drivers: list[object] = []
+
+    def _resolve_request_scope(self, group_id):  # type: ignore[no-untyped-def]
+        return group_id, self.scoped_driver, SimpleNamespace(driver=self.scoped_driver)
 
     async def retrieve_episodes(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        del args, kwargs
-        return list(self.episodes.values())
+        del args
+        self.retrieve_drivers.append(kwargs["driver"])
+        return list(kwargs["driver"].episodes.values())
 
     async def add_episode(self, **kwargs):  # type: ignore[no-untyped-def]
         self.calls.append(kwargs)
@@ -58,21 +78,6 @@ class FakeGraphiti:
 
     async def close(self) -> None:
         self.closed = True
-
-
-class FakeEpisodeNodes:
-    def __init__(self, episodes: dict[str, object]) -> None:
-        self.episodes = episodes
-
-    async def get_by_uuid(self, episode_uuid: str) -> object:
-        try:
-            return self.episodes[episode_uuid]
-        except KeyError as exc:
-            raise NodeNotFoundError(episode_uuid) from exc
-
-    async def save(self, episode: object) -> object:
-        self.episodes[episode.uuid] = episode  # type: ignore[attr-defined]
-        return episode
 
 
 def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
@@ -101,6 +106,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     assert validate_group_id(group_id) is True
     assert fake.calls[0]["uuid"]
     assert fake.calls[0]["previous_episode_uuids"] == []
+    assert fake.retrieve_drivers == [fake.scoped_driver]
     assert len(built) == 1
     fact = built[0]
     assert fact.relationship.source.name == "Albert"
@@ -165,18 +171,87 @@ def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:
     episode_uuid = str(uuid4())
     group_id = f"org_{request.organization_id}_workspace_{request.workspace_id}"
     async def verify() -> None:
+        from graphiti_core.nodes import EpisodicNode
+
         client = builder._client()
         try:
             first_previous = await builder._prepare_episode(
                 client, request, episode_uuid, group_id
             )
-            stored = await client.nodes.episode.get_by_uuid(episode_uuid)
+            _, driver, _ = client._resolve_request_scope(group_id)
+            stored = await EpisodicNode.get_by_uuid(driver, episode_uuid)
             retry_previous = await builder._prepare_episode(
                 client, request, episode_uuid, group_id
             )
             assert stored.uuid == episode_uuid
             assert first_previous == []
             assert retry_previous == []
+        finally:
+            await builder._settle_background_tasks()
+            await client.close()
+
+    asyncio.run(verify())
+
+
+def test_graphiti_live_builder_first_write_and_retry() -> None:
+    required = (
+        FALKORDB_URL,
+        GRAPHITI_API_KEY,
+        GRAPHITI_BASE_URL,
+        GRAPHITI_CHAT_MODEL,
+        GRAPHITI_EMBEDDING_MODEL,
+    )
+    if not all(required):
+        pytest.skip("live FalkorDB and Graphiti model test settings are not set")
+    settings = Settings(
+        graph_builder="graphiti",
+        graph_store="falkordb",
+        falkordb_url=FALKORDB_URL,
+        falkordb_graph=f"graphiti_live_build_{uuid4().hex}",
+        llm_provider="openai-compatible",
+        embedding_provider="openai-compatible",
+        openai_base_url=GRAPHITI_BASE_URL,
+        openai_api_key=GRAPHITI_API_KEY,
+        classification_model=GRAPHITI_CHAT_MODEL,
+        embedding_model=GRAPHITI_EMBEDDING_MODEL,
+        embedding_dimensions=int(
+            os.environ.get("ALBERT_TEST_GRAPHITI_EMBEDDING_DIMENSIONS", "384")
+        ),
+    )
+    builder = GraphitiGraphBuilder(settings)
+    request = BuildRequest(
+        memory_id=uuid4(),
+        organization_id=uuid4(),
+        workspace_id=uuid4(),
+        subject="Live first write regression",
+        content="Albert uses FalkorDB for temporal graph memory.",
+        occurred_at=datetime.now(UTC),
+        content_fingerprint="revision-1",
+    )
+
+    builder.build(request, [])
+    builder.build(request, [])
+
+    episode_uuid = str(
+        uuid5(
+            UUID("8663df4a-c54a-42cc-9d4d-f4106379678a"),
+            f"{request.memory_id}:{request.content_fingerprint}",
+        )
+    )
+    group_id = f"org_{request.organization_id}_workspace_{request.workspace_id}"
+
+    async def verify() -> None:
+        from graphiti_core.nodes import EpisodicNode
+
+        client = builder._client()
+        try:
+            _, driver, _ = client._resolve_request_scope(group_id)
+            stored = await EpisodicNode.get_by_uuid(driver, episode_uuid)
+            episodes = await client.retrieve_episodes(
+                datetime.now(UTC), group_ids=[group_id], driver=driver
+            )
+            assert stored.uuid == episode_uuid
+            assert [episode.uuid for episode in episodes].count(episode_uuid) == 1
         finally:
             await builder._settle_background_tasks()
             await client.close()

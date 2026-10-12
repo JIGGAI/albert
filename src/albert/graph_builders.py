@@ -227,6 +227,16 @@ class GraphitiGraphBuilder:
 
         return EpisodeType.text
 
+    @staticmethod
+    async def _get_episode(driver: Any, episode_uuid: str) -> Any:
+        from graphiti_core.nodes import EpisodicNode
+
+        return await EpisodicNode.get_by_uuid(driver, episode_uuid)
+
+    @staticmethod
+    async def _save_episode(driver: Any, episode: Any) -> None:
+        await episode.save(driver)
+
     async def _prepare_episode(
         self,
         client: Any,
@@ -248,14 +258,16 @@ class GraphitiGraphBuilder:
         if init_task is not None:
             await init_task
 
+        _, driver, _ = client._resolve_request_scope(group_id)
         previous = await client.retrieve_episodes(
             request.occurred_at,
             group_ids=[group_id],
             source=self._episode_type(),
+            driver=driver,
         )
         previous_ids = [episode.uuid for episode in previous if episode.uuid != episode_uuid]
         try:
-            episode = await client.nodes.episode.get_by_uuid(episode_uuid)
+            episode = await self._get_episode(driver, episode_uuid)
         except NodeNotFoundError:
             episode = EpisodicNode(
                 uuid=episode_uuid,
@@ -276,7 +288,7 @@ class GraphitiGraphBuilder:
             episode.content = request.content
             episode.source_description = "Albert memory"
             episode.valid_at = request.occurred_at
-        await client.nodes.episode.save(episode)
+        await self._save_episode(driver, episode)
         return previous_ids
 
     @staticmethod
