@@ -158,6 +158,10 @@ class GraphitiGraphBuilder:
                     if delete_existing:
                         raise ValueError("Graphiti index deletion is not supported by Albert")
                     graph = self._get_graph(self._database)
+                    # FalkorDB 6.0.1 returns no rows for exact group_id
+                    # predicates when that property has a range index. Each
+                    # request already uses a group-isolated graph, so leave
+                    # group_id unindexed and preserve correct Graphiti reads.
                     definitions = (
                         (
                             graph.create_node_fulltext_index,
@@ -178,32 +182,34 @@ class GraphitiGraphBuilder:
                         (
                             graph.create_node_range_index,
                             "Entity",
-                            ("uuid", "group_id", "name", "created_at"),
+                            ("uuid",),
                         ),
+                        (graph.create_node_range_index, "Entity", ("name",)),
+                        (graph.create_node_range_index, "Entity", ("created_at",)),
                         (
                             graph.create_node_range_index,
                             "Episodic",
-                            ("uuid", "group_id", "created_at", "valid_at"),
+                            ("uuid",),
                         ),
+                        (graph.create_node_range_index, "Episodic", ("created_at",)),
+                        (graph.create_node_range_index, "Episodic", ("valid_at",)),
                         (graph.create_node_range_index, "Community", ("uuid",)),
-                        (graph.create_node_range_index, "Saga", ("uuid", "group_id", "name")),
+                        (graph.create_node_range_index, "Saga", ("uuid",)),
+                        (graph.create_node_range_index, "Saga", ("name",)),
                         (
                             graph.create_edge_range_index,
                             "RELATES_TO",
-                            (
-                                "uuid",
-                                "group_id",
-                                "name",
-                                "created_at",
-                                "expired_at",
-                                "valid_at",
-                                "invalid_at",
-                            ),
+                            ("uuid",),
                         ),
-                        (graph.create_edge_range_index, "MENTIONS", ("uuid", "group_id")),
+                        (graph.create_edge_range_index, "RELATES_TO", ("name",)),
+                        (graph.create_edge_range_index, "RELATES_TO", ("created_at",)),
+                        (graph.create_edge_range_index, "RELATES_TO", ("expired_at",)),
+                        (graph.create_edge_range_index, "RELATES_TO", ("valid_at",)),
+                        (graph.create_edge_range_index, "RELATES_TO", ("invalid_at",)),
+                        (graph.create_edge_range_index, "MENTIONS", ("uuid",)),
                         (graph.create_edge_range_index, "HAS_MEMBER", ("uuid",)),
-                        (graph.create_edge_range_index, "HAS_EPISODE", ("uuid", "group_id")),
-                        (graph.create_edge_range_index, "NEXT_EPISODE", ("uuid", "group_id")),
+                        (graph.create_edge_range_index, "HAS_EPISODE", ("uuid",)),
+                        (graph.create_edge_range_index, "NEXT_EPISODE", ("uuid",)),
                     )
                     for create, label, properties in definitions:
                         try:

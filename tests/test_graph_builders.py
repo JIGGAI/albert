@@ -200,7 +200,14 @@ def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:
             retry_previous = await builder._prepare_episode(
                 client, request, episode_uuid, group_id
             )
+            episodes = await client.retrieve_episodes(
+                datetime.now(UTC),
+                group_ids=[group_id],
+                source=builder._episode_type(),
+                driver=driver,
+            )
             assert stored.uuid == episode_uuid
+            assert [episode.uuid for episode in episodes] == [episode_uuid]
             assert first_previous == []
             assert retry_previous == []
         finally:
