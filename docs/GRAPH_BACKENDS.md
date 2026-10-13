@@ -11,9 +11,9 @@ the baseline every install has; the rest are options on top.
 | Store: PostgreSQL | `ALBERT_GRAPH_STORE=postgres` (default) | Available |
 | Store: FalkorDB | `ALBERT_GRAPH_STORE=falkordb` | Available |
 | Store: Neo4j | `ALBERT_GRAPH_STORE=neo4j` | Available |
-| Builder: regex | `ALBERT_LLM_PROVIDER=none` (default) | Available |
-| Builder: LLM classifier | `ALBERT_LLM_PROVIDER=openai-compatible` | Available |
-| Builder: Graphiti | not yet a setting | Planned |
+| Builder: regex | `ALBERT_GRAPH_BUILDER=regex` (default without an LLM) | Available |
+| Builder: LLM classifier | `ALBERT_GRAPH_BUILDER=llm-classifier` | Available |
+| Builder: Graphiti | `ALBERT_GRAPH_BUILDER=graphiti` | Available |
 
 `GET /v1/health/live` reports the active `graph_store` and `graph_builder`. The
 console's **Backends** page shows every option, which is in use, whether it is
@@ -111,7 +111,8 @@ quality lever: a better store does not help a graph nothing fills.
 - Choose it as the first step up from regex. See [providers](PROVIDERS.md).
 - Costs: one model call per memory indexed.
 
-**Graphiti** (planned). A temporal knowledge-graph framework.
+**Graphiti.** A temporal knowledge-graph framework, pinned to the audited
+`graphiti-core` version in `constraints.txt`.
 
 - Detects when a new fact contradicts an old one and ends the old fact's
   validity, deduplicates entities, and keeps episode provenance.
@@ -119,6 +120,74 @@ quality lever: a better store does not help a graph nothing fills.
 - Choose it when facts that change over time are central to how agents use
   memory and the classifier's plain extraction is not enough.
 - Costs: several model calls per memory, and a second database.
+
+Graphiti fails closed unless the selected store is FalkorDB or Neo4j and both
+the LLM and embedding providers are `openai-compatible`. It never falls back to
+the classifier or regex builder. Configure it with:
+
+```bash
+ALBERT_GRAPH_BUILDER=graphiti
+ALBERT_GRAPH_STORE=falkordb              # or neo4j
+ALBERT_LLM_PROVIDER=openai-compatible
+ALBERT_EMBEDDING_PROVIDER=openai-compatible
+ALBERT_OPENAI_BASE_URL=https://provider.example/v1
+ALBERT_OPENAI_API_KEY=<secret>
+ALBERT_CLASSIFICATION_MODEL=<chat-model>
+ALBERT_EMBEDDING_MODEL=<embedding-model>
+```
+
+For FalkorDB, Graphiti's private episode graph is stored in
+`<ALBERT_FALKORDB_GRAPH>_graphiti`; resolved facts are copied into Albert's
+normal graph contract, where organization, workspace, sensitivity, provenance,
+and temporal filters remain mandatory. Neo4j uses the configured database but
+separate Graphiti relationship types. Deterministic episode IDs make retries
+idempotent; an edit creates a new temporal episode while Albert closes the old
+memory's current facts immediately. Deletes close all Albert facts.
+
+Run `albert-admin validate-runtime --probe-embedding` before starting API and
+worker processes. It checks the graph store, embedding model, and Graphiti
+indices without printing connection strings or credentials.
+
+Then backfill. `albert-admin reindex-memories --all` queues one enrichment job
+per active memory, and under Graphiti each job is several model calls that the
+worker processes one at a time. On a corpus of any size this is hours of
+model spend, so roll it out one workspace at a time with
+`reindex-memories --all --workspace <name>`, and measure the first workspace before
+queueing the rest.
+
+Allow additional model latency and several calls per memory. Start with at least
+2 GB free memory for FalkorDB or the documented Neo4j allocation and measure on
+the representative corpus. Back up both the primary Albert graph and Graphiti's
+private graph. Restore them from the same backup generation.
+
+What to expect from the facts Graphiti writes:
+
+- **Only the memory being enriched is credited.** An extraction also returns
+  edges Graphiti resolved from earlier episodes. Albert ends the validity of
+  the ones this extraction superseded and otherwise leaves them to the memory
+  that owns them, so a fact never inherits the owner, workspace, or
+  sensitivity of a memory it was not extracted from.
+- **Edges are unscored.** Graphiti does not assign confidence, so every edge it
+  writes carries one placeholder value and ranking among Graphiti edges is not
+  meaningful. Each edge records `confidence_source` in its metadata
+  (`graphiti` or `builder-default`) so a consumer can tell the two apart.
+- **Readiness is reported separately from the store.** The console's
+  **Backends** page probes the builder itself, because a reachable FalkorDB
+  says nothing about whether the model endpoints answer. `GET
+  /v1/health/live` and `/ready` report `graph_builder_version` and
+  `graph_builder_error` from a configuration check only: a model outage is not
+  a reason to take the API out of rotation, since reads and search do not use
+  the builder.
+- **The `graphiti-core` pin is load-bearing.** The adapter depends on
+  internals of the pinned release (its FalkorDB driver's index DDL and
+  request-scoped `clone`, and the request-scope resolution used to persist an
+  episode before extraction). A test asserts that surface is still present, so
+  a version bump fails loudly and the adapter can be re-verified against the
+  new release.
+
+To roll back, set `ALBERT_GRAPH_BUILDER=llm-classifier` (or `regex`), restart API
+and worker, and re-index. Existing Graphiti data can remain for a later rollback
+forward; it is not read by other builders.
 
 ## How a store plugs in
 
@@ -158,4 +227,4 @@ Rules for a store that is not PostgreSQL:
 2. An LLM for the classifier. Every builder beyond regex needs one.
 3. FalkorDB store adapter. Done.
 4. Neo4j store adapter. Done.
-5. Graphiti as a builder, once a self-hosted model is available.
+5. Graphiti temporal builder. Done.

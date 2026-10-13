@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -20,6 +22,7 @@ from albert.classifier import (
 )
 from albert.config import get_settings
 from albert.embeddings import get_embedder
+from albert.graph_builders import BuildRequest, BuiltRelationship, get_graph_builder
 from albert.graph_store import StoredRelationship, get_graph_store
 from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
 from albert.models import (
@@ -700,11 +703,108 @@ def release_lock(
     session.commit()
 
 
+def _release_before_model_calls(session: Session) -> None:
+    """End the read transaction before an enrichment's external model calls.
+
+    Classification and graph extraction can run for minutes.  Holding the
+    enrichment transaction across them keeps a row lock and a pooled
+    connection open for that whole time, and the worker's 15-minute stale-job
+    reaper will requeue the job while the first attempt is still working.  The
+    write phase re-reads the row afterwards, so nothing is lost by releasing
+    it here.
+    """
+    if session.new or session.dirty or session.deleted:
+        raise RuntimeError(
+            "enrichment requires a session with no pending changes; "
+            "commit before calling enrich_memory or enrich_episode"
+        )
+    session.rollback()
+
+
+def _content_fingerprint(subject: str, content: str) -> str:
+    return hashlib.sha256(f"{subject}\n{content}".encode()).hexdigest()
+
+
+def _apply_built_relationships(
+    session: Session,
+    built_relationships: Sequence[BuiltRelationship],
+    *,
+    organization_id: UUID,
+    workspace_id: UUID | None,
+    source_memory_id: UUID,
+    sensitivity: str,
+    fallback_valid_until: datetime | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+    at: datetime,
+) -> tuple[int, int]:
+    """Write the edges a builder owns and close the ones it superseded.
+
+    Returns ``(closed, written)``.  Supersessions are grouped by builder and
+    close time so each distinct group costs one store call instead of one call
+    per edge.
+    """
+    graph = get_graph_store()
+    superseded: dict[tuple[str, datetime], list[str]] = {}
+    written = 0
+    for built in built_relationships:
+        if built.close_only:
+            key = (str(built.metadata.get("builder", "")), built.valid_until or at)
+            superseded.setdefault(key, []).append(str(built.metadata["graphiti_edge_id"]))
+            continue
+        if built.relationship is None:
+            continue
+        _edge, created = graph.add_relationship(
+            session,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            extracted=built.relationship,
+            source_memory_id=source_memory_id,
+            sensitivity=sensitivity,
+            valid_from=built.valid_from,
+            valid_until=built.valid_until or fallback_valid_until,
+            metadata={"extracted": True, **(extra_metadata or {}), **built.metadata},
+        )
+        written += int(created)
+    closed = 0
+    for (builder, close_at), external_ids in superseded.items():
+        closed += graph.close_external_edges(
+            session,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            builder=builder,
+            external_ids=external_ids,
+            at=close_at,
+        )
+    return closed, written
+
+
 def enrich_memory(session: Session, memory_id: UUID) -> None:
+    memory = session.get(Memory, memory_id)
+    if memory is None or memory.status != "active":
+        return
+    request = BuildRequest(
+        memory_id=memory.id,
+        organization_id=memory.organization_id,
+        workspace_id=memory.workspace_id,
+        subject=memory.subject,
+        content=memory.content,
+        occurred_at=memory.valid_from,
+        content_fingerprint=_content_fingerprint(memory.subject, memory.content),
+    )
+    _release_before_model_calls(session)
+
+    result = _classify_traced(f"{request.subject}\n{request.content}")
+    builder = get_graph_builder()
+    built_relationships = builder.build(request, result.relationships)
+
     memory = session.get(Memory, memory_id, with_for_update=True)
     if memory is None or memory.status != "active":
         return
-    result = _classify_traced(f"{memory.subject}\n{memory.content}")
+    if _content_fingerprint(memory.subject, memory.content) != request.content_fingerprint:
+        # The memory was edited while extraction ran, so this result describes a
+        # revision that no longer exists.  update_memory already queued a fresh
+        # enrichment job for the current one.
+        return
     index_memory_chunks(session, memory)
     if memory.memory_type == "fact" and result.memory_type != "fact":
         memory.memory_type = result.memory_type
@@ -714,6 +814,7 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
         **(memory.metadata_ or {}),
         "classification": {
             "provider": get_settings().llm_provider,
+            "graph_builder": get_settings().graph_builder,
             "confidence": result.confidence,
             "suggested_sensitivity": result.sensitivity,
             "original_sensitivity": original_sensitivity,
@@ -721,29 +822,26 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
     }
     now = utcnow()
     with span("write_edges") as edges_span:
-        graph = get_graph_store()
-        closed = graph.close_memory_edges(
+        closed = get_graph_store().close_memory_edges(
             session,
             organization_id=memory.organization_id,
             memory_id=memory.id,
             at=now,
             extracted_only=True,
         )
-        written = 0
-        for relationship in result.relationships:
-            _edge, created = graph.add_relationship(
-                session,
-                organization_id=memory.organization_id,
-                workspace_id=memory.workspace_id,
-                extracted=relationship,
-                source_memory_id=memory.id,
-                sensitivity=memory.sensitivity,
-                valid_from=memory.valid_from,
-                valid_until=memory.valid_until,
-                metadata={"extracted": True},
-            )
-            written += int(created)
-        edges_span.set(edges_closed=closed, edges_written=written)
+        superseded, written = _apply_built_relationships(
+            session,
+            built_relationships,
+            organization_id=memory.organization_id,
+            workspace_id=memory.workspace_id,
+            source_memory_id=memory.id,
+            sensitivity=memory.sensitivity,
+            fallback_valid_until=memory.valid_until,
+            at=now,
+        )
+        edges_span.set(
+            edges_closed=closed + superseded, edges_written=written, builder=builder.name
+        )
     refresh_links_for_memory(session, memory)
 
 
@@ -751,7 +849,27 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     episode = session.get(Episode, episode_id)
     if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
         return
-    result = _classify_traced(episode.content)
+    subject = episode.content.strip().splitlines()[0][:500]
+    request = BuildRequest(
+        memory_id=episode.id,
+        organization_id=episode.organization_id,
+        workspace_id=episode.workspace_id,
+        subject=subject,
+        content=episode.content,
+        occurred_at=episode.occurred_at,
+        content_fingerprint=episode.content_hash,
+    )
+    _release_before_model_calls(session)
+
+    result = _classify_traced(request.content)
+    builder = get_graph_builder()
+    built_relationships = builder.build(request, result.relationships)
+
+    episode = session.get(Episode, episode_id)
+    if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
+        return
+    if episode.content_hash != request.content_fingerprint:
+        return
     memory = Memory(
         episode_id=episode.id,
         organization_id=episode.organization_id,
@@ -760,7 +878,7 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
         task_ref=episode.task_ref,
         run_ref=episode.run_ref,
         owner_principal_id=episode.owner_principal_id,
-        subject=episode.content.strip().splitlines()[0][:500],
+        subject=subject,
         content=episode.content,
         memory_type=result.memory_type,
         sensitivity=_highest_sensitivity(episode.sensitivity, result.sensitivity),
@@ -772,20 +890,22 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     session.flush()
     index_memory_chunks(session, memory)
     with span("write_edges") as edges_span:
-        written = 0
-        for relationship in result.relationships:
-            _edge, created = get_graph_store().add_relationship(
-                session,
-                organization_id=episode.organization_id,
-                workspace_id=episode.workspace_id,
-                extracted=relationship,
-                source_memory_id=memory.id,
-                sensitivity=memory.sensitivity,
-                valid_from=episode.occurred_at,
-                metadata={"extracted": True, "episode_id": str(episode.id)},
-            )
-            written += int(created)
-        edges_span.set(edges_closed=0, edges_written=written, memory_id=str(memory.id))
+        closed, written = _apply_built_relationships(
+            session,
+            built_relationships,
+            organization_id=episode.organization_id,
+            workspace_id=episode.workspace_id,
+            source_memory_id=memory.id,
+            sensitivity=memory.sensitivity,
+            extra_metadata={"episode_id": str(episode.id)},
+            at=utcnow(),
+        )
+        edges_span.set(
+            edges_closed=closed,
+            edges_written=written,
+            memory_id=str(memory.id),
+            builder=builder.name,
+        )
     refresh_links_for_memory(session, memory)
     episode.enrichment_status = "complete"
     episode.enrichment_error = None

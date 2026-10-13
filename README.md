@@ -205,11 +205,12 @@ configuration.
 | Choice | Options | Setting |
 |---|---|---|
 | Embeddings | `hashing` (no download, for development), `sentence-transformers` (local), `openai-compatible` | `ALBERT_EMBEDDING_PROVIDER` |
-| Graph builder | regex (no model), LLM classifier (any OpenAI-compatible model) | `ALBERT_LLM_PROVIDER` |
+| Graph builder | regex, LLM classifier, Graphiti temporal extraction | `ALBERT_GRAPH_BUILDER` |
 | Graph store | PostgreSQL (default), FalkorDB, Neo4j | `ALBERT_GRAPH_STORE` |
 
 All three graph stores pass the same behavioural tests, run in CI against real
-servers. Graphiti as a builder is planned, not built. Details and trade-offs:
+servers. Graphiti requires FalkorDB or Neo4j plus OpenAI-compatible chat and
+embedding models. Details and trade-offs:
 [graph backends](docs/GRAPH_BACKENDS.md) and [providers](docs/PROVIDERS.md).
 
 ---

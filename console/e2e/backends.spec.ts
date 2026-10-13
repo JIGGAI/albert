@@ -22,7 +22,7 @@ test("backends shows what is in use, that it works, and how to switch", async ({
   await expect(page.getByTestId("store-neo4j")).toContainText("available, not in use");
 
   await expect(page.getByTestId("builder-regex")).toContainText("in use");
-  await expect(page.getByTestId("builder-graphiti")).toContainText("not built yet");
+  await expect(page.getByTestId("builder-graphiti")).toContainText("available, not in use");
 
   await page.getByRole("link", { name: "Operations → Graph" }).click();
   await expect(page).toHaveURL(/\/ops\?view=graph/);

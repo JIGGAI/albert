@@ -356,3 +356,5 @@ class HealthResponse(BaseModel):
     classifier_provider: str
     graph_store: str = "postgres"
     graph_builder: str = "regex"
+    graph_builder_version: str = "built-in"
+    graph_builder_error: str | None = None

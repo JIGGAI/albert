@@ -28,6 +28,7 @@ def ensure_schema_ready(engine: Engine) -> None:
             "Database schema is missing; run `alembic upgrade head` before this command"
         )
 
+
 ALL_CAPABILITIES = [
     "memory.read",
     "memory.write",
@@ -259,8 +260,10 @@ def validate_runtime(
         False, "--probe-embedding", help="Load and execute the configured embedding provider"
     ),
 ) -> None:
-    """Validate provider configuration and optionally execute one embedding."""
+    """Validate configured providers and optionally execute one embedding."""
     from albert.config import get_settings
+    from albert.graph_builders import get_graph_builder
+    from albert.graph_store import get_graph_store
 
     settings = get_settings()
     typer.echo(
@@ -268,6 +271,8 @@ def validate_runtime(
         f"dimensions={settings.embedding_dimensions} classifier={settings.llm_provider}"
     )
     with SessionLocal() as session:
+        store_version = get_graph_store().ping(session)
+        typer.echo(f"graph store probe succeeded ({store_version})")
         if session.bind is not None and session.bind.dialect.name == "postgresql":
             vector_type = session.scalar(
                 text(
@@ -297,11 +302,22 @@ def validate_runtime(
                 raise typer.Exit(code=1)
             typer.echo("database vector schema and HNSW index are valid")
     if probe_embedding:
-        embedder = get_embedder()
-        vector = embedder.embed("Albert runtime readiness probe")
+        try:
+            embedder = get_embedder()
+            vector = embedder.embed("Albert runtime readiness probe")
+        except Exception as exc:
+            typer.echo(f"embedding probe failed ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1) from exc
         if len(vector) != settings.embedding_dimensions:
             raise typer.Exit(code=1)
         typer.echo(f"embedding probe succeeded ({len(vector)} dimensions)")
+    if settings.graph_builder == "graphiti":
+        try:
+            builder_version = get_graph_builder().readiness()
+        except Exception as exc:
+            typer.echo(f"graph builder probe failed ({type(exc).__name__})", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(f"graph builder probe succeeded (graphiti-core {builder_version})")
 
 
 @app.command("reindex-memories")

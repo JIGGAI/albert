@@ -51,7 +51,8 @@ async def test_backends_page_reports_stores_builders_and_activity(
     assert builders["regex"]["active"] is True
     assert builders["llm-classifier"]["active"] is False
     assert any("ALBERT_LLM_PROVIDER" in step for step in builders["llm-classifier"]["enable"])
-    assert builders["graphiti"]["available"] is False and builders["graphiti"]["active"] is False
+    assert builders["graphiti"]["available"] is True and builders["graphiti"]["active"] is False
+    assert builders["regex"]["version"] == "built-in"
 
     assert body["vectors"]["provider"] == "hashing" and body["vectors"]["chunks"] >= 1
     assert body["vectors"]["memories_embedded"] <= body["vectors"]["memories_total"]
