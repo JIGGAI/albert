@@ -18,6 +18,7 @@ from albert.graph_builders import (
     BuildRequest,
     GraphitiGraphBuilder,
     _canonicalize_graphiti_edge_entities,
+    _graphiti_prompt_entity_names,
     probe_graph_builder,
     set_graph_builder,
 )
@@ -57,6 +58,13 @@ def test_graphiti_canonicalizes_safe_entity_aliases_before_edge_validation() -> 
     assert result["edges"][0]["target_entity_name"] == "FalkorDB"
     assert result["edges"][1]["source_entity_name"] == "London"
     assert result["edges"][1]["target_entity_name"] == "unknown place"
+
+
+def test_graphiti_reads_resolved_entity_names_from_edge_prompt() -> None:
+    class Message:
+        content = '<ENTITIES>\n[{"name":"Albert"},{"name":"FalkorDB"}]\n</ENTITIES>'
+
+    assert _graphiti_prompt_entity_names([Message()]) == ["Albert", "FalkorDB"]
 
 
 class TestGraphitiBuilder(GraphitiGraphBuilder):
@@ -555,8 +563,7 @@ def test_graphiti_live_builder_first_write_and_retry() -> None:
     asyncio.run(verify())
 
 
-@pytest.mark.anyio
-async def test_graphiti_live_worker_api_relationship_journey() -> None:
+def test_graphiti_live_worker_api_relationship_journey() -> None:
     """Exercise Graphiti through the customer-visible worker and graph API."""
     required = (
         FALKORDB_URL,
@@ -601,92 +608,79 @@ async def test_graphiti_live_worker_api_relationship_journey() -> None:
             and row["target_name"].casefold() == target.casefold()
         ]
 
-    async def query(client: httpx.AsyncClient, text: str, **extra: str) -> list[dict]:
-        response = await client.post("/v1/graph/query", json={"query": text, **extra})
+    def request(method: str, path: str, key: str, **kwargs: object) -> httpx.Response:
+        async def send() -> httpx.Response:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": f"Bearer {key}"},
+            ) as client:
+                return await client.request(method, path, **kwargs)
+
+        return asyncio.run(send())
+
+    def query(key: str, text: str, **extra: str) -> list[dict]:
+        response = request("POST", "/v1/graph/query", key, json={"query": text, **extra})
         assert response.status_code == 200, response.text
         return response.json()
 
     try:
-        async with (
-            httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app),
-                base_url="http://test",
-                headers={"Authorization": f"Bearer {first_key}"},
-            ) as first,
-            httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app),
-                base_url="http://test",
-                headers={"Authorization": f"Bearer {second_key}"},
-            ) as second,
-        ):
-            first_memories: dict[str, str] = {}
-            second_memories: dict[str, str] = {}
-            fixtures = {
-                "uses": "Albert uses FalkorDB for temporal graph memory.",
-                "prefers": "Avery prefers London for the annual planning retreat.",
-            }
-            for relation, content in fixtures.items():
-                for client, memories in (
-                    (first, first_memories),
-                    (second, second_memories),
-                ):
-                    response = await client.post("/v1/memories", json={"content": content})
-                    assert response.status_code == 201, response.text
-                    memories[relation] = response.json()["id"]
-            drain_jobs()
+        first_memories: dict[str, str] = {}
+        second_memories: dict[str, str] = {}
+        fixtures = {
+            "uses": "Albert uses FalkorDB for temporal graph memory.",
+            "prefers": "Avery prefers London for the annual planning retreat.",
+        }
+        for relation, content in fixtures.items():
+            for key, memories in (
+                (first_key, first_memories),
+                (second_key, second_memories),
+            ):
+                response = request("POST", "/v1/memories", key, json={"content": content})
+                assert response.status_code == 201, response.text
+                memories[relation] = response.json()["id"]
+        drain_jobs()
 
-            first_uses = matching(
-                await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
-            )
-            first_prefers = matching(
-                await query(first, "Avery London"), "prefers", "Avery", "London"
-            )
-            second_uses = matching(
-                await query(second, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
-            )
-            second_prefers = matching(
-                await query(second, "Avery London"), "prefers", "Avery", "London"
-            )
-            assert [row["source_memory_id"] for row in first_uses] == [first_memories["uses"]]
-            assert [row["source_memory_id"] for row in first_prefers] == [first_memories["prefers"]]
-            assert [row["source_memory_id"] for row in second_uses] == [second_memories["uses"]]
-            assert [row["source_memory_id"] for row in second_prefers] == [
-                second_memories["prefers"]
-            ]
+        first_uses = matching(query(first_key, "Albert FalkorDB"), "uses", "Albert", "FalkorDB")
+        first_prefers = matching(query(first_key, "Avery London"), "prefers", "Avery", "London")
+        second_uses = matching(query(second_key, "Albert FalkorDB"), "uses", "Albert", "FalkorDB")
+        second_prefers = matching(query(second_key, "Avery London"), "prefers", "Avery", "London")
+        assert [row["source_memory_id"] for row in first_uses] == [first_memories["uses"]]
+        assert [row["source_memory_id"] for row in first_prefers] == [first_memories["prefers"]]
+        assert [row["source_memory_id"] for row in second_uses] == [second_memories["uses"]]
+        assert [row["source_memory_id"] for row in second_prefers] == [second_memories["prefers"]]
 
-            retried = await first.patch(
-                f"/v1/memories/{first_memories['uses']}",
-                json={"content": fixtures["uses"]},
-            )
-            assert retried.status_code == 200, retried.text
-            drain_jobs()
-            retried_uses = matching(
-                await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
-            )
-            assert len(retried_uses) == 1
-            before_change = datetime.now(UTC)
+        retried = request(
+            "PATCH",
+            f"/v1/memories/{first_memories['uses']}",
+            first_key,
+            json={"content": fixtures["uses"]},
+        )
+        assert retried.status_code == 200, retried.text
+        drain_jobs()
+        retried_uses = matching(query(first_key, "Albert FalkorDB"), "uses", "Albert", "FalkorDB")
+        assert len(retried_uses) == 1
+        before_change = datetime.now(UTC)
 
-            changed = await first.patch(
-                f"/v1/memories/{first_memories['uses']}",
-                json={"content": "Albert uses Neo4j for temporal graph memory."},
-            )
-            assert changed.status_code == 200, changed.text
-            drain_jobs()
-            assert (
-                matching(await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB") == []
-            )
-            assert len(matching(await query(first, "Albert Neo4j"), "uses", "Albert", "Neo4j")) == 1
-            historical = await query(
-                first, "Albert FalkorDB", temporal_as_of=before_change.isoformat()
-            )
-            assert len(matching(historical, "uses", "Albert", "FalkorDB")) == 1
+        changed = request(
+            "PATCH",
+            f"/v1/memories/{first_memories['uses']}",
+            first_key,
+            json={"content": "Albert uses Neo4j for temporal graph memory."},
+        )
+        assert changed.status_code == 200, changed.text
+        drain_jobs()
+        assert matching(query(first_key, "Albert FalkorDB"), "uses", "Albert", "FalkorDB") == []
+        assert len(matching(query(first_key, "Albert Neo4j"), "uses", "Albert", "Neo4j")) == 1
+        historical = query(first_key, "Albert FalkorDB", temporal_as_of=before_change.isoformat())
+        assert len(matching(historical, "uses", "Albert", "FalkorDB")) == 1
 
-            assert {row["source_memory_id"] for row in await query(first, "Avery London")} == {
-                first_memories["prefers"]
-            }
-            assert {row["source_memory_id"] for row in await query(second, "Avery London")} == {
-                second_memories["prefers"]
-            }
+        assert {row["source_memory_id"] for row in query(first_key, "Avery London")} == {
+            first_memories["prefers"]
+        }
+        assert {row["source_memory_id"] for row in query(second_key, "Avery London")} == {
+            second_memories["prefers"]
+        }
     finally:
         set_graph_builder(None)
         set_graph_store(None)
