@@ -11,7 +11,11 @@ from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.helpers import validate_group_id
 
 from albert.config import Settings
-from albert.graph_builders import BuildRequest, GraphitiGraphBuilder
+from albert.graph_builders import (
+    _DEFAULT_CONFIDENCE,
+    BuildRequest,
+    GraphitiGraphBuilder,
+)
 
 FALKORDB_URL = os.environ.get("ALBERT_TEST_FALKORDB_URL")
 GRAPHITI_API_KEY = os.environ.get("ALBERT_TEST_GRAPHITI_API_KEY")
@@ -160,6 +164,192 @@ def test_graphiti_surfaces_scoped_driver_background_failures() -> None:
             await GraphitiGraphBuilder._settle_background_tasks(client)
 
     asyncio.run(verify())
+
+
+class ScriptedGraphiti(FakeGraphiti):
+    """A fake whose extraction result is built from the episode uuid in play."""
+
+    def __init__(self, edges_for) -> None:  # type: ignore[no-untyped-def]
+        super().__init__()
+        self._edges_for = edges_for
+        self.nodes = [
+            SimpleNamespace(uuid="source", name="Albert", labels=["Entity", "Product"]),
+            SimpleNamespace(uuid="target", name="FalkorDB", labels=["Entity", "Database"]),
+        ]
+
+    async def add_episode(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append(kwargs)
+        episode = self.episodes[kwargs["uuid"]]
+        self.episode_contents.append(episode.content)  # type: ignore[attr-defined]
+        episode.content = ""  # type: ignore[attr-defined]
+        return SimpleNamespace(nodes=self.nodes, edges=self._edges_for(kwargs["uuid"]))
+
+
+def _request(**overrides):  # type: ignore[no-untyped-def]
+    base = {
+        "memory_id": uuid4(),
+        "organization_id": uuid4(),
+        "workspace_id": uuid4(),
+        "subject": "Runtime",
+        "content": "Albert runs on FalkorDB.",
+        "occurred_at": datetime(2025, 12, 1, tzinfo=UTC),
+        "content_fingerprint": "revision-1",
+    }
+    return BuildRequest(**{**base, **overrides})
+
+
+def test_graphiti_only_attributes_edges_this_episode_produced() -> None:
+    def edges_for(episode_uuid: str) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(
+                uuid="owned",
+                source_node_uuid="source",
+                target_node_uuid="target",
+                name="RUNS ON",
+                episodes=[episode_uuid],
+                attributes={},
+                valid_at=datetime(2026, 1, 1, tzinfo=UTC),
+                invalid_at=None,
+                reference_time=None,
+            ),
+            # Superseded by this extraction but extracted from, and owned by, a
+            # different memory. Its endpoints are deliberately absent from the
+            # node set, as Graphiti leaves them when only the edge changed.
+            SimpleNamespace(
+                uuid="superseded-elsewhere",
+                source_node_uuid="absent-source",
+                target_node_uuid="absent-target",
+                name="RUNS ON",
+                episodes=["another-episode"],
+                attributes={},
+                valid_at=datetime(2025, 1, 1, tzinfo=UTC),
+                invalid_at=datetime(2026, 1, 1, tzinfo=UTC),
+                reference_time=None,
+            ),
+            # Still-open edge from another memory: not ours to write, and
+            # nothing to close.
+            SimpleNamespace(
+                uuid="open-elsewhere",
+                source_node_uuid="source",
+                target_node_uuid="target",
+                name="DEPLOYED WITH",
+                episodes=["another-episode"],
+                attributes={},
+                valid_at=datetime(2025, 6, 1, tzinfo=UTC),
+                invalid_at=None,
+                reference_time=None,
+            ),
+        ]
+
+    fake = ScriptedGraphiti(edges_for)
+    builder = TestGraphitiBuilder(SimpleNamespace())  # type: ignore[arg-type]
+    builder._client = lambda: fake  # type: ignore[method-assign]
+
+    built = builder.build(_request(), [])
+
+    by_id = {record.metadata["graphiti_edge_id"]: record for record in built}
+    assert set(by_id) == {"owned", "superseded-elsewhere"}
+
+    owned = by_id["owned"]
+    assert owned.close_only is False
+    assert owned.relationship is not None
+    assert owned.relationship.relation_type == "runs_on"
+
+    superseded = by_id["superseded-elsewhere"]
+    assert superseded.close_only is True
+    # Nothing about this edge may be attributed to the memory being enriched.
+    assert superseded.relationship is None
+    assert superseded.valid_until == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_graphiti_records_whether_confidence_is_a_real_score() -> None:
+    def edges_for(episode_uuid: str) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(
+                uuid="scored",
+                source_node_uuid="source",
+                target_node_uuid="target",
+                name="RUNS ON",
+                episodes=[episode_uuid],
+                attributes={"confidence": 0.91},
+                valid_at=None,
+                invalid_at=None,
+                reference_time=None,
+            ),
+            SimpleNamespace(
+                uuid="unscored",
+                source_node_uuid="source",
+                target_node_uuid="target",
+                name="DEPLOYED WITH",
+                episodes=[episode_uuid],
+                attributes=None,
+                valid_at=None,
+                invalid_at=None,
+                reference_time=None,
+            ),
+        ]
+
+    fake = ScriptedGraphiti(edges_for)
+    builder = TestGraphitiBuilder(SimpleNamespace())  # type: ignore[arg-type]
+    builder._client = lambda: fake  # type: ignore[method-assign]
+
+    built = {
+        record.metadata["graphiti_edge_id"]: record for record in builder.build(_request(), [])
+    }
+
+    assert built["scored"].relationship.confidence == pytest.approx(0.91)
+    assert built["scored"].metadata["confidence_source"] == "graphiti"
+    # Graphiti does not score edges, so Albert's ranking cannot tell these apart.
+    assert built["unscored"].relationship.confidence == pytest.approx(_DEFAULT_CONFIDENCE)
+    assert built["unscored"].metadata["confidence_source"] == "builder-default"
+
+
+def test_graphiti_driver_cleanup_failure_does_not_mask_the_build_failure() -> None:
+    class FailingGraphiti(FakeGraphiti):
+        async def add_episode(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("extraction failed")
+
+    fake = FailingGraphiti()
+
+    async def fail_initialization() -> None:
+        raise RuntimeError("scoped index initialization failed")
+
+    builder = TestGraphitiBuilder(SimpleNamespace())  # type: ignore[arg-type]
+    builder._client = lambda: fake  # type: ignore[method-assign]
+
+    async def verify() -> None:
+        fake.driver._albert_scoped_drivers = {
+            "scope": SimpleNamespace(_init_task=asyncio.create_task(fail_initialization()))
+        }
+        with pytest.raises(RuntimeError, match="extraction failed"):
+            await builder._build(_request())
+        assert fake.closed is True
+
+    asyncio.run(verify())
+
+
+def test_graphiti_core_private_api_surface_is_still_present() -> None:
+    """The adapter reaches into graphiti-core internals, so the pin is load-bearing.
+
+    If this fails after a version bump, re-verify ``GraphitiGraphBuilder``
+    against the new release before relaxing it.
+    """
+    from importlib.metadata import version
+    from inspect import getsource, signature
+
+    from graphiti_core import Graphiti
+    from graphiti_core.driver.falkordb_driver import FalkorDriver
+    from graphiti_core.nodes import EpisodicNode
+
+    assert version("graphiti-core") == "0.30.2"
+    for attribute in ("clone", "_get_graph", "build_indices_and_constraints", "default_group_id"):
+        assert hasattr(FalkorDriver, attribute), attribute
+    initializer = getsource(FalkorDriver.__init__)
+    for assignment in ("self._database", "self.client", "self._init_task"):
+        assert assignment in initializer, assignment
+    assert hasattr(EpisodicNode, "get_by_uuid") and hasattr(EpisodicNode, "save")
+    # _prepare_episode unpacks this into (group_id, driver, clients).
+    assert len(signature(Graphiti._resolve_request_scope).return_annotation.__args__) == 3
 
 
 def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:

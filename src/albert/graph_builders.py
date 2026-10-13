@@ -9,6 +9,7 @@ authorization-aware ``GraphStore`` contract.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,7 +21,17 @@ from uuid import UUID, uuid5
 from albert.classifier import ExtractedEntity, ExtractedRelationship
 from albert.config import Settings, get_settings
 
+logger = logging.getLogger("albert.graph_builders")
+
 _EPISODE_NAMESPACE = UUID("8663df4a-c54a-42cc-9d4d-f4106379678a")
+
+# Graphiti does not score the edges it extracts.  Albert ranks relationships by
+# confidence (see ``graph.relationships_for_memory``) and returns it as the
+# recall score, so every unscored Graphiti edge lands on this one value and
+# ranking among them is effectively insertion order.  Each edge records whether
+# its confidence is a real score or this placeholder under the
+# ``confidence_source`` metadata key.
+_DEFAULT_CONFIDENCE = 0.7
 
 
 @dataclass(frozen=True)
@@ -36,8 +47,15 @@ class BuildRequest:
 
 @dataclass(frozen=True)
 class BuiltRelationship:
-    relationship: ExtractedRelationship
+    """One edge a builder resolved for a memory.
+
+    ``close_only`` records carry no ``relationship``: they name an edge that
+    some other memory owns and that this extraction superseded, so there is
+    nothing to write, only a validity window to end.
+    """
+
     valid_from: datetime
+    relationship: ExtractedRelationship | None = None
     valid_until: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     close_only: bool = False
@@ -99,7 +117,9 @@ class GraphitiGraphBuilder:
         self.settings = settings
 
     def _client(self) -> Any:
-        # Imports stay lazy so default installations do not initialize Graphiti.
+        # graphiti-core is a hard dependency, but importing it pulls in its own
+        # model and driver stack.  Keep the imports lazy so installations that
+        # never select this builder do not pay for them.
         from graphiti_core import Graphiti
         from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
         from graphiti_core.driver.falkordb_driver import FalkorDriver
@@ -342,6 +362,7 @@ class GraphitiGraphBuilder:
 
     async def _build(self, request: BuildRequest) -> list[BuiltRelationship]:
         client = self._client()
+        failing = False
         try:
             episode_uuid = str(
                 uuid5(
@@ -370,35 +391,67 @@ class GraphitiGraphBuilder:
             nodes = {node.uuid: node for node in result.nodes}
             built: list[BuiltRelationship] = []
             for edge in result.edges:
+                provenance = {
+                    "extracted": True,
+                    "builder": "graphiti",
+                    "graphiti_edge_id": edge.uuid,
+                    "graphiti_episode_id": episode_uuid,
+                }
+                if episode_uuid not in (edge.episodes or ()):
+                    # Graphiti also returns edges it resolved or invalidated
+                    # from earlier episodes.  Writing one here would hand this
+                    # memory's owner, workspace and sensitivity to a fact
+                    # extracted from different source material, so record the
+                    # invalidation and leave the edge to the memory that owns
+                    # it.  This runs before node resolution on purpose: a
+                    # superseded edge's endpoints are often absent from this
+                    # episode's node set.
+                    if edge.invalid_at is not None:
+                        built.append(
+                            BuiltRelationship(
+                                valid_from=edge.valid_at or request.occurred_at,
+                                valid_until=edge.invalid_at,
+                                metadata=provenance,
+                                close_only=True,
+                            )
+                        )
+                    continue
                 source = nodes.get(edge.source_node_uuid)
                 target = nodes.get(edge.target_node_uuid)
                 if source is None or target is None:
                     continue
+                attributes = edge.attributes or {}
                 built.append(
                     BuiltRelationship(
+                        valid_from=edge.valid_at or edge.reference_time or request.occurred_at,
                         relationship=ExtractedRelationship(
                             source=ExtractedEntity(source.name, _entity_type(source)),
                             relation_type=_relation_name(edge.name),
                             target=ExtractedEntity(target.name, _entity_type(target)),
-                            confidence=float((edge.attributes or {}).get("confidence", 0.7)),
+                            confidence=float(attributes.get("confidence", _DEFAULT_CONFIDENCE)),
                         ),
-                        valid_from=edge.valid_at or edge.reference_time or request.occurred_at,
                         valid_until=edge.invalid_at,
                         metadata={
-                            "extracted": True,
-                            "builder": "graphiti",
-                            "graphiti_edge_id": edge.uuid,
-                            "graphiti_episode_id": episode_uuid,
+                            **provenance,
+                            "confidence_source": (
+                                "graphiti" if "confidence" in attributes else "builder-default"
+                            ),
                         },
-                        close_only=bool(
-                            edge.invalid_at is not None and episode_uuid not in edge.episodes
-                        ),
                     )
                 )
             return built
+        except BaseException:
+            failing = True
+            raise
         finally:
             try:
                 await self._settle_background_tasks(client)
+            except Exception:
+                # An exception raised here would replace the build failure that
+                # is already propagating, which is the one worth reporting.
+                if not failing:
+                    raise
+                logger.warning("Scoped driver initialization also failed", exc_info=True)
             finally:
                 await client.close()
 
@@ -439,3 +492,38 @@ def get_graph_builder() -> GraphBuilder:
             GraphitiGraphBuilder(settings) if name == "graphiti" else ClassifierGraphBuilder(name)
         )
     return _instances[name]
+
+
+def builder_status() -> dict[str, Any]:
+    """Describe the configured builder without touching the network.
+
+    Health endpoints use this: a model or graph outage must not take the API
+    out of rotation, because reads and search keep working without the
+    builder.  It still catches a builder that cannot be constructed at all --
+    a missing ``graphiti-core``, for instance.
+    """
+    configured = get_settings().graph_builder or "regex"
+    try:
+        builder = get_graph_builder()
+        return {"name": builder.name, "version": builder.version, "error": None}
+    except Exception as exc:
+        logger.warning("Graph builder is unavailable", exc_info=True)
+        return {"name": configured, "version": None, "error": type(exc).__name__}
+
+
+def probe_graph_builder() -> dict[str, Any]:
+    """Execute the builder's own readiness check.
+
+    Unlike :func:`builder_status` this reaches the model and graph backends,
+    so it belongs behind an operator view or ``albert-admin validate-runtime``
+    rather than in a liveness path.
+    """
+    status = builder_status()
+    if status["error"] is not None:
+        return {"ready": False, **status}
+    try:
+        version = get_graph_builder().readiness()
+    except Exception as exc:
+        logger.warning("Graph builder readiness probe failed", exc_info=True)
+        return {"ready": False, **status, "error": type(exc).__name__}
+    return {"ready": True, "name": status["name"], "version": version, "error": None}
