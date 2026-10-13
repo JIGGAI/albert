@@ -21,6 +21,10 @@ from albert.graph_builders import (
     probe_graph_builder,
     set_graph_builder,
 )
+from albert.graph_cypher import FalkorDBGraphStore
+from albert.graph_store import set_graph_store
+
+from .conftest import create_identity, drain_jobs
 
 FALKORDB_URL = os.environ.get("ALBERT_TEST_FALKORDB_URL")
 GRAPHITI_API_KEY = os.environ.get("ALBERT_TEST_GRAPHITI_API_KEY")
@@ -549,3 +553,140 @@ def test_graphiti_live_builder_first_write_and_retry() -> None:
             await client.close()
 
     asyncio.run(verify())
+
+
+@pytest.mark.anyio
+async def test_graphiti_live_worker_api_relationship_journey() -> None:
+    """Exercise Graphiti through the customer-visible worker and graph API."""
+    required = (
+        FALKORDB_URL,
+        GRAPHITI_API_KEY,
+        GRAPHITI_BASE_URL,
+        GRAPHITI_CHAT_MODEL,
+        GRAPHITI_EMBEDDING_MODEL,
+    )
+    if not all(required):
+        pytest.skip("live FalkorDB and Graphiti model test settings are not set")
+
+    from albert.api import app
+
+    graph_name = f"graphiti_live_api_{uuid4().hex}"
+    settings = Settings(
+        graph_builder="graphiti",
+        graph_store="falkordb",
+        falkordb_url=FALKORDB_URL,
+        falkordb_graph=graph_name,
+        llm_provider="openai-compatible",
+        embedding_provider="openai-compatible",
+        openai_base_url=GRAPHITI_BASE_URL,
+        openai_api_key=GRAPHITI_API_KEY,
+        classification_model=GRAPHITI_CHAT_MODEL,
+        embedding_model=GRAPHITI_EMBEDDING_MODEL,
+        embedding_dimensions=int(
+            os.environ.get("ALBERT_TEST_GRAPHITI_EMBEDDING_DIMENSIONS", "384")
+        ),
+    )
+    set_graph_builder(GraphitiGraphBuilder(settings))
+    set_graph_store(FalkorDBGraphStore(FALKORDB_URL, graph_name=graph_name))
+
+    first_key, _first_org, _first_workspace = create_identity("Graphiti live first")
+    second_key, _second_org, _second_workspace = create_identity("Graphiti live second")
+
+    def matching(rows: list[dict], relation: str, source: str, target: str) -> list[dict]:
+        return [
+            row
+            for row in rows
+            if row["relation_type"] == relation
+            and row["source_name"].casefold() == source.casefold()
+            and row["target_name"].casefold() == target.casefold()
+        ]
+
+    async def query(client: httpx.AsyncClient, text: str, **extra: str) -> list[dict]:
+        response = await client.post("/v1/graph/query", json={"query": text, **extra})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    try:
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": f"Bearer {first_key}"},
+            ) as first,
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": f"Bearer {second_key}"},
+            ) as second,
+        ):
+            first_memories: dict[str, str] = {}
+            second_memories: dict[str, str] = {}
+            fixtures = {
+                "uses": "Albert uses FalkorDB for temporal graph memory.",
+                "prefers": "Avery prefers London for the annual planning retreat.",
+            }
+            for relation, content in fixtures.items():
+                for client, memories in (
+                    (first, first_memories),
+                    (second, second_memories),
+                ):
+                    response = await client.post("/v1/memories", json={"content": content})
+                    assert response.status_code == 201, response.text
+                    memories[relation] = response.json()["id"]
+            drain_jobs()
+
+            first_uses = matching(
+                await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
+            )
+            first_prefers = matching(
+                await query(first, "Avery London"), "prefers", "Avery", "London"
+            )
+            second_uses = matching(
+                await query(second, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
+            )
+            second_prefers = matching(
+                await query(second, "Avery London"), "prefers", "Avery", "London"
+            )
+            assert [row["source_memory_id"] for row in first_uses] == [first_memories["uses"]]
+            assert [row["source_memory_id"] for row in first_prefers] == [first_memories["prefers"]]
+            assert [row["source_memory_id"] for row in second_uses] == [second_memories["uses"]]
+            assert [row["source_memory_id"] for row in second_prefers] == [
+                second_memories["prefers"]
+            ]
+
+            retried = await first.patch(
+                f"/v1/memories/{first_memories['uses']}",
+                json={"content": fixtures["uses"]},
+            )
+            assert retried.status_code == 200, retried.text
+            drain_jobs()
+            retried_uses = matching(
+                await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB"
+            )
+            assert len(retried_uses) == 1
+            before_change = datetime.now(UTC)
+
+            changed = await first.patch(
+                f"/v1/memories/{first_memories['uses']}",
+                json={"content": "Albert uses Neo4j for temporal graph memory."},
+            )
+            assert changed.status_code == 200, changed.text
+            drain_jobs()
+            assert (
+                matching(await query(first, "Albert FalkorDB"), "uses", "Albert", "FalkorDB") == []
+            )
+            assert len(matching(await query(first, "Albert Neo4j"), "uses", "Albert", "Neo4j")) == 1
+            historical = await query(
+                first, "Albert FalkorDB", temporal_as_of=before_change.isoformat()
+            )
+            assert len(matching(historical, "uses", "Albert", "FalkorDB")) == 1
+
+            assert {row["source_memory_id"] for row in await query(first, "Avery London")} == {
+                first_memories["prefers"]
+            }
+            assert {row["source_memory_id"] for row in await query(second, "Avery London")} == {
+                second_memories["prefers"]
+            }
+    finally:
+        set_graph_builder(None)
+        set_graph_store(None)
