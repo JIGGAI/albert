@@ -146,13 +146,44 @@ memory's current facts immediately. Deletes close all Albert facts.
 
 Run `albert-admin validate-runtime --probe-embedding` before starting API and
 worker processes. It checks the graph store, embedding model, and Graphiti
-indices without printing connection strings or credentials. Then backfill with
-`albert-admin reindex-memories --all`.
+indices without printing connection strings or credentials.
+
+Then backfill. `albert-admin reindex-memories --all` queues one enrichment job
+per active memory, and under Graphiti each job is several model calls that the
+worker processes one at a time. On a corpus of any size this is hours of
+model spend, so roll it out one workspace at a time with
+`reindex-memories --all --workspace <name>`, and measure the first workspace before
+queueing the rest.
 
 Allow additional model latency and several calls per memory. Start with at least
 2 GB free memory for FalkorDB or the documented Neo4j allocation and measure on
 the representative corpus. Back up both the primary Albert graph and Graphiti's
 private graph. Restore them from the same backup generation.
+
+What to expect from the facts Graphiti writes:
+
+- **Only the memory being enriched is credited.** An extraction also returns
+  edges Graphiti resolved from earlier episodes. Albert ends the validity of
+  the ones this extraction superseded and otherwise leaves them to the memory
+  that owns them, so a fact never inherits the owner, workspace, or
+  sensitivity of a memory it was not extracted from.
+- **Edges are unscored.** Graphiti does not assign confidence, so every edge it
+  writes carries one placeholder value and ranking among Graphiti edges is not
+  meaningful. Each edge records `confidence_source` in its metadata
+  (`graphiti` or `builder-default`) so a consumer can tell the two apart.
+- **Readiness is reported separately from the store.** The console's
+  **Backends** page probes the builder itself, because a reachable FalkorDB
+  says nothing about whether the model endpoints answer. `GET
+  /v1/health/live` and `/ready` report `graph_builder_version` and
+  `graph_builder_error` from a configuration check only: a model outage is not
+  a reason to take the API out of rotation, since reads and search do not use
+  the builder.
+- **The `graphiti-core` pin is load-bearing.** The adapter depends on
+  internals of the pinned release (its FalkorDB driver's index DDL and
+  request-scoped `clone`, and the request-scope resolution used to persist an
+  episode before extraction). A test asserts that surface is still present, so
+  a version bump fails loudly and the adapter can be re-verified against the
+  new release.
 
 To roll back, set `ALBERT_GRAPH_BUILDER=llm-classifier` (or `regex`), restart API
 and worker, and re-index. Existing Graphiti data can remain for a later rollback
