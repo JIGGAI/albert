@@ -21,7 +21,7 @@ from albert.config import get_settings
 from albert.console import _operator
 from albert.console_ops import _aware, _traces, percentile
 from albert.db import get_session
-from albert.graph_builders import get_graph_builder
+from albert.graph_builders import probe_graph_builder
 from albert.graph_store import GRAPH_BUILDERS, GRAPH_STORES, BackendOption, get_graph_store
 from albert.links import COUNTED_TRACE_NAMES
 from albert.models import Memory, MemoryChunk, Trace
@@ -41,6 +41,24 @@ def _option(identifier: str, option: BackendOption, *, active: bool) -> dict[str
         "active": active,
         "enable": list(option.enable),
     }
+
+
+_builder_probe_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def _builder_probe(ttl_seconds: int) -> dict[str, Any]:
+    """Probe the configured builder, cached for the console's graph TTL.
+
+    The probe reaches the model and graph backends, so it is too expensive to
+    repeat on every render of this page.
+    """
+    global _builder_probe_cache
+    now = time.monotonic()
+    if _builder_probe_cache is not None and now - _builder_probe_cache[0] < ttl_seconds:
+        return _builder_probe_cache[1]
+    probe = probe_graph_builder()
+    _builder_probe_cache = (now, probe)
+    return probe
 
 
 def _probe(session: Session) -> tuple[dict[str, Any], dict[str, int] | None]:
@@ -81,6 +99,7 @@ def backends(
         entry["status"] = status if entry["active"] else None
         entry["counts"] = counts if entry["active"] else None
         stores.append(entry)
+    builder_probe = _builder_probe(settings.console_graph_cache_seconds)
     builders = []
     for identifier, option in GRAPH_BUILDERS.items():
         entry = _option(identifier, option, active=identifier == settings.graph_builder)
@@ -89,12 +108,14 @@ def backends(
             if entry["active"] and identifier in {"llm-classifier", "graphiti"}
             else None
         )
-        entry["version"] = get_graph_builder().version if entry["active"] else None
+        # The active builder gets its own probe: store reachability says
+        # nothing about whether the builder's model calls work.
+        entry["version"] = builder_probe["version"] if entry["active"] else None
         entry["status"] = (
             {
-                "ready": bool(status["reachable"]),
-                "version": get_graph_builder().version,
-                "error": status["error"],
+                "ready": builder_probe["ready"],
+                "version": builder_probe["version"],
+                "error": builder_probe["error"],
             }
             if entry["active"]
             else None

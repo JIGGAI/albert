@@ -115,9 +115,10 @@ def _note(**fields: object) -> None:
 
 @app.get("/v1/health/live", response_model=HealthResponse, tags=["health"])
 def live() -> HealthResponse:
-    from albert.graph_builders import get_graph_builder
+    from albert.graph_builders import builder_status
 
     settings = get_settings()
+    builder = builder_status()
     return HealthResponse(
         status="ok",
         database="unchecked",
@@ -128,7 +129,8 @@ def live() -> HealthResponse:
         classifier_provider=settings.llm_provider,
         graph_store=get_graph_store().name,
         graph_builder=settings.graph_builder,
-        graph_builder_version=get_graph_builder().version,
+        graph_builder_version=builder["version"] or "unavailable",
+        graph_builder_error=builder["error"],
     )
 
 
@@ -138,9 +140,10 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
         session.execute(text("SELECT 1"))
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
-    from albert.graph_builders import get_graph_builder
+    from albert.graph_builders import builder_status
 
     settings = get_settings()
+    builder = builder_status()
     try:
         get_graph_store().ping(session)
     except Exception as exc:
@@ -157,7 +160,8 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
         classifier_provider=settings.llm_provider,
         graph_store=get_graph_store().name,
         graph_builder=settings.graph_builder,
-        graph_builder_version=get_graph_builder().version,
+        graph_builder_version=builder["version"] or "unavailable",
+        graph_builder_error=builder["error"],
     )
 
 
