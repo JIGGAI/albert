@@ -111,6 +111,7 @@ class GraphStore(Protocol):
         session: Session,
         *,
         organization_id: UUID,
+        workspace_id: UUID | None,
         builder: str,
         external_ids: list[str],
         at: datetime,

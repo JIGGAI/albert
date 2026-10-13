@@ -238,6 +238,7 @@ class CypherGraphStore:
         session: Session,
         *,
         organization_id: UUID,
+        workspace_id: UUID | None,
         builder: str,
         external_ids: list[str],
         at: datetime,
@@ -247,15 +248,21 @@ class CypherGraphStore:
         rows = self._run(
             """
             MATCH (:Entity)-[r:REL]->(:Entity)
-            WHERE r.organization_id = $org AND r.valid_until IS NULL
+            WHERE r.organization_id = $org AND r.workspace_id = $ws
+              AND r.valid_until IS NULL
               AND any(external_id IN $external_ids WHERE r.metadata CONTAINS external_id)
               AND r.metadata CONTAINS $builder_marker
             SET r.valid_until = $at, r.updated_at = $now
             RETURN count(r)
             """,
             org=str(organization_id),
+            ws=_ws(workspace_id),
             external_ids=external_ids,
-            builder_marker=f'"builder": "{builder}"',
+            # Metadata is matched as a substring of the serialized blob, so the
+            # marker has to be produced by the same serializer that writes it
+            # (see add_relationship) or a formatting change silently stops
+            # closing edges.
+            builder_marker=json.dumps({"builder": builder}, default=str)[1:-1],
             at=_epoch(at),
             now=time.time(),
         )

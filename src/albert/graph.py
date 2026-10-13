@@ -354,25 +354,26 @@ class PostgresGraphStore:
         session: Session,
         *,
         organization_id: UUID,
+        workspace_id: UUID | None,
         builder: str,
         external_ids: list[str],
         at: datetime,
     ) -> int:
         if not external_ids:
             return 0
-        wanted = set(external_ids)
-        closed = 0
-        edges = session.scalars(
-            select(Relationship).where(
-                Relationship.organization_id == organization_id,
-                Relationship.valid_until.is_(None),
-            )
+        statement = select(Relationship).where(
+            Relationship.organization_id == organization_id,
+            Relationship.workspace_id.is_(None)
+            if workspace_id is None
+            else Relationship.workspace_id == workspace_id,
+            Relationship.valid_until.is_(None),
+            Relationship.metadata_["builder"].as_string() == builder,
+            Relationship.metadata_["graphiti_edge_id"].as_string().in_(external_ids),
         )
-        for edge in edges:
-            metadata = edge.metadata_ or {}
-            if metadata.get("builder") == builder and metadata.get("graphiti_edge_id") in wanted:
-                edge.valid_until = at
-                closed += 1
+        closed = 0
+        for edge in session.scalars(statement):
+            edge.valid_until = at
+            closed += 1
         session.flush()
         return closed
 

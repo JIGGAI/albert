@@ -221,6 +221,7 @@ def test_temporal_builder_can_close_a_fact_by_external_id(store, session) -> Non
         store.close_external_edges(
             session,
             organization_id=org,
+            workspace_id=ws,
             builder="graphiti",
             external_ids=["graphiti-edge-1"],
             at=at,
@@ -228,6 +229,56 @@ def test_temporal_builder_can_close_a_fact_by_external_id(store, session) -> Non
         == 1
     )
     assert _query(store, session, org, "FalkorDB", temporal_as_of=at + timedelta(seconds=1)) == []
+
+
+def test_closing_external_edges_is_batched_and_workspace_scoped(store, session) -> None:  # type: ignore[no-untyped-def]
+    org, ws, other_ws = uuid4(), uuid4(), uuid4()
+    for workspace, external_id, target in (
+        (ws, "graphiti-edge-1", "FalkorDB"),
+        (ws, "graphiti-edge-2", "Neo4j"),
+        (other_ws, "graphiti-edge-3", "Postgres"),
+    ):
+        _add(
+            store,
+            session,
+            org,
+            workspace,
+            _edge("Albert", "runs_on", target),
+            metadata={
+                "extracted": True,
+                "builder": "graphiti",
+                "graphiti_edge_id": external_id,
+            },
+        )
+    at = datetime.now(UTC) + timedelta(seconds=1)
+    # One call closes every id in the batch, and only inside its own workspace.
+    assert (
+        store.close_external_edges(
+            session,
+            organization_id=org,
+            workspace_id=ws,
+            builder="graphiti",
+            external_ids=["graphiti-edge-1", "graphiti-edge-2", "graphiti-edge-3"],
+            at=at,
+        )
+        == 2
+    )
+    later = at + timedelta(seconds=1)
+    assert _query(store, session, org, "FalkorDB", temporal_as_of=later) == []
+    assert _query(store, session, org, "Neo4j", temporal_as_of=later) == []
+    assert _query(store, session, org, "Postgres", temporal_as_of=later) != []
+    # A different builder's edges are never touched.
+    assert (
+        store.close_external_edges(
+            session,
+            organization_id=org,
+            workspace_id=other_ws,
+            builder="other-builder",
+            external_ids=["graphiti-edge-3"],
+            at=at,
+        )
+        == 0
+    )
 
 
 def test_retarget_moves_only_extracted_edges(store, session) -> None:  # type: ignore[no-untyped-def]
