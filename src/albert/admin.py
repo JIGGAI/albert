@@ -261,7 +261,6 @@ def validate_runtime(
     ),
 ) -> None:
     """Validate configured providers and optionally execute one embedding."""
-    from albert.classifier import classify
     from albert.config import get_settings
     from albert.graph_builders import get_graph_builder
     from albert.graph_store import get_graph_store
@@ -315,7 +314,6 @@ def validate_runtime(
     if settings.graph_builder == "graphiti":
         try:
             builder_version = get_graph_builder().readiness()
-            classify("Albert runtime readiness probe.")
         except Exception as exc:
             typer.echo(f"graph builder probe failed ({type(exc).__name__})", err=True)
             raise typer.Exit(code=1) from exc

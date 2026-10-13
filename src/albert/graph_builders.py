@@ -18,8 +18,9 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid5
 
-from albert.classifier import ExtractedEntity, ExtractedRelationship
+from albert.classifier import ExtractedEntity, ExtractedRelationship, classify
 from albert.config import Settings, get_settings
+from albert.embeddings import get_embedder
 
 logger = logging.getLogger("albert.graph_builders")
 
@@ -470,6 +471,15 @@ class GraphitiGraphBuilder:
                 await client.close()
 
         asyncio.run(probe())
+        # Index creation proves only that the graph store is reachable. A
+        # Graphiti indexing job also requires both OpenAI-compatible model
+        # paths, so exercise Albert's normal abstractions before claiming the
+        # builder is ready. The caller reports exception types only, keeping
+        # provider URLs, responses, and credentials out of operator telemetry.
+        classify("Albert runtime readiness probe.")
+        vector = get_embedder().embed("Albert runtime readiness probe")
+        if len(vector) != self.settings.embedding_dimensions:
+            raise ValueError("Embedding provider returned unexpected dimensions")
         return self.version
 
 

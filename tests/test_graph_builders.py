@@ -6,15 +6,19 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4, uuid5
 
+import httpx
 import pytest
 from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.helpers import validate_group_id
 
+import albert.graph_builders as graph_builders
 from albert.config import Settings
 from albert.graph_builders import (
     _DEFAULT_CONFIDENCE,
     BuildRequest,
     GraphitiGraphBuilder,
+    probe_graph_builder,
+    set_graph_builder,
 )
 
 FALKORDB_URL = os.environ.get("ALBERT_TEST_FALKORDB_URL")
@@ -82,6 +86,45 @@ class FakeGraphiti:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def test_graphiti_readiness_fails_closed_when_embedding_model_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReadyGraph:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def build_indices_and_constraints(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    graph = ReadyGraph()
+    builder = GraphitiGraphBuilder(SimpleNamespace(embedding_dimensions=384))  # type: ignore[arg-type]
+    builder._client = lambda: graph  # type: ignore[method-assign]
+    monkeypatch.setattr(graph_builders, "classify", lambda _text: SimpleNamespace())
+
+    class UnreachableEmbedder:
+        def embed(self, _text: str) -> list[float]:
+            raise httpx.ConnectError("secret-provider-url.example is unreachable")
+
+    monkeypatch.setattr(graph_builders, "get_embedder", lambda: UnreachableEmbedder())
+    set_graph_builder(builder)
+    try:
+        result = probe_graph_builder()
+    finally:
+        set_graph_builder(None)
+
+    assert graph.closed is True
+    assert result == {
+        "ready": False,
+        "name": "graphiti",
+        "version": "0.30.2",
+        "error": "ConnectError",
+    }
+    assert "secret-provider-url" not in str(result)
 
 
 def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
