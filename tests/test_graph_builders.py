@@ -17,6 +17,7 @@ from albert.graph_builders import (
     _DEFAULT_CONFIDENCE,
     BuildRequest,
     GraphitiGraphBuilder,
+    _canonicalize_graphiti_edge_entities,
     probe_graph_builder,
     set_graph_builder,
 )
@@ -26,6 +27,32 @@ GRAPHITI_API_KEY = os.environ.get("ALBERT_TEST_GRAPHITI_API_KEY")
 GRAPHITI_BASE_URL = os.environ.get("ALBERT_TEST_GRAPHITI_BASE_URL")
 GRAPHITI_CHAT_MODEL = os.environ.get("ALBERT_TEST_GRAPHITI_CHAT_MODEL")
 GRAPHITI_EMBEDDING_MODEL = os.environ.get("ALBERT_TEST_GRAPHITI_EMBEDDING_MODEL")
+
+
+def test_graphiti_canonicalizes_safe_entity_aliases_before_edge_validation() -> None:
+    response = {
+        "edges": [
+            {
+                "source_entity_name": "Albert system",
+                "target_entity_name": "falkordb",
+                "relation_type": "USES",
+            },
+            {
+                "source_entity_name": "London",
+                "target_entity_name": "unknown place",
+                "relation_type": "PREFERS",
+            },
+        ]
+    }
+
+    result = _canonicalize_graphiti_edge_entities(
+        response, ["Albert", "FalkorDB", "London office", "London city"]
+    )
+
+    assert result["edges"][0]["source_entity_name"] == "Albert"
+    assert result["edges"][0]["target_entity_name"] == "FalkorDB"
+    assert result["edges"][1]["source_entity_name"] == "London"
+    assert result["edges"][1]["target_entity_name"] == "unknown place"
 
 
 class TestGraphitiBuilder(GraphitiGraphBuilder):
@@ -153,6 +180,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     assert validate_group_id(group_id) is True
     assert fake.calls[0]["uuid"]
     assert fake.calls[0]["previous_episode_uuids"] == []
+    assert "Every relationship endpoint" in fake.calls[0]["custom_extraction_instructions"]
     assert fake.retrieve_drivers == [fake.scoped_driver]
     assert len(built) == 1
     fact = built[0]
@@ -420,19 +448,16 @@ def test_graphiti_first_write_upserts_episode_in_real_falkordb() -> None:
     )
     episode_uuid = str(uuid4())
     group_id = f"org_{request.organization_id}_workspace_{request.workspace_id}"
+
     async def verify() -> None:
         from graphiti_core.nodes import EpisodicNode
 
         client = builder._client()
         try:
-            first_previous = await builder._prepare_episode(
-                client, request, episode_uuid, group_id
-            )
+            first_previous = await builder._prepare_episode(client, request, episode_uuid, group_id)
             _, driver, _ = client._resolve_request_scope(group_id)
             stored = await EpisodicNode.get_by_uuid(driver, episode_uuid)
-            retry_previous = await builder._prepare_episode(
-                client, request, episode_uuid, group_id
-            )
+            retry_previous = await builder._prepare_episode(client, request, episode_uuid, group_id)
             episodes = await client.retrieve_episodes(
                 datetime.now(UTC),
                 group_ids=[group_id],
@@ -486,8 +511,18 @@ def test_graphiti_live_builder_first_write_and_retry() -> None:
         content_fingerprint="revision-1",
     )
 
-    builder.build(request, [])
-    builder.build(request, [])
+    first = builder.build(request, [])
+    retry = builder.build(request, [])
+
+    for relationships in (first, retry):
+        uses = [
+            item.relationship
+            for item in relationships
+            if item.relationship is not None and item.relationship.relation_type == "uses"
+        ]
+        assert len(uses) == 1
+        assert uses[0].source.name.casefold() == "albert"
+        assert uses[0].target.name.casefold() == "falkordb"
 
     episode_uuid = str(
         uuid5(
