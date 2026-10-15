@@ -96,9 +96,7 @@ async def test_delete_removes_chunks(client: httpx.AsyncClient) -> None:
     assert remaining == []
 
 
-async def test_chunk_count_is_capped_and_recorded(
-    client: httpx.AsyncClient, monkeypatch
-) -> None:  # type: ignore[no-untyped-def]
+async def test_chunk_count_is_capped_and_recorded(client: httpx.AsyncClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from albert import services
     from albert.config import get_settings
     from albert.models import Memory, MemoryChunk

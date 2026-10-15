@@ -51,9 +51,7 @@ async def test_episode_dedupe_is_per_principal_and_hides_unreadable_episodes(
         organization, workspace, "Internal Only", ["memory.read", "memory.write"]
     )
     async with _client(other_key) as other:
-        response = await other.post(
-            "/v1/episodes", json={**payload, "sensitivity": "internal"}
-        )
+        response = await other.post("/v1/episodes", json={**payload, "sensitivity": "internal"})
     assert response.status_code == 201, response.text
     assert response.json()["id"] != first.json()["id"]
     assert response.json()["sensitivity"] == "internal"
@@ -205,9 +203,7 @@ async def test_classifier_sensitivity_escalates_memory(
         assert memory.metadata_["classification"]["original_sensitivity"] == "internal"
 
 
-async def test_classifier_never_lowers_sensitivity(
-    client: httpx.AsyncClient, monkeypatch
-) -> None:  # type: ignore[no-untyped-def]
+async def test_classifier_never_lowers_sensitivity(client: httpx.AsyncClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from albert import services
     from albert.classifier import Classification
     from albert.models import Memory
