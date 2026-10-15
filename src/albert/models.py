@@ -252,6 +252,10 @@ class WorkingMemory(Base, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consolidation_notes: Mapped[str | None] = mapped_column(Text)
+    # The task-record episode written when the task finished, if any.
+    record_episode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("episodes.id", ondelete="SET NULL"), index=True
+    )
 
 
 class ResourceLock(Base, TimestampMixin):

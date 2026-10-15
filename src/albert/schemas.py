@@ -240,6 +240,12 @@ class WorkingMemoryUpdate(BaseModel):
 
 class WorkingMemoryFinish(BaseModel):
     consolidation_notes: str = Field(default="", max_length=100_000)
+    # Finishing a task writes a task-record episode (source_type "task-record",
+    # source_uri "working-memory://<task_id>") so every task leaves a canonical,
+    # indexed account of what was done. Set record=False to opt out.
+    record: bool = True
+    record_sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
+    project_ref: str | None = Field(default=None, max_length=300)
 
 
 class WorkingMemoryRead(ORMModel):
@@ -253,6 +259,7 @@ class WorkingMemoryRead(ORMModel):
     expires_at: datetime
     completed_at: datetime | None
     consolidation_notes: str | None
+    record_episode_id: UUID | None
 
 
 class LockAcquire(BaseModel):

@@ -81,5 +81,9 @@ owners.
 Use `working_memory_complete` when the outcome is finished and
 `working_memory_fail` when it genuinely failed. Both MCP tools map to the same
 REST terminal transitions and release associated active locks. Consolidation
-notes should summarize outcome and verification; durable lessons belong in
-normal memories.
+notes should summarize what was asked, what was done, the result and how it
+was verified: they become the body of the task-record episode
+(`source_type` `task-record`, `source_uri` `working-memory://<task_id>`) that
+finishing writes, so a later agent can search for the task and read how it
+ended. Durable lessons still belong in normal memories; the record is the
+account of the run, not a substitute for them.

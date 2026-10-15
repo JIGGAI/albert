@@ -48,10 +48,14 @@ lock.
 ## After work
 
 1. Store durable discoveries that will materially help future work. Do not
-   create a memory merely to record that the task happened.
-2. Call `working_memory_complete` with concise consolidation notes. Associated
-   locks are released when the task completes.
-3. Call `working_memory_fail` instead when the task genuinely failed.
+   create a memory merely to record that the task happened: finishing the
+   task writes a task-record episode for that.
+2. Call `working_memory_complete` with consolidation notes that say what was
+   asked, what was done, the result, how it was verified and what is
+   outstanding. Associated locks are released, and the notes become the
+   searchable task record.
+3. Call `working_memory_fail` instead when the task genuinely failed; it
+   records the task the same way with status `failed`.
 4. If no working-memory record exists, release an acquired lease explicitly
    with `memory_lock_release`.
 5. Report verification and any remaining risk to the user.

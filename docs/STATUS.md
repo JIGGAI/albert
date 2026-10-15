@@ -30,6 +30,8 @@ Implemented and tested:
 - Bounded context assembly with citations
 - Configurable minimum vector similarity with raw backend scores
 - Working memory, expiration, completion/failure, and progress state
+- Task-record episodes written on completion or failure, so every task is
+  searchable afterwards
 - Exclusive lease locks with secret tokens and monotonic fencing values
 - Audit events without raw memory bodies
 - Credential-pattern screening on every stored surface, including metadata,
