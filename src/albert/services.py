@@ -559,8 +559,56 @@ def finish_working_memory(
         resource_id=str(working.id),
     )
     session.commit()
+    if data.record and "memory.write" in auth.capabilities:
+        record, _created = create_episode(session, auth, task_record_episode(working, data))
+        working.record_episode_id = record.id
+        session.commit()
     session.refresh(working)
     return working
+
+
+def task_record_episode(working: WorkingMemory, data: WorkingMemoryFinish) -> EpisodeCreate:
+    """The canonical account of a finished task.
+
+    Finishing a task used to leave only ``consolidation_notes`` on the working
+    row, which nothing searches. Every completed or failed task now also
+    becomes an episode, so the worker classifies and indexes it like any other
+    source and later work can find what was done, by whom, and how it ended.
+    The episode is keyed by ``working-memory://<task_id>`` and ``task_ref`` so
+    it links back to the task and to memories stored under the same task.
+    """
+    started = working.created_at.isoformat() if working.created_at else "unknown"
+    finished = working.completed_at.isoformat() if working.completed_at else "unknown"
+    lines = [
+        f"# Task record: {working.task_id}",
+        "",
+        f"Status: {working.status}",
+        f"Started: {started}",
+        f"Finished: {finished}",
+    ]
+    if working.resource_type or working.resource_ref:
+        resource = f"{working.resource_type or ''} {working.resource_ref or ''}".strip()
+        lines.append(f"Resource: {resource}")
+    lines += ["", "## Task", "", working.description]
+    if working.progress:
+        lines += ["", "## Progress", "", json.dumps(working.progress, indent=2, sort_keys=True)]
+    lines += [
+        "",
+        "## Consolidation notes",
+        "",
+        data.consolidation_notes.strip() or "(none recorded)",
+    ]
+    return EpisodeCreate(
+        workspace_id=working.workspace_id,
+        project_ref=data.project_ref,
+        task_ref=working.task_id,
+        content="\n".join(lines),
+        source_type="task-record",
+        source_uri=f"working-memory://{working.task_id}",
+        sensitivity=data.record_sensitivity,
+        occurred_at=working.completed_at,
+        metadata={"working_memory_id": str(working.id), "status": working.status},
+    )
 
 
 def acquire_lock(

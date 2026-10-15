@@ -5,10 +5,11 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from albert.api import app
 from albert.db import SessionLocal
-from albert.models import APIKey, Principal, ResourceLock, WorkingMemory, Workspace
+from albert.models import APIKey, Job, Principal, ResourceLock, WorkingMemory, Workspace
 from albert.security import issue_api_key
 from albert.worker import claim_job, housekeeping, process_job
 
@@ -468,3 +469,147 @@ async def test_export_import_round_trip(client: httpx.AsyncClient) -> None:
         assert imported.json()["relationships_created"] >= 1
         found = await target_client.post("/v1/search", json={"query": "Portable record"})
         assert any(hit["subject"] == "Portable record" for hit in found.json()["hits"])
+
+
+async def test_completing_a_task_writes_a_task_record_episode(client: httpx.AsyncClient) -> None:
+    task_id = f"record-{uuid4()}"
+    working = await client.post(
+        "/v1/working-memory",
+        json={
+            "task_id": task_id,
+            "description": "Route Govna through the gateway",
+            "resource_type": "live-tree",
+            "resource_ref": "~/kitchen-plugin-concierge",
+        },
+    )
+    working_id = working.json()["id"]
+    await client.patch(
+        f"/v1/working-memory/{working_id}",
+        json={"progress": {"plugin": "PR #7 built", "dashboard": "PR #398"}},
+    )
+    completed = await client.post(
+        f"/v1/working-memory/{working_id}/complete",
+        json={
+            "consolidation_notes": "Verified end to end as the signed-in user.",
+            "project_ref": "kitchen-plugin-concierge",
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    record_id = completed.json()["record_episode_id"]
+    assert record_id is not None
+
+    episode = await client.get(f"/v1/episodes/{record_id}")
+    assert episode.status_code == 200
+    body = episode.json()
+    assert body["source_type"] == "task-record"
+    assert body["source_uri"] == f"working-memory://{task_id}"
+    assert body["task_ref"] == task_id
+    assert body["project_ref"] == "kitchen-plugin-concierge"
+    assert body["sensitivity"] == "internal"
+    assert body["extra"] == {"working_memory_id": working_id, "status": "completed"}
+    content = body["content"]
+    assert content.startswith(f"# Task record: {task_id}")
+    assert "Status: completed" in content
+    assert "Resource: live-tree ~/kitchen-plugin-concierge" in content
+    assert "Route Govna through the gateway" in content
+    assert '"plugin": "PR #7 built"' in content
+    assert "Verified end to end as the signed-in user." in content
+
+    # The record is a normal episode: enrichment is queued for it and runs.
+    with SessionLocal() as session:
+        job = session.scalar(
+            select(Job).where(
+                Job.job_type == "enrich_episode", Job.payload["episode_id"].as_string() == record_id
+            )
+        )
+        assert job is not None
+        process_job(session, job)
+
+
+async def test_failing_a_task_records_it_as_failed(client: httpx.AsyncClient) -> None:
+    working = await client.post(
+        "/v1/working-memory",
+        json={"task_id": f"failed-{uuid4()}", "description": "Attempt that did not land"},
+    )
+    failed = await client.post(
+        f"/v1/working-memory/{working.json()['id']}/fail",
+        json={"consolidation_notes": ""},
+    )
+    assert failed.status_code == 200
+    episode = await client.get(f"/v1/episodes/{failed.json()['record_episode_id']}")
+    assert episode.status_code == 200
+    assert "Status: failed" in episode.json()["content"]
+    assert "(none recorded)" in episode.json()["content"]
+    assert episode.json()["extra"]["status"] == "failed"
+
+
+async def test_task_record_can_be_declined(client: httpx.AsyncClient) -> None:
+    working = await client.post(
+        "/v1/working-memory",
+        json={"task_id": f"norecord-{uuid4()}", "description": "Throwaway"},
+    )
+    completed = await client.post(
+        f"/v1/working-memory/{working.json()['id']}/complete",
+        json={"consolidation_notes": "nothing to keep", "record": False},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["record_episode_id"] is None
+
+
+async def test_task_record_skipped_without_memory_write(identity) -> None:  # type: ignore[no-untyped-def]
+    _key, organization, workspace = identity
+    with SessionLocal() as session:
+        principal = Principal(
+            organization_id=organization.id,
+            workspace_id=workspace.id,
+            name="Coordinator Only",
+            principal_type="agent",
+        )
+        session.add(principal)
+        session.flush()
+        raw, prefix, digest = issue_api_key()
+        session.add(
+            APIKey(
+                principal_id=principal.id,
+                prefix=prefix,
+                key_hash=digest,
+                capabilities=["working_memory.write"],
+            )
+        )
+        session.commit()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {raw}"},
+    ) as limited:
+        working = await limited.post(
+            "/v1/working-memory",
+            json={"task_id": f"limited-{uuid4()}", "description": "No memory.write"},
+        )
+        completed = await limited.post(
+            f"/v1/working-memory/{working.json()['id']}/complete",
+            json={"consolidation_notes": "done"},
+        )
+    # Completion must never fail because the caller cannot write memories.
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["record_episode_id"] is None
+
+
+async def test_task_record_sensitivity_is_enforced_like_any_episode(
+    client: httpx.AsyncClient,
+) -> None:
+    working = await client.post(
+        "/v1/working-memory",
+        json={"task_id": f"secret-{uuid4()}", "description": "Touches account names"},
+    )
+    completed = await client.post(
+        f"/v1/working-memory/{working.json()['id']}/complete",
+        json={"consolidation_notes": "done", "record_sensitivity": "confidential"},
+    )
+    assert completed.status_code == 200
+    record_id = completed.json()["record_episode_id"]
+    assert record_id is not None
+    # The test principal has no memory.confidential clearance, so the record it
+    # wrote is hidden from it exactly as an ingested confidential episode would be.
+    assert (await client.get(f"/v1/episodes/{record_id}")).status_code == 404

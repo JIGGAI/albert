@@ -311,22 +311,53 @@ async def working_memory_get(working_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def working_memory_complete(working_id: str, consolidation_notes: str = "") -> dict[str, Any]:
-    """Complete task coordination state and release associated locks."""
+async def working_memory_complete(
+    working_id: str,
+    consolidation_notes: str = "",
+    record: bool = True,
+    record_sensitivity: str = "internal",
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    """Complete task coordination state and release associated locks.
+
+    Also writes a task-record episode (source_type "task-record", source_uri
+    "working-memory://<task_id>") from the task and its consolidation notes,
+    so the task is searchable afterwards. Pass record=False to skip it.
+    """
     return await _request(
         "POST",
         f"/v1/working-memory/{working_id}/complete",
-        {"consolidation_notes": consolidation_notes},
+        {
+            "consolidation_notes": consolidation_notes,
+            "record": record,
+            "record_sensitivity": record_sensitivity,
+            "project_ref": project_ref,
+        },
     )
 
 
 @mcp.tool()
-async def working_memory_fail(working_id: str, consolidation_notes: str = "") -> dict[str, Any]:
-    """Mark task coordination state failed and release associated locks."""
+async def working_memory_fail(
+    working_id: str,
+    consolidation_notes: str = "",
+    record: bool = True,
+    record_sensitivity: str = "internal",
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    """Mark task coordination state failed and release associated locks.
+
+    A failed task leaves a task-record episode too (status "failed"), unless
+    record=False.
+    """
     return await _request(
         "POST",
         f"/v1/working-memory/{working_id}/fail",
-        {"consolidation_notes": consolidation_notes},
+        {
+            "consolidation_notes": consolidation_notes,
+            "record": record,
+            "record_sensitivity": record_sensitivity,
+            "project_ref": project_ref,
+        },
     )
 
 

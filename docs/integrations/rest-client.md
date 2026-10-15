@@ -119,6 +119,16 @@ Read state with `GET /v1/working-memory/{id}` and update progress with
 releases associated active locks. All four lifecycle operations are also
 available through MCP.
 
+Finishing also writes a **task record**: an episode with `source_type`
+`task-record` and `source_uri` `working-memory://<task_id>`, built from the
+task description, its final progress and the `consolidation_notes`, with
+`task_ref` set to the task id. It is enriched and indexed like any ingested
+episode, so what was done on a task is searchable afterwards. The response's
+`record_episode_id` points at it. The finish body accepts `record: false` to
+skip it, `record_sensitivity` (default `internal`) and `project_ref`. The
+record is only written when the caller holds `memory.write`; a principal with
+only `working_memory.write` still completes the task, without a record.
+
 ## Graph operations
 
 - `POST /v1/relationships` creates an explicit typed relationship.

@@ -200,8 +200,8 @@ Tools include:
 - `working_memory_start`
 - `working_memory_update`
 - `working_memory_get`
-- `working_memory_complete`
-- `working_memory_fail`
+- `working_memory_complete` (also writes the task-record episode; `record=False` skips it)
+- `working_memory_fail` (same, with status `failed`)
 - `memory_lock_acquire`
 - `memory_lock_renew`
 - `memory_lock_release`
