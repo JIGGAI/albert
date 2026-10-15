@@ -180,7 +180,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
             workspace_id=workspace_id,
             subject="Runtime",
             content="Albert runs on FalkorDB.",
-            occurred_at=datetime(2025, 12, 1, tzinfo=UTC),
+            occurred_at=datetime(2026, 1, 15, tzinfo=UTC),
             content_fingerprint="revision-1",
         ),
         [],
@@ -200,7 +200,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     assert fact.relationship.source.entity_type == "product"
     assert fact.relationship.relation_type == "runs_on"
     assert fact.relationship.target.name == "FalkorDB"
-    assert fact.valid_from == datetime(2026, 1, 1, tzinfo=UTC)
+    assert fact.valid_from == datetime(2026, 1, 15, tzinfo=UTC)
     assert fact.valid_until == datetime(2026, 2, 1, tzinfo=UTC)
     assert fact.metadata["builder"] == "graphiti"
 
@@ -674,6 +674,7 @@ def test_graphiti_live_worker_api_relationship_journey() -> None:
         assert len(matching(query(first_key, "Albert Neo4j"), "uses", "Albert", "Neo4j")) == 1
         historical = query(first_key, "Albert FalkorDB", temporal_as_of=before_change.isoformat())
         assert len(matching(historical, "uses", "Albert", "FalkorDB")) == 1
+        assert matching(historical, "uses", "Albert", "Neo4j") == []
 
         assert {row["source_memory_id"] for row in query(first_key, "Avery London")} == {
             first_memories["prefers"]

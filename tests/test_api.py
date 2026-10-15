@@ -329,6 +329,39 @@ async def test_sensitivity_and_validity_updates_immediately_invalidate_graph(
     assert (await client.post("/v1/graph/query", json={"query": "Beta"})).json() == []
 
 
+async def test_text_update_starts_replacement_edges_at_the_revision_time(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await client.post(
+        "/v1/memories",
+        json={
+            "content": "Runtime uses Database Alpha.",
+            "valid_from": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+    memory_id = created.json()["id"]
+    drain_jobs()
+    before_change = datetime.now(UTC)
+
+    changed = await client.patch(
+        f"/v1/memories/{memory_id}",
+        json={"content": "Runtime uses Database Beta."},
+    )
+    assert changed.status_code == 200, changed.text
+    drain_jobs()
+
+    current = (await client.post("/v1/graph/query", json={"query": "Runtime Database"})).json()
+    assert {row["target_name"] for row in current} == {"Database Beta"}
+    historical = (
+        await client.post(
+            "/v1/graph/query",
+            json={"query": "Runtime Database", "temporal_as_of": before_change.isoformat()},
+        )
+    ).json()
+    assert {row["target_name"] for row in historical} == {"Database Alpha"}
+
+
 async def test_working_memory_atomic_lock_returns_renewable_token(
     client: httpx.AsyncClient,
 ) -> None:

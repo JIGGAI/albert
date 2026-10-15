@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib.metadata import version
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
@@ -117,6 +117,18 @@ def _graphiti_group_id(organization_id: UUID, workspace_id: UUID | None) -> str:
 
 def _normalized_entity_name(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _latest_valid_from(request_time: datetime, *graphiti_times: datetime | None) -> datetime:
+    """Prevent a newly extracted edge from predating its source revision."""
+
+    def as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    return max(
+        (request_time, *(value for value in graphiti_times if value is not None)),
+        key=as_utc,
+    )
 
 
 def _canonical_entity_name(value: str, entity_names: list[str]) -> str:
@@ -554,7 +566,9 @@ class GraphitiGraphBuilder:
                 attributes = edge.attributes or {}
                 built.append(
                     BuiltRelationship(
-                        valid_from=edge.valid_at or edge.reference_time or request.occurred_at,
+                        valid_from=_latest_valid_from(
+                            request.occurred_at, edge.valid_at, edge.reference_time
+                        ),
                         relationship=ExtractedRelationship(
                             source=ExtractedEntity(source.name, _entity_type(source)),
                             relation_type=_relation_name(edge.name),

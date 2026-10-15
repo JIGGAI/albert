@@ -5,7 +5,7 @@ import os
 import signal
 import socket
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -64,7 +64,13 @@ def process_job(session: Session, job: Job) -> None:
     try:
         with traced_job(job):
             if job.job_type == "enrich_memory":
-                enrich_memory(session, UUID(job.payload["memory_id"]))
+                revision_at = job.payload.get("revision_at")
+                enrich_memory(
+                    session,
+                    UUID(job.payload["memory_id"]),
+                    revision_at=datetime.fromisoformat(revision_at) if revision_at else None,
+                    expected_fingerprint=job.payload.get("content_fingerprint"),
+                )
             elif job.job_type == "enrich_episode":
                 enrich_episode(session, UUID(job.payload["episode_id"]))
             else:
