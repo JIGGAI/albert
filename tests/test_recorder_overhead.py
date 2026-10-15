@@ -25,9 +25,7 @@ async def _median_ms(client: httpx.AsyncClient, rounds: int) -> float:
     return statistics.median(samples)
 
 
-async def test_recording_overhead_is_within_budget(
-    client: httpx.AsyncClient, monkeypatch
-) -> None:  # type: ignore[no-untyped-def]
+async def test_recording_overhead_is_within_budget(client: httpx.AsyncClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     await _median_ms(client, 5)
     # Measure in interleaved pairs and keep the best one. On a busy machine the
     # two halves of a single with/without comparison drift apart for reasons

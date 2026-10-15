@@ -9,6 +9,7 @@ authorization-aware ``GraphStore`` contract.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -33,6 +34,13 @@ _EPISODE_NAMESPACE = UUID("8663df4a-c54a-42cc-9d4d-f4106379678a")
 # its confidence is a real score or this placeholder under the
 # ``confidence_source`` metadata key.
 _DEFAULT_CONFIDENCE = 0.7
+
+_GRAPHITI_EXTRACTION_INSTRUCTIONS = (
+    "Extract only facts supported by this memory. Do not extract credentials or secrets. "
+    "Preserve changes and contradictions as temporal facts. Every relationship endpoint must "
+    "also be extracted as an entity. In the relationship response, copy each source and target "
+    "entity name exactly from the supplied entity list; do not add qualifiers or aliases."
+)
 
 
 @dataclass(frozen=True)
@@ -107,6 +115,68 @@ def _graphiti_group_id(organization_id: UUID, workspace_id: UUID | None) -> str:
     return f"org_{organization_id}_workspace_{workspace}"
 
 
+def _normalized_entity_name(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _canonical_entity_name(value: str, entity_names: list[str]) -> str:
+    """Map harmless model aliases back to Graphiti's extracted entity spelling.
+
+    Graphiti 0.30.2 extracts nodes and edges in separate model calls, then drops
+    an edge unless both endpoint strings exactly match the node response. Some
+    OpenAI-compatible models add a generic qualifier (for example, ``database``)
+    in only one response. Resolve only exact normalized or unique containment
+    matches; ambiguous endpoints remain unchanged and Graphiti fails them closed.
+    """
+    normalized = _normalized_entity_name(value)
+    exact = [name for name in entity_names if _normalized_entity_name(name) == normalized]
+    if len(exact) == 1:
+        return exact[0]
+
+    contained = [
+        name
+        for name in entity_names
+        if normalized
+        and (candidate := _normalized_entity_name(name))
+        and (f" {candidate} " in f" {normalized} " or f" {normalized} " in f" {candidate} ")
+    ]
+    return contained[0] if len(contained) == 1 else value
+
+
+def _canonicalize_graphiti_edge_entities(
+    response: dict[str, Any], entity_names: list[str]
+) -> dict[str, Any]:
+    for edge in response.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        for field_name in ("source_entity_name", "target_entity_name"):
+            value = edge.get(field_name)
+            if isinstance(value, str):
+                edge[field_name] = _canonical_entity_name(value, entity_names)
+    return response
+
+
+def _graphiti_prompt_entity_names(messages: list[Any]) -> list[str]:
+    """Read the exact resolved entity names supplied to edge extraction."""
+    for message in reversed(messages):
+        content = getattr(message, "content", "")
+        if not isinstance(content, str):
+            continue
+        match = re.search(r"<ENTITIES>\s*(.*?)\s*</ENTITIES>", content, re.DOTALL)
+        if match is None:
+            continue
+        try:
+            entities = json.loads(match.group(1))
+        except (TypeError, ValueError):
+            return []
+        return [
+            item["name"]
+            for item in entities
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        ]
+    return []
+
+
 class GraphitiGraphBuilder:
     name = "graphiti"
 
@@ -128,6 +198,59 @@ class GraphitiGraphBuilder:
         from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
         from graphiti_core.llm_client import LLMConfig
         from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+
+        class EntityConsistentOpenAIClient(OpenAIGenericClient):
+            """Keep Graphiti's separate node/edge extraction calls consistent."""
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._albert_entity_names: list[str] = []
+                self._albert_force_entity_names: set[str] = set()
+                self._albert_missing_entity_names: set[str] = set()
+
+            async def generate_response(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                response = await super().generate_response(*args, **kwargs)
+                response_model = kwargs.get("response_model")
+                if response_model is None and len(args) > 1:
+                    response_model = args[1]
+                model_name = getattr(response_model, "__name__", "")
+                if model_name == "ExtractedEntities":
+                    extracted = response.get("extracted_entities", [])
+                    present = {
+                        item["name"]
+                        for item in extracted
+                        if isinstance(item, dict) and isinstance(item.get("name"), str)
+                    }
+                    extracted.extend(
+                        {
+                            "name": name,
+                            "entity_type_id": 0,
+                            "episode_indices": [0],
+                        }
+                        for name in sorted(self._albert_force_entity_names - present)
+                    )
+                    self._albert_force_entity_names.clear()
+                    self._albert_entity_names = [
+                        item["name"]
+                        for item in extracted
+                        if isinstance(item, dict) and isinstance(item.get("name"), str)
+                    ]
+                elif model_name == "ExtractedEdges":
+                    messages = kwargs.get("messages") or (args[0] if args else [])
+                    entity_names = _graphiti_prompt_entity_names(messages)
+                    response = _canonicalize_graphiti_edge_entities(
+                        response, entity_names or self._albert_entity_names
+                    )
+                    available = set(entity_names or self._albert_entity_names)
+                    self._albert_missing_entity_names = {
+                        value
+                        for edge in response.get("edges", [])
+                        if isinstance(edge, dict)
+                        for field_name in ("source_entity_name", "target_entity_name")
+                        if isinstance((value := edge.get(field_name)), str)
+                        and value not in available
+                    }
+                return response
 
         assert self.settings.openai_api_key is not None
         assert self.settings.classification_model is not None
@@ -256,7 +379,7 @@ class GraphitiGraphBuilder:
                 self.settings.neo4j_password.get_secret_value(),
                 database=self.settings.neo4j_database,
             )
-        llm = OpenAIGenericClient(config=model_config)
+        llm = EntityConsistentOpenAIClient(config=model_config)
         embedder = OpenAIEmbedder(
             OpenAIEmbedderConfig(
                 api_key=secret,
@@ -350,9 +473,7 @@ class GraphitiGraphBuilder:
         """Await and retrieve request-scoped driver initialization results."""
         drivers = getattr(client.driver, "_albert_scoped_drivers", {}).values()
         tasks = [
-            task
-            for driver in drivers
-            if (task := getattr(driver, "_init_task", None)) is not None
+            task for driver in drivers if (task := getattr(driver, "_init_task", None)) is not None
         ]
         if not tasks:
             return
@@ -375,20 +496,29 @@ class GraphitiGraphBuilder:
             previous_episode_uuids = await self._prepare_episode(
                 client, request, episode_uuid, group_id
             )
-            result = await client.add_episode(
-                name=request.subject or f"memory-{request.memory_id}",
-                episode_body=request.content,
-                source_description="Albert memory",
-                reference_time=request.occurred_at,
-                source=self._episode_type(),
-                group_id=group_id,
-                uuid=episode_uuid,
-                previous_episode_uuids=previous_episode_uuids,
-                custom_extraction_instructions=(
-                    "Extract only facts supported by this memory. Do not extract credentials or "
-                    "secrets. Preserve changes and contradictions as temporal facts."
-                ),
-            )
+            for attempt in range(2):
+                result = await client.add_episode(
+                    name=request.subject or f"memory-{request.memory_id}",
+                    episode_body=request.content,
+                    source_description="Albert memory",
+                    reference_time=request.occurred_at,
+                    source=self._episode_type(),
+                    group_id=group_id,
+                    uuid=episode_uuid,
+                    previous_episode_uuids=previous_episode_uuids,
+                    custom_extraction_instructions=_GRAPHITI_EXTRACTION_INSTRUCTIONS,
+                )
+                llm_client = getattr(client, "llm_client", None)
+                missing = set(getattr(llm_client, "_albert_missing_entity_names", ()))
+                if not missing:
+                    break
+                if attempt == 1:
+                    raise ValueError("Graphiti relationship endpoints could not be resolved")
+                llm_client._albert_force_entity_names = missing
+                llm_client._albert_missing_entity_names.clear()
+                previous_episode_uuids = await self._prepare_episode(
+                    client, request, episode_uuid, group_id
+                )
             nodes = {node.uuid: node for node in result.nodes}
             built: list[BuiltRelationship] = []
             for edge in result.edges:

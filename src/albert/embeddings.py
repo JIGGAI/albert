@@ -85,9 +85,7 @@ class OpenAICompatibleEmbedder:
 def get_embedder() -> Embedder:
     settings = get_settings()
     if settings.embedding_provider == "sentence-transformers":
-        return SentenceTransformerEmbedder(
-            settings.embedding_model, settings.embedding_dimensions
-        )
+        return SentenceTransformerEmbedder(settings.embedding_model, settings.embedding_dimensions)
     if settings.embedding_provider == "openai-compatible":
         return OpenAICompatibleEmbedder(settings.embedding_model, settings.embedding_dimensions)
     return HashingEmbedder(settings.embedding_dimensions)
