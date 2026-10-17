@@ -42,7 +42,7 @@ class TraceWriter:
         self._interval = flush_interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.dropped = 0
         self.written = 0
 
@@ -76,14 +76,18 @@ class TraceWriter:
         self.flush()
 
     def flush(self) -> None:
-        batch: list[dict[str, Any]] = []
-        while True:
-            try:
-                batch.append(self._queue.get_nowait())
-            except queue.Empty:
-                break
-        if batch:
-            self._write(batch)
+        # Serialize dequeueing with persistence. Otherwise the background
+        # thread can empty the queue and block in _write while a foreground
+        # flush observes an empty queue and returns before those rows commit.
+        with self._lock:
+            batch: list[dict[str, Any]] = []
+            while True:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            if batch:
+                self._write(batch)
 
     def _run(self) -> None:
         while not self._stop.is_set():
