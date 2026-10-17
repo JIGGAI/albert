@@ -22,7 +22,11 @@ export ALBERT_E2E_KEY="$key" ALBERT_CONSOLE_API_KEY="$key" ALBERT_API_URL="http:
 api=$!
 .venv/bin/albert-worker &
 worker=$!
-trap 'kill $api $worker 2>/dev/null || true; wait $api $worker 2>/dev/null || true; rm -f "$db.sqlite3"' EXIT INT TERM
+cd console
+NODE_ENV=development npx next dev -p "$ALBERT_E2E_CONSOLE_PORT" &
+console=$!
+cd "$root"
+trap 'kill $api $worker $console 2>/dev/null || true; wait $api $worker $console 2>/dev/null || true; rm -f "$db.sqlite3"' EXIT INT TERM
 for _ in $(seq 1 40); do
   if curl -fs "$ALBERT_API_URL/v1/health/ready" >/dev/null 2>&1; then break; fi
   sleep 0.25
@@ -31,4 +35,13 @@ if ! curl -fs "$ALBERT_API_URL/v1/health/ready" >/dev/null 2>&1; then
   echo "e2e API did not start on $ALBERT_API_URL" >&2
   exit 1
 fi
+for _ in $(seq 1 80); do
+  if curl -fs "http://127.0.0.1:$ALBERT_E2E_CONSOLE_PORT/live" >/dev/null 2>&1; then break; fi
+  sleep 0.25
+done
+if ! curl -fs "http://127.0.0.1:$ALBERT_E2E_CONSOLE_PORT/live" >/dev/null 2>&1; then
+  echo "e2e console did not start on port $ALBERT_E2E_CONSOLE_PORT" >&2
+  exit 1
+fi
+export ALBERT_E2E_EXTERNAL_SERVER=1
 cd console && npx playwright test "$@"

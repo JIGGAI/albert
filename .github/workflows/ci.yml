@@ -241,13 +241,15 @@ jobs:
           fi
           label_tree=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.tree" }}' "$ref")
           label_base=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.base-revision" }}' "$ref")
-          if [ "$label_tree" != "$tree" ] || [ "$label_base" != "$base" ]; then
+          label_source=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.source-head" }}' "$ref")
+          if [ "$label_tree" != "$tree" ] || [ "$label_base" != "$base" ] || [ -z "$label_source" ]; then
             echo "Candidate provenance is stale; main will build its final tree."
             echo "promote=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$ref")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "source=$label_source" >> "$GITHUB_OUTPUT"
           echo "promote=true" >> "$GITHUB_OUTPUT"
       - name: Promote tested candidate manifest
         if: steps.candidate.outputs.promote == 'true'
@@ -267,6 +269,8 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.albert.provenance.source-head=${{ github.sha }}
+            io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
             io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
             io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       - name: Resolve released digest
@@ -290,13 +294,17 @@ jobs:
           MODE: ${{ steps.released.outputs.mode }}
           TREE: ${{ steps.candidate.outputs.tree }}
           CANDIDATE: ${{ steps.candidate.outputs.ref }}
+          SOURCE: ${{ steps.candidate.outputs.promote == 'true' && steps.candidate.outputs.source || github.sha }}
+          BASE: ${{ steps.candidate.outputs.base }}
         run: |
           jq -n \
             --arg digest "$DIGEST" --arg mode "$MODE" --arg tree "$TREE" \
             --arg revision "$GITHUB_SHA" --arg candidate "$CANDIDATE" \
+            --arg source "$SOURCE" --arg base "$BASE" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{schema:1, mode:$mode, image:"ghcr.io/jiggai/albert", digest:$digest,
-              final_revision:$revision, tree:$tree, candidate:$candidate, ci_run:$run}' \
+              final_revision:$revision, tree:$tree, source_head:$source,
+              base_revision:$base, candidate:$candidate, ci_run:$run}' \
             > image-provenance.json
           scripts/verify-image-provenance.sh image-provenance.json "$GITHUB_SHA" "$TREE"
       - uses: actions/upload-artifact@v4

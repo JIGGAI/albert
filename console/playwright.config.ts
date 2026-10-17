@@ -7,9 +7,9 @@ const consolePort = Number(process.env.ALBERT_E2E_CONSOLE_PORT ?? 18082);
 export default defineConfig({
   testDir: "./e2e",
   timeout: 60_000,
-  // One clean-browser retry absorbs bounded dev-server/EventSource startup
-  // races in CI. Persistent failures still fail and retain both attempts.
-  retries: process.env.CI ? 1 : 0,
+  // Stream recovery is bounded and tested in the application. A persistent
+  // failure must fail this suite on its first run with retained diagnostics.
+  retries: 0,
   workers: 1,
   outputDir: "test-results",
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
@@ -19,14 +19,16 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: `npx next dev -p ${consolePort}`,
-    port: consolePort,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      ALBERT_API_URL: process.env.ALBERT_API_URL ?? "http://127.0.0.1:18080",
-      ALBERT_CONSOLE_API_KEY: process.env.ALBERT_CONSOLE_API_KEY ?? "",
-    },
-  },
+  webServer: process.env.ALBERT_E2E_EXTERNAL_SERVER
+    ? undefined
+    : {
+        command: `npx next dev -p ${consolePort}`,
+        port: consolePort,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        env: {
+          ALBERT_API_URL: process.env.ALBERT_API_URL ?? "http://127.0.0.1:18080",
+          ALBERT_CONSOLE_API_KEY: process.env.ALBERT_CONSOLE_API_KEY ?? "",
+        },
+      },
 });

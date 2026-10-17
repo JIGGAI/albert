@@ -19,6 +19,8 @@ jq -e \
     (.mode == "promoted" or .mode == "built") and
     .final_revision == $revision and
     .tree == $tree and
+    (.source_head | test("^[0-9a-f]{40}$")) and
+    (.base_revision | test("^[0-9a-f]{40}$")) and
     (.digest | test("^sha256:[0-9a-f]{64}$")) and
     (.ci_run | test("^https://github.com/JIGGAI/albert/actions/runs/[0-9]+$")) and
     (if .mode == "promoted" then
