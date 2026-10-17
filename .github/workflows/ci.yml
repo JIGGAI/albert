@@ -4,9 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Publishes a QA candidate: run against a branch to get
-  # ghcr.io/jiggai/albert:sha-<branch head> after the same gates as main.
+  merge_group:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -106,30 +109,157 @@ jobs:
       - run: cd console && npx playwright install --with-deps chromium
       - name: Console end-to-end against a SQLite API
         run: sh console/e2e/run.sh
+      - name: Upload console failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            console/playwright-report
+            console/test-results
+          if-no-files-found: warn
       - run: docker build --tag albert-console:ci console
 
   publish:
-    # Release artifacts are built once here, never on the production host.
-    # The deployment adapter only resolves and verifies this exact tag.
-    # A manual run publishes a branch head under the same sha- tag, so QA can
-    # approve an exact image digest before the PR merges.
+    # PR checkout is GitHub's synthetic merge commit, not the source branch.
+    # Its tree-addressed tag is the hand-off from tested candidate to main.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     needs: [test, console]
     permissions:
       contents: read
       packages: write
+      attestations: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      tree: ${{ steps.candidate.outputs.tree }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Record tested merge-tree identity
+        id: candidate
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          base=${PR_BASE:-$QUEUE_BASE}
+          source=${PR_HEAD:-$QUEUE_HEAD}
+          test -n "$base" && test -n "$source"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish exact-revision runtime image
+      - name: Publish tested merge-tree candidate
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          pull: true
+          tags: ghcr.io/jiggai/albert:candidate-tree-${{ steps.candidate.outputs.tree }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.albert.provenance.source-head=${{ steps.candidate.outputs.source }}
+            io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
+            io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
+            io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Write candidate provenance
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          TREE: ${{ steps.candidate.outputs.tree }}
+          BASE: ${{ steps.candidate.outputs.base }}
+          SOURCE: ${{ steps.candidate.outputs.source }}
+        run: |
+          jq -n \
+            --arg digest "$DIGEST" --arg tree "$TREE" --arg base "$BASE" \
+            --arg source "$SOURCE" --arg merge_commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{schema:1, mode:"candidate", image:"ghcr.io/jiggai/albert", digest:$digest,
+              tree:$tree, base_revision:$base, source_head:$source,
+              merge_commit:$merge_commit, ci_run:$run}' > image-provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-provenance-${{ steps.candidate.outputs.tree }}
+          path: image-provenance.json
+          if-no-files-found: error
+      - name: Attest candidate image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/jiggai/albert
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+  release:
+    # A matching main tree promotes the already-tested manifest. If no matching
+    # candidate exists (or its labels are stale), main builds automatically.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [test, console]
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Find a current tested candidate
+        id: candidate
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          base=$(git rev-parse 'HEAD^1')
+          ref="ghcr.io/jiggai/albert:candidate-tree-$tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if ! docker pull "$ref"; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          label_tree=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.tree" }}' "$ref")
+          label_base=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.base-revision" }}' "$ref")
+          label_source=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.source-head" }}' "$ref")
+          if [ "$label_tree" != "$tree" ] || [ "$label_base" != "$base" ] || [ -z "$label_source" ]; then
+            echo "Candidate provenance is stale; main will build its final tree."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$ref")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "source=$label_source" >> "$GITHUB_OUTPUT"
+          echo "promote=true" >> "$GITHUB_OUTPUT"
+      - name: Promote tested candidate manifest
+        if: steps.candidate.outputs.promote == 'true'
+        run: >-
+          docker buildx imagetools create
+          --tag ghcr.io/jiggai/albert:sha-${{ github.sha }}
+          ${{ steps.candidate.outputs.digest }}
+      - name: Build final main tree when promotion is unsafe
+        if: steps.candidate.outputs.promote != 'true'
+        id: fallback
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -139,3 +269,53 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.albert.provenance.source-head=${{ github.sha }}
+            io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
+            io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
+            io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Resolve released digest
+        id: released
+        env:
+          PROMOTED_DIGEST: ${{ steps.candidate.outputs.digest }}
+          FALLBACK_DIGEST: ${{ steps.fallback.outputs.digest }}
+        run: |
+          if [ "${{ steps.candidate.outputs.promote }}" = true ]; then
+            digest=${PROMOTED_DIGEST#*@}
+            mode=promoted
+          else
+            digest=$FALLBACK_DIGEST
+            mode=built
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Write release provenance
+        env:
+          DIGEST: ${{ steps.released.outputs.digest }}
+          MODE: ${{ steps.released.outputs.mode }}
+          TREE: ${{ steps.candidate.outputs.tree }}
+          CANDIDATE: ${{ steps.candidate.outputs.ref }}
+          SOURCE: ${{ steps.candidate.outputs.promote == 'true' && steps.candidate.outputs.source || github.sha }}
+          BASE: ${{ steps.candidate.outputs.base }}
+        run: |
+          jq -n \
+            --arg digest "$DIGEST" --arg mode "$MODE" --arg tree "$TREE" \
+            --arg revision "$GITHUB_SHA" --arg candidate "$CANDIDATE" \
+            --arg source "$SOURCE" --arg base "$BASE" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{schema:1, mode:$mode, image:"ghcr.io/jiggai/albert", digest:$digest,
+              final_revision:$revision, tree:$tree, source_head:$source,
+              base_revision:$base, candidate:$candidate, ci_run:$run}' \
+            > image-provenance.json
+          scripts/verify-image-provenance.sh image-provenance.json "$GITHUB_SHA" "$TREE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-provenance-${{ github.sha }}
+          path: image-provenance.json
+          if-no-files-found: error
+      - name: Attest fallback image
+        if: steps.candidate.outputs.promote != 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/jiggai/albert
+          subject-digest: ${{ steps.fallback.outputs.digest }}
+          push-to-registry: true

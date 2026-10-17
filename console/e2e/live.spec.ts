@@ -35,3 +35,34 @@ test("an agent search pulses the memories it recalled on the open map", async ({
   await page.getByRole("button", { name: "Play", exact: true }).click();
   await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
 });
+
+test("the live map recovers from a transient stream connection failure", async ({ page, request }) => {
+  const { seedTopics } = await import("./seed");
+  await seedTopics(request);
+  let attempts = 0;
+  await page.route("**/api/albert/v1/console/stream", async (route) => {
+    attempts += 1;
+    if (attempts === 1) await route.abort("connectionfailed");
+    else await route.continue();
+  });
+
+  await page.goto("/map");
+  await expect(page.getByTestId("map-live-state")).toHaveText("live", { timeout: 20_000 });
+  expect(attempts).toBe(2);
+});
+
+test("the live map bounds persistent stream connection retries", async ({ page, request }) => {
+  const { seedTopics } = await import("./seed");
+  await seedTopics(request);
+  let attempts = 0;
+  await page.route("**/api/albert/v1/console/stream", async (route) => {
+    attempts += 1;
+    await route.abort("connectionfailed");
+  });
+
+  await page.goto("/map");
+  await expect.poll(() => attempts, { timeout: 10_000 }).toBe(4);
+  await expect(page.getByTestId("map-live-state")).toHaveText("paused");
+  await page.waitForTimeout(1_000);
+  expect(attempts).toBe(4);
+});

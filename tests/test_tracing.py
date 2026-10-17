@@ -16,11 +16,21 @@ from .conftest import drain_jobs
 pytestmark = pytest.mark.anyio
 
 
-def _latest(name: str) -> Trace:
+def _latest(name: str, *, memory_id: str | None = None) -> Trace:
     get_trace_writer().flush()
     with SessionLocal() as session:
-        trace = session.scalar(
-            select(Trace).where(Trace.name == name).order_by(Trace.started_at.desc())
+        traces = session.scalars(
+            select(Trace)
+            .where(Trace.name == name)
+            .order_by(Trace.started_at.desc(), Trace.id.desc())
+        ).all()
+        trace = next(
+            (
+                row
+                for row in traces
+                if memory_id is None or row.summary.get("payload", {}).get("memory_id") == memory_id
+            ),
+            None,
         )
         assert trace is not None, name
         return trace
@@ -81,9 +91,9 @@ async def test_unauthenticated_request_is_traced() -> None:
 
 
 async def test_enrichment_job_is_traced(client: httpx.AsyncClient) -> None:
-    await client.post("/v1/memories", json={"content": "Job tracer uses Chunker."})
+    created = await client.post("/v1/memories", json={"content": "Job tracer uses Chunker."})
     drain_jobs()
-    trace = _latest("enrich_memory")
+    trace = _latest("enrich_memory", memory_id=created.json()["id"])
     assert [s["name"] for s in trace.spans] == [
         "classify",
         "chunk",

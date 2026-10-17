@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 
 from sqlalchemy import func, select
@@ -60,3 +61,40 @@ def test_background_thread_drains_without_explicit_flush() -> None:
         assert writer.written == 1
     finally:
         writer.stop()
+
+
+def test_flush_waits_for_an_in_flight_background_write(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    writer = TraceWriter(SessionLocal, queue_size=10, sample_rate=1.0)
+    before = _count()
+    write_started = threading.Event()
+    release_write = threading.Event()
+    foreground_started = threading.Event()
+    foreground_done = threading.Event()
+    original_write = writer._write
+
+    def blocked_write(batch: list[dict]) -> None:
+        write_started.set()
+        assert release_write.wait(timeout=2)
+        original_write(batch)
+
+    def foreground_flush() -> None:
+        foreground_started.set()
+        writer.flush()
+        foreground_done.set()
+
+    monkeypatch.setattr(writer, "_write", blocked_write)
+    assert writer.submit(_row())
+    background = threading.Thread(target=writer.flush)
+    foreground = threading.Thread(target=foreground_flush)
+    background.start()
+    assert write_started.wait(timeout=2)
+    foreground.start()
+    try:
+        assert foreground_started.wait(timeout=2)
+        assert not foreground_done.wait(timeout=0.05)
+    finally:
+        release_write.set()
+        background.join(timeout=2)
+        foreground.join(timeout=2)
+    assert foreground_done.is_set()
+    assert _count() == before + 1
