@@ -79,14 +79,38 @@ export function openTraceStream(
   onEvent: (trace: TraceSummary) => void,
   onState?: (open: boolean) => void,
 ): () => void {
-  const source = new EventSource(`${base}/stream`);
-  source.addEventListener("trace", (event) => {
-    onEvent(JSON.parse((event as MessageEvent<string>).data) as TraceSummary);
-  });
-  // EventSource reconnects by itself; these only report whether it is connected.
-  source.onopen = () => onState?.(true);
-  source.onerror = () => onState?.(false);
-  return () => source.close();
+  const maxReconnects = 3;
+  let source: EventSource | null = null;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let reconnects = 0;
+  let closed = false;
+
+  const connect = () => {
+    source = new EventSource(`${base}/stream`);
+    source.addEventListener("trace", (event) => {
+      onEvent(JSON.parse((event as MessageEvent<string>).data) as TraceSummary);
+    });
+    source.onopen = () => {
+      reconnects = 0;
+      onState?.(true);
+    };
+    source.onerror = () => {
+      source?.close();
+      source = null;
+      onState?.(false);
+      if (closed || reconnects >= maxReconnects) return;
+      const delay = 250 * 2 ** reconnects;
+      reconnects += 1;
+      retry = setTimeout(connect, delay);
+    };
+  };
+
+  connect();
+  return () => {
+    closed = true;
+    if (retry) clearTimeout(retry);
+    source?.close();
+  };
 }
 
 export function shortId(id: string | null): string {
