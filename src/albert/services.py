@@ -209,7 +209,15 @@ def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Me
     )
     session.add(memory)
     session.flush()
-    enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
+    enqueue(
+        session,
+        auth.organization_id,
+        "enrich_memory",
+        {
+            "memory_id": str(memory.id),
+            "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
+        },
+    )
     audit(session, auth, "memory.created", resource_type="memory", resource_id=str(memory.id))
     session.commit()
     session.refresh(memory)
@@ -252,6 +260,7 @@ def update_memory(
     text_changed = data.content is not None or data.subject is not None
     graph = get_graph_store()
     if text_changed:
+        revision_at = utcnow()
         # Old chunks describe text that no longer exists; drop them now rather
         # than serve them from vector search until the worker catches up.
         _drop_chunks(session, memory.id)
@@ -263,10 +272,19 @@ def update_memory(
             session,
             organization_id=auth.organization_id,
             memory_id=memory.id,
-            at=utcnow(),
+            at=revision_at,
             extracted_only=True,
         )
-        enqueue(session, auth.organization_id, "enrich_memory", {"memory_id": str(memory.id)})
+        enqueue(
+            session,
+            auth.organization_id,
+            "enrich_memory",
+            {
+                "memory_id": str(memory.id),
+                "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
+                "revision_at": revision_at.isoformat(),
+            },
+        )
     elif {"sensitivity", "valid_until"}.intersection(changes):
         # The facts are unchanged; their visibility window follows the memory.
         graph.retarget_memory_edges(
@@ -906,9 +924,18 @@ def _apply_built_relationships(
     return closed, written
 
 
-def enrich_memory(session: Session, memory_id: UUID) -> None:
+def enrich_memory(
+    session: Session,
+    memory_id: UUID,
+    *,
+    revision_at: datetime | None = None,
+    expected_fingerprint: str | None = None,
+) -> None:
     memory = session.get(Memory, memory_id)
     if memory is None or memory.status != "active":
+        return
+    current_fingerprint = _content_fingerprint(memory.subject, memory.content)
+    if expected_fingerprint is not None and current_fingerprint != expected_fingerprint:
         return
     request = BuildRequest(
         memory_id=memory.id,
@@ -916,8 +943,8 @@ def enrich_memory(session: Session, memory_id: UUID) -> None:
         workspace_id=memory.workspace_id,
         subject=memory.subject,
         content=memory.content,
-        occurred_at=memory.valid_from,
-        content_fingerprint=_content_fingerprint(memory.subject, memory.content),
+        occurred_at=revision_at or memory.valid_from,
+        content_fingerprint=current_fingerprint,
     )
     _release_before_model_calls(session)
 

@@ -13,8 +13,9 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib.metadata import version
+from inspect import isawaitable
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid5
@@ -117,6 +118,18 @@ def _graphiti_group_id(organization_id: UUID, workspace_id: UUID | None) -> str:
 
 def _normalized_entity_name(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _latest_valid_from(request_time: datetime, *graphiti_times: datetime | None) -> datetime:
+    """Prevent a newly extracted edge from predating its source revision."""
+
+    def as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    return max(
+        (request_time, *(value for value in graphiti_times if value is not None)),
+        key=as_utc,
+    )
 
 
 def _canonical_entity_name(value: str, entity_names: list[str]) -> str:
@@ -411,6 +424,43 @@ class GraphitiGraphBuilder:
     async def _save_episode(driver: Any, episode: Any) -> None:
         await episode.save(driver)
 
+    @staticmethod
+    async def _get_entity(driver: Any, entity_uuid: str) -> Any:
+        from graphiti_core.nodes import EntityNode
+
+        return await EntityNode.get_by_uuid(driver, entity_uuid)
+
+    @staticmethod
+    async def _close_client(client: Any) -> None:
+        """Close Graphiti's driver and its otherwise-leaked model clients."""
+        resources = [client]
+        resources.extend(
+            getattr(component, "client", None)
+            for component in (
+                getattr(client, "llm_client", None),
+                getattr(client, "embedder", None),
+                getattr(client, "cross_encoder", None),
+            )
+        )
+        seen: set[int] = set()
+        first_error: BaseException | None = None
+        for resource in resources:
+            if resource is None or id(resource) in seen:
+                continue
+            seen.add(id(resource))
+            close = getattr(resource, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if isawaitable(result):
+                    await result
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
     async def _prepare_episode(
         self,
         client: Any,
@@ -520,6 +570,7 @@ class GraphitiGraphBuilder:
                     client, request, episode_uuid, group_id
                 )
             nodes = {node.uuid: node for node in result.nodes}
+            _, driver, _ = client._resolve_request_scope(group_id)
             built: list[BuiltRelationship] = []
             for edge in result.edges:
                 provenance = {
@@ -549,12 +600,21 @@ class GraphitiGraphBuilder:
                     continue
                 source = nodes.get(edge.source_node_uuid)
                 target = nodes.get(edge.target_node_uuid)
+                # Graphiti returns nodes created or changed by this episode,
+                # not necessarily every endpoint of its returned edges. A
+                # replacement commonly reuses the existing source entity.
+                if source is None:
+                    source = await self._get_entity(driver, edge.source_node_uuid)
+                if target is None:
+                    target = await self._get_entity(driver, edge.target_node_uuid)
                 if source is None or target is None:
                     continue
                 attributes = edge.attributes or {}
                 built.append(
                     BuiltRelationship(
-                        valid_from=edge.valid_at or edge.reference_time or request.occurred_at,
+                        valid_from=_latest_valid_from(
+                            request.occurred_at, edge.valid_at, edge.reference_time
+                        ),
                         relationship=ExtractedRelationship(
                             source=ExtractedEntity(source.name, _entity_type(source)),
                             relation_type=_relation_name(edge.name),
@@ -584,7 +644,7 @@ class GraphitiGraphBuilder:
                     raise
                 logger.warning("Scoped driver initialization also failed", exc_info=True)
             finally:
-                await client.close()
+                await self._close_client(client)
 
     def build(
         self, request: BuildRequest, fallback: list[ExtractedRelationship]
@@ -598,7 +658,7 @@ class GraphitiGraphBuilder:
             try:
                 await client.build_indices_and_constraints()
             finally:
-                await client.close()
+                await self._close_client(client)
 
         asyncio.run(probe())
         # Index creation proves only that the graph store is reachable. A

@@ -84,6 +84,13 @@ class TestGraphitiBuilder(GraphitiGraphBuilder):
     async def _save_episode(driver, episode):  # type: ignore[no-untyped-def]
         driver.episodes[episode.uuid] = episode
 
+    @staticmethod
+    async def _get_entity(driver, entity_uuid):  # type: ignore[no-untyped-def]
+        try:
+            return driver.entities[entity_uuid]
+        except KeyError as exc:
+            raise NodeNotFoundError(entity_uuid) from exc
+
 
 class FakeGraphiti:
     def __init__(self) -> None:
@@ -92,7 +99,7 @@ class FakeGraphiti:
         self.closed = False
         self.episodes: dict[str, object] = {}
         self.driver = SimpleNamespace(_init_task=None)
-        self.scoped_driver = SimpleNamespace(episodes=self.episodes)
+        self.scoped_driver = SimpleNamespace(episodes=self.episodes, entities={})
         self.retrieve_drivers: list[object] = []
 
     def _resolve_request_scope(self, group_id):  # type: ignore[no-untyped-def]
@@ -180,7 +187,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
             workspace_id=workspace_id,
             subject="Runtime",
             content="Albert runs on FalkorDB.",
-            occurred_at=datetime(2025, 12, 1, tzinfo=UTC),
+            occurred_at=datetime(2026, 1, 15, tzinfo=UTC),
             content_fingerprint="revision-1",
         ),
         [],
@@ -200,7 +207,7 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     assert fact.relationship.source.entity_type == "product"
     assert fact.relationship.relation_type == "runs_on"
     assert fact.relationship.target.name == "FalkorDB"
-    assert fact.valid_from == datetime(2026, 1, 1, tzinfo=UTC)
+    assert fact.valid_from == datetime(2026, 1, 15, tzinfo=UTC)
     assert fact.valid_until == datetime(2026, 2, 1, tzinfo=UTC)
     assert fact.metadata["builder"] == "graphiti"
 
@@ -385,6 +392,57 @@ def test_graphiti_records_whether_confidence_is_a_real_score() -> None:
     # Graphiti does not score edges, so Albert's ranking cannot tell these apart.
     assert built["unscored"].relationship.confidence == pytest.approx(_DEFAULT_CONFIDENCE)
     assert built["unscored"].metadata["confidence_source"] == "builder-default"
+
+
+def test_graphiti_resolves_reused_edge_endpoints_omitted_from_episode_result() -> None:
+    fake = ScriptedGraphiti(
+        lambda episode_uuid: [
+            SimpleNamespace(
+                uuid="replacement",
+                source_node_uuid="existing-source",
+                target_node_uuid="target",
+                name="USES",
+                episodes=[episode_uuid],
+                attributes={},
+                valid_at=None,
+                invalid_at=None,
+                reference_time=None,
+            )
+        ]
+    )
+    fake.nodes = [SimpleNamespace(uuid="target", name="Neo4j", labels=["Entity", "Database"])]
+    fake.scoped_driver.entities["existing-source"] = SimpleNamespace(
+        uuid="existing-source", name="Albert", labels=["Entity", "Product"]
+    )
+    builder = TestGraphitiBuilder(SimpleNamespace())  # type: ignore[arg-type]
+    builder._client = lambda: fake  # type: ignore[method-assign]
+
+    built = builder.build(_request(content="Albert uses Neo4j."), [])
+
+    assert len(built) == 1
+    assert built[0].relationship is not None
+    assert built[0].relationship.source.name == "Albert"
+    assert built[0].relationship.target.name == "Neo4j"
+
+
+def test_graphiti_closes_model_clients_as_well_as_the_graph_driver() -> None:
+    closed: list[str] = []
+
+    class Resource:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            closed.append(self.name)
+
+    client = Resource("driver")
+    client.llm_client = SimpleNamespace(client=Resource("llm"))  # type: ignore[attr-defined]
+    client.embedder = SimpleNamespace(client=Resource("embedder"))  # type: ignore[attr-defined]
+    client.cross_encoder = SimpleNamespace(client=Resource("reranker"))  # type: ignore[attr-defined]
+
+    asyncio.run(GraphitiGraphBuilder._close_client(client))
+
+    assert closed == ["driver", "llm", "embedder", "reranker"]
 
 
 def test_graphiti_driver_cleanup_failure_does_not_mask_the_build_failure() -> None:
@@ -674,6 +732,7 @@ def test_graphiti_live_worker_api_relationship_journey() -> None:
         assert len(matching(query(first_key, "Albert Neo4j"), "uses", "Albert", "Neo4j")) == 1
         historical = query(first_key, "Albert FalkorDB", temporal_as_of=before_change.isoformat())
         assert len(matching(historical, "uses", "Albert", "FalkorDB")) == 1
+        assert matching(historical, "uses", "Albert", "Neo4j") == []
 
         assert {row["source_memory_id"] for row in query(first_key, "Avery London")} == {
             first_memories["prefers"]
