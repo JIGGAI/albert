@@ -21,6 +21,26 @@ bearer = HTTPBearer(auto_error=False)
 # Writing last_used_at on every request turns a shared agent key into a hot row.
 LAST_USED_WRITE_INTERVAL = timedelta(seconds=60)
 
+ALL_CAPABILITIES = [
+    "memory.read",
+    "memory.write",
+    "memory.delete",
+    "memory.export",
+    "memory.import",
+    "graph.query",
+    "graph.write",
+    "working_memory.read",
+    "working_memory.write",
+    "locks.acquire",
+    "console.read",
+    "keys.manage",
+    "admin",
+]
+KNOWN_CAPABILITIES = frozenset({*ALL_CAPABILITIES, "memory.confidential", "memory.restricted"})
+# What a keys.manage holder may hand out. Never the power to mint more keys or
+# admin, so a leaked issued credential cannot escalate.
+GRANTABLE_CAPABILITIES = sorted(KNOWN_CAPABILITIES - {"admin", "keys.manage"})
+
 
 @dataclass(frozen=True)
 class AuthContext:

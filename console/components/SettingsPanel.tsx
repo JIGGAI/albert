@@ -1,0 +1,375 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  createApiKey,
+  createConnectionLink,
+  getCredentials,
+  revokeApiKey,
+  revokeConnectionLink,
+} from "@/lib/api";
+import type { Credentials } from "@/lib/types";
+
+const CAPABILITY_HELP: Record<string, string> = {
+  "console.read": "Read-only console view. All Albert Cloud needs.",
+  "memory.read": "Search and read memories",
+  "memory.write": "Store memories",
+  "memory.delete": "Delete memories",
+  "memory.export": "Export everything in scope",
+  "memory.import": "Import a bundle",
+  "memory.confidential": "Also see confidential memories",
+  "memory.restricted": "Also see restricted memories",
+  "graph.query": "Query the knowledge graph",
+  "graph.write": "Add relationships",
+  "working_memory.read": "Read working memory",
+  "working_memory.write": "Write working memory",
+  "locks.acquire": "Take coordination locks",
+};
+
+const EXPIRY_OPTIONS = [
+  { label: "15 minutes", seconds: 15 * 60 },
+  { label: "1 hour", seconds: 3600 },
+  { label: "24 hours", seconds: 24 * 3600 },
+  { label: "7 days", seconds: 7 * 24 * 3600 },
+];
+
+const when = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
+
+function at(value: string | null): string {
+  return value ? when.format(new Date(value)) : "–";
+}
+
+function message(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function CapabilityPicker({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <fieldset className="capabilities">
+      <legend>Capabilities</legend>
+      {options.map((capability) => (
+        <label key={capability} className="check">
+          <input
+            type="checkbox"
+            checked={value.includes(capability)}
+            onChange={(event) =>
+              onChange(
+                event.target.checked
+                  ? [...value, capability]
+                  : value.filter((item) => item !== capability),
+              )
+            }
+          />
+          <code>{capability}</code>
+          <span className="muted">{CAPABILITY_HELP[capability] ?? ""}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+function Secret({ label, value, note }: { label: string; value: string; note: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="secret" role="status">
+      <span className="label">{label}</span>
+      <div className="secret-row">
+        <code data-testid="secret">{value}</code>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard?.writeText(value).then(() => setCopied(true));
+          }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <p className="notice">{note}</p>
+    </div>
+  );
+}
+
+function LinkForm({ options, onCreated }: { options: string[]; onCreated: () => void }) {
+  const [name, setName] = useState("Albert Cloud");
+  const [capabilities, setCapabilities] = useState<string[]>(["console.read"]);
+  const [expires, setExpires] = useState(3600);
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createConnectionLink({ name, capabilities, expires_in_seconds: expires });
+      setUrl(created.url);
+      onCreated();
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card settings-card" aria-labelledby="link-title">
+      <h2 id="link-title">One-time connection link</h2>
+      <p className="muted">
+        Recommended. Paste it into Albert Cloud&apos;s <b>Connect external Albert</b>, or give it to
+        an agent. It works once, then mints a key with only the capabilities you choose here.
+      </p>
+      <form onSubmit={submit}>
+        <label className="field">
+          <span>Name</span>
+          <input value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
+        </label>
+        <CapabilityPicker options={options} value={capabilities} onChange={setCapabilities} />
+        <label className="field">
+          <span>Expires after</span>
+          <select value={expires} onChange={(e) => setExpires(Number(e.target.value))}>
+            {EXPIRY_OPTIONS.map((option) => (
+              <option key={option.seconds} value={option.seconds}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="submit" disabled={busy || !capabilities.length || !name.trim()}>
+          Create link
+        </button>
+      </form>
+      {error ? <p className="search-error" role="alert">{error}</p> : null}
+      {url ? (
+        <Secret
+          label="Connection link"
+          value={url}
+          note="Shown once. Anyone with this link can redeem it until it is used or expires."
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function KeyForm({
+  options,
+  restUrl,
+  mcpUrl,
+  onCreated,
+}: {
+  options: string[];
+  restUrl: string;
+  mcpUrl: string;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [capabilities, setCapabilities] = useState<string[]>(["memory.read"]);
+  const [key, setKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createApiKey({ name, capabilities });
+      setKey(created.credential);
+      onCreated();
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card settings-card" aria-labelledby="key-title">
+      <h2 id="key-title">Least-privilege API key</h2>
+      <p className="muted">
+        For manual setup. Each key gets its own identity, so you can audit and revoke one agent
+        without touching the others.
+      </p>
+      <form onSubmit={submit}>
+        <label className="field">
+          <span>Name</span>
+          <input
+            value={name}
+            maxLength={200}
+            required
+            placeholder="Research agent"
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <CapabilityPicker options={options} value={capabilities} onChange={setCapabilities} />
+        <button type="submit" disabled={busy || !capabilities.length || !name.trim()}>
+          Create key
+        </button>
+      </form>
+      {error ? <p className="search-error" role="alert">{error}</p> : null}
+      {key ? (
+        <>
+          <Secret
+            label="API key"
+            value={key}
+            note="Shown once. Store it in the agent's secret store; Albert keeps only a hash."
+          />
+          <dl className="config">
+            <dt>REST URL</dt>
+            <dd>
+              <code>{restUrl}</code>
+            </dd>
+            <dt>MCP URL</dt>
+            <dd>
+              <code>{mcpUrl}</code>
+            </dd>
+          </dl>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+export function SettingsPanel() {
+  const [data, setData] = useState<Credentials | null>(null);
+  const [error, setError] = useState<{ status?: number; text: string } | null>(null);
+
+  const load = useCallback(() => {
+    getCredentials()
+      .then((next) => {
+        setData(next);
+        setError(null);
+      })
+      .catch((cause) => setError({ status: cause?.status, text: message(cause) }));
+  }, []);
+
+  useEffect(load, [load]);
+
+  async function revoke(kind: "key" | "link", id: string, name: string) {
+    if (!window.confirm(`Revoke ${kind === "key" ? "API key" : "connection link"} "${name}"?`)) {
+      return;
+    }
+    try {
+      await (kind === "key" ? revokeApiKey(id) : revokeConnectionLink(id));
+      load();
+    } catch (cause) {
+      window.alert(message(cause));
+    }
+  }
+
+  if (error?.status === 403) {
+    return (
+      <div className="error-box" role="alert">
+        <p>
+          The console&apos;s API key can&apos;t manage credentials. Issue it a key with{" "}
+          <code>keys.manage</code> and restart the console:
+        </p>
+        <pre className="mono">
+          albert-admin create-key --principal-id &lt;console principal id&gt; --name console
+          --capabilities console.read,memory.read,keys.manage
+        </pre>
+      </div>
+    );
+  }
+  if (error) return <div className="error-box" role="alert">{error.text}</div>;
+  if (!data) return <p className="empty">Loading…</p>;
+
+  const options = data.grantable_capabilities;
+  return (
+    <div className="ops settings">
+      <div className="grid-2">
+        <LinkForm options={options} onCreated={load} />
+        <KeyForm options={options} restUrl={data.rest_url} mcpUrl={data.mcp_url} onCreated={load} />
+      </div>
+
+      <section className="card" aria-labelledby="links-title">
+        <h2 id="links-title">Connection links</h2>
+        {data.connection_links.length ? (
+          <table className="data" data-testid="links">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Capabilities</th>
+                <th>State</th>
+                <th>Expires</th>
+                <th>Used</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {data.connection_links.map((link) => (
+                <tr key={link.id}>
+                  <td>{link.name}</td>
+                  <td className="mono">{link.capabilities.join(", ")}</td>
+                  <td>
+                    <span className={`badge ${link.state === "open" ? "on" : ""}`}>{link.state}</span>
+                  </td>
+                  <td>{at(link.expires_at)}</td>
+                  <td>{at(link.used_at)}</td>
+                  <td className="right">
+                    {link.state === "open" ? (
+                      <button type="button" className="revoke" onClick={() => revoke("link", link.id, link.name)}>
+                        Revoke
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted">No connection links yet.</p>
+        )}
+      </section>
+
+      <section className="card" aria-labelledby="keys-title">
+        <h2 id="keys-title">API keys</h2>
+        <table className="data" data-testid="keys">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Prefix</th>
+              <th>Capabilities</th>
+              <th>Created</th>
+              <th>Last used</th>
+              <th>State</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.api_keys.map((key) => (
+              <tr key={key.id}>
+                <td>
+                  {key.name}
+                  {key.current ? <span className="muted"> (this console)</span> : null}
+                </td>
+                <td className="mono">{key.prefix}</td>
+                <td className="mono">{key.capabilities.join(", ")}</td>
+                <td>{at(key.created_at)}</td>
+                <td>{at(key.last_used_at)}</td>
+                <td>
+                  <span className={`badge ${key.active ? "on" : ""}`}>{key.active ? "active" : "revoked"}</span>
+                </td>
+                <td className="right">
+                  {key.active && !key.current ? (
+                    <button type="button" className="revoke" onClick={() => revoke("key", key.id, key.name)}>
+                      Revoke
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}

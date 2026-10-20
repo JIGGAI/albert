@@ -332,3 +332,35 @@ export interface Backends {
     truncated: boolean;
   };
 }
+
+export interface ApiKeyRow {
+  id: string;
+  name: string;
+  principal_name: string;
+  prefix: string;
+  capabilities: string[];
+  active: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+  expires_at: string | null;
+  current: boolean;
+}
+
+export interface ConnectionLinkRow {
+  id: string;
+  name: string;
+  capabilities: string[];
+  state: "open" | "used" | "expired" | "revoked";
+  created_at: string | null;
+  expires_at: string | null;
+  used_at: string | null;
+  api_key_id: string | null;
+}
+
+export interface Credentials {
+  grantable_capabilities: string[];
+  api_keys: ApiKeyRow[];
+  connection_links: ConnectionLinkRow[];
+  rest_url: string;
+  mcp_url: string;
+}

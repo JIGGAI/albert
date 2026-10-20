@@ -1,18 +1,26 @@
 import { NextRequest } from "next/server";
 
 // The operator key lives only here, on the server. The browser talks to this
-// route; this route talks to Albert, and only to the console API: reads, plus the
-// one POST that is itself a read (the operator search).
+// route; this route talks to Albert, and only to the console API (reads, plus the
+// one POST that is itself a read: the operator search) and the Settings page's
+// credential endpoints, each listed exactly.
 const API = (process.env.ALBERT_API_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
 const KEY = process.env.ALBERT_CONSOLE_API_KEY ?? "";
 const ALLOWED_PREFIX = ["v1", "console"];
 const FORWARDED_REQUEST_HEADERS = ["accept", "last-event-id"];
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "cache-control", "x-accel-buffering"];
 
-const POST_PATH = "v1/console/search";
+const POST_PATHS = new Set([
+  "v1/console/search",
+  "v1/settings/api-keys",
+  "v1/settings/connection-links",
+]);
+const SETTINGS_READ = "v1/settings/credentials";
+const DELETE_PATH = /^v1\/settings\/(api-keys|connection-links)\/[0-9a-f-]{36}$/;
 const POST_BODY_LIMIT = 4096;
 
 function isAllowed(path: string[]): boolean {
+  if (path.join("/") === SETTINGS_READ) return true;
   return (
     path.length > ALLOWED_PREFIX.length &&
     ALLOWED_PREFIX.every((segment, index) => path[index] === segment) &&
@@ -34,14 +42,15 @@ export async function POST(
   { params }: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
   const { path } = await params;
-  if (path.join("/") !== POST_PATH) {
+  const target = path.join("/");
+  if (!POST_PATHS.has(target)) {
     return Response.json({ detail: "Method not allowed" }, { status: 405 });
   }
   const body = await request.text();
   if (body.length > POST_BODY_LIMIT) {
     return Response.json({ detail: "Request too large" }, { status: 413 });
   }
-  const upstream = await fetch(`${API}/${POST_PATH}`, {
+  const upstream = await fetch(`${API}/${target}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${KEY}`, "content-type": "application/json" },
     body,
@@ -68,6 +77,24 @@ export async function GET(
   const upstream = await fetch(url, {
     method: "GET",
     headers,
+    cache: "no-store",
+    signal: request.signal,
+  });
+  return relay(upstream);
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  const { path } = await params;
+  const target = path.join("/");
+  if (!DELETE_PATH.test(target)) {
+    return Response.json({ detail: "Method not allowed" }, { status: 405 });
+  }
+  const upstream = await fetch(`${API}/${target}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${KEY}` },
     cache: "no-store",
     signal: request.signal,
   });

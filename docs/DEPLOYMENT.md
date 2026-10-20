@@ -81,10 +81,29 @@ docker compose exec api albert-admin create-principal \
   --organization "Example" --name "Console" --principal-type service
 docker compose exec api albert-admin create-key \
   --principal-id <console principal id> --name console \
-  --capabilities console.read,memory.read
+  --capabilities console.read,memory.read,keys.manage
 # put the printed key in .env as ALBERT_CONSOLE_API_KEY, then:
 docker compose up -d console
 ```
+
+`keys.manage` powers the console's **Settings** page, which issues and revokes
+agent credentials two ways:
+
+- **One-time connection link.** Pick capabilities and an expiry; the link is
+  shown once and mints one key, capped at those capabilities, the first time an
+  agent (or Albert Cloud's *Connect external Albert*) redeems it. Used,
+  revoked and expired links answer 410.
+- **Least-privilege API key.** Pick capabilities; the key is shown once.
+
+Every issued credential gets its own principal so it can be audited and revoked
+alone. Neither path can grant `admin` or `keys.manage`. Leave `keys.manage` off
+the console key to keep the console read-only; Settings then explains how to
+enable it.
+
+Links and redeemed connections advertise `ALBERT_PUBLIC_BASE_URL` (REST, and
+the host the link points at) and `ALBERT_PUBLIC_MCP_URL`. Set both to the
+addresses agents actually reach before handing a link to anything that is not
+on this machine.
 
 The key is optional when Compose parses the file, so the first
 `docker compose up` works before any key exists. After changing it, recreate the

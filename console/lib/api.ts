@@ -1,6 +1,9 @@
 import type {
   AgentActivity,
+  ApiKeyRow,
   Backends,
+  ConnectionLinkRow,
+  Credentials,
   ConsoleSearchResult,
   MapSnapshot,
   MemoryDetail,
@@ -53,6 +56,47 @@ export const getRetrievalQuality = (params: { organization_id?: string; hours: n
   get<RetrievalQuality>("/ops/retrieval", params);
 
 export const getBackends = (params: { hours: number }) => get<Backends>("/backends", params);
+
+// Credentials live outside /v1/console: they need keys.manage, not console.read.
+const settings = "/api/albert/v1/settings";
+
+async function send<T>(method: "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${settings}${path}`, {
+    method,
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    let message = detail;
+    try {
+      const parsed = JSON.parse(detail).detail;
+      message = typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+    } catch {}
+    throw Object.assign(new Error(message || `${response.status}`), { status: response.status });
+  }
+  return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+export async function getCredentials(): Promise<Credentials> {
+  const response = await fetch(`${settings}/credentials`, { cache: "no-store" });
+  if (!response.ok) {
+    throw Object.assign(new Error(`${response.status} ${await response.text()}`), {
+      status: response.status,
+    });
+  }
+  return (await response.json()) as Credentials;
+}
+export const createApiKey = (body: { name: string; capabilities: string[] }) =>
+  send<ApiKeyRow & { credential: string }>("POST", "/api-keys", body);
+export const revokeApiKey = (id: string) => send<void>("DELETE", `/api-keys/${id}`);
+export const createConnectionLink = (body: {
+  name: string;
+  capabilities: string[];
+  expires_in_seconds: number;
+}) => send<ConnectionLinkRow & { url: string }>("POST", "/connection-links", body);
+export const revokeConnectionLink = (id: string) => send<void>("DELETE", `/connection-links/${id}`);
 
 export async function searchMap(body: {
   organization_id: string;
