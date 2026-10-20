@@ -80,7 +80,15 @@ class Settings(BaseSettings):
             )
         return name
 
-    @field_validator("openai_api_key", "classification_model", "neo4j_password", mode="before")
+    # compose.yaml forwards `${ALBERT_GRAPH_BUILDER:-}` and .env.example leaves
+    # it blank, so "" must mean "not set" here too, not a validation error.
+    @field_validator(
+        "openai_api_key",
+        "classification_model",
+        "neo4j_password",
+        "graph_builder",
+        mode="before",
+    )
     @classmethod
     def empty_optional_strings(cls, value: object) -> object | None:
         if isinstance(value, str) and not value.strip():
