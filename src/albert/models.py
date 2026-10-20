@@ -145,6 +145,10 @@ class Episode(Base, TimestampMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     enrichment_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     enrichment_error: Mapped[str | None] = mapped_column(Text)
+    # The job indexing this episode, so callers can see queued vs retrying vs failed.
+    enrichment_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL")
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 

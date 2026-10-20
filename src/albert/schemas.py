@@ -46,6 +46,23 @@ class EpisodeCreate(ScopeFields):
     _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
+class IndexingStatus(BaseModel):
+    """Where an episode is on its way to becoming searchable.
+
+    queued: waiting for a worker. running: a worker has it now. retrying: an
+    attempt failed and another is scheduled (see last_error, next_attempt_at).
+    complete: searchable, as memory_id. failed: every attempt failed.
+    """
+
+    state: Literal["queued", "running", "retrying", "complete", "failed"]
+    searchable: bool
+    attempt: int
+    max_attempts: int
+    last_error: str | None = None
+    next_attempt_at: datetime | None = None
+    memory_id: UUID | None = None
+
+
 class EpisodeRead(ORMModel):
     id: UUID
     organization_id: UUID
@@ -64,6 +81,7 @@ class EpisodeRead(ORMModel):
     deleted_at: datetime | None
     extra: dict[str, Any]
     created_at: datetime
+    indexing: IndexingStatus | None = None
 
 
 class MemoryCreate(ScopeFields):
