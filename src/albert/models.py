@@ -85,6 +85,35 @@ class APIKey(Base, TimestampMixin):
     principal: Mapped[Principal] = relationship()
 
 
+class ConnectionLink(Base, TimestampMixin):
+    """A single-use invitation that mints one scoped API key when redeemed.
+
+    Only the token's digest is stored; the link itself is shown once.
+    """
+
+    __tablename__ = "connection_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    created_by_principal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("principals.id", ondelete="SET NULL")
+    )
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    capabilities: Mapped[list[str]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="SET NULL")
+    )
+
+
 class Episode(Base, TimestampMixin):
     __tablename__ = "episodes"
     __table_args__ = (

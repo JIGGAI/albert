@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./albert.sqlite3"
     api_key_pepper: SecretStr = SecretStr("development-only-change-me")
     public_base_url: str = "http://localhost:8080"
+    # Handed to agents that redeem a connection link; set both to the addresses
+    # agents actually reach, not loopback, when they run elsewhere.
+    public_mcp_url: str = "http://localhost:8081/mcp"
     log_level: str = "INFO"
 
     embedding_provider: Literal["hashing", "sentence-transformers", "openai-compatible"] = "hashing"

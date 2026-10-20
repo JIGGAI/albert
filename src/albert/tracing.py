@@ -11,7 +11,9 @@ from albert.recorder import Recorder, activate
 from albert.trace_writer import get_trace_writer
 
 logger = logging.getLogger("albert.tracing")
-UNTRACED_PATH_PREFIXES = ("/v1/health", "/docs", "/openapi.json", "/redoc")
+# /onboard paths carry a live connection-link token; traces are readable by
+# every console.read holder, so they must never record one.
+UNTRACED_PATH_PREFIXES = ("/v1/health", "/docs", "/openapi.json", "/redoc", "/onboard")
 
 
 class RecordingMiddleware:

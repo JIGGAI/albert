@@ -15,6 +15,7 @@ from albert.console import router as console_router
 from albert.console_backends import router as console_backends_router
 from albert.console_map import router as console_map_router
 from albert.console_ops import router as console_ops_router
+from albert.credentials import onboard_router, settings_router
 from albert.db import get_session
 from albert.graph_store import get_graph_store
 from albert.models import Episode
@@ -96,6 +97,8 @@ app.include_router(console_router)
 app.include_router(console_backends_router)
 app.include_router(console_map_router)
 app.include_router(console_ops_router)
+app.include_router(settings_router)
+app.include_router(onboard_router)
 
 
 def _memory_ids(result: SearchResponse) -> list[str]:

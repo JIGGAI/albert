@@ -8,7 +8,7 @@ from sqlalchemy import Engine, inspect, or_, select, text
 from albert.db import SessionLocal, engine, initialize_database
 from albert.embeddings import get_embedder
 from albert.models import APIKey, Job, Memory, Organization, Principal, Workspace
-from albert.security import issue_api_key
+from albert.security import ALL_CAPABILITIES, KNOWN_CAPABILITIES, issue_api_key
 
 app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
 
@@ -27,22 +27,6 @@ def ensure_schema_ready(engine: Engine) -> None:
         raise SchemaNotReady(
             "Database schema is missing; run `alembic upgrade head` before this command"
         )
-
-
-ALL_CAPABILITIES = [
-    "memory.read",
-    "memory.write",
-    "memory.delete",
-    "memory.export",
-    "memory.import",
-    "graph.query",
-    "graph.write",
-    "working_memory.read",
-    "working_memory.write",
-    "locks.acquire",
-    "console.read",
-    "admin",
-]
 
 
 @app.command("init-db")
@@ -121,8 +105,7 @@ def create_key(
 ) -> None:
     """Issue an additional API key for an existing principal."""
     requested_capabilities = [item.strip() for item in capabilities.split(",") if item.strip()]
-    known_capabilities = {*ALL_CAPABILITIES, "memory.confidential", "memory.restricted"}
-    unknown = sorted(set(requested_capabilities) - known_capabilities)
+    unknown = sorted(set(requested_capabilities) - KNOWN_CAPABILITIES)
     if unknown:
         raise typer.BadParameter(f"Unknown capabilities: {', '.join(unknown)}")
     with SessionLocal() as session:
