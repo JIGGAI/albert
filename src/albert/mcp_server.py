@@ -59,13 +59,18 @@ def _settings() -> tuple[str, str]:
     return url, key
 
 
-async def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+async def _request(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
     base_url, api_key = _settings()
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.request(
             method,
             f"{base_url}{path}",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}", **(headers or {})},
             json=payload,
         )
     if response.status_code >= 400:
@@ -105,8 +110,14 @@ async def memory_ingest(
     project_ref: str | None = None,
     task_ref: str | None = None,
     sensitivity: str = "internal",
+    wait_seconds: float = 0,
 ) -> dict[str, Any]:
-    """Ingest a canonical episode for asynchronous classification and indexing."""
+    """Ingest a canonical episode for asynchronous classification and indexing.
+
+    The result's `indexing.state` says whether it is searchable yet. Pass
+    wait_seconds (up to the server's limit, 30 by default) to return only once
+    it is searchable or has failed, so a search straight afterwards finds it.
+    """
     return await _request(
         "POST",
         "/v1/episodes",
@@ -118,6 +129,7 @@ async def memory_ingest(
             "task_ref": task_ref,
             "sensitivity": sensitivity,
         },
+        headers={"Prefer": f"wait={wait_seconds:g}"} if wait_seconds > 0 else None,
     )
 
 
@@ -152,9 +164,16 @@ async def memory_update(
 
 
 @mcp.tool()
-async def memory_get_episode(episode_id: str) -> dict[str, Any]:
-    """Read one authorized canonical episode by UUID."""
-    return await _request("GET", f"/v1/episodes/{episode_id}")
+async def memory_get_episode(episode_id: str, wait_seconds: float = 0) -> dict[str, Any]:
+    """Read one authorized canonical episode by UUID, with its indexing status.
+
+    Pass wait_seconds to return only once it is searchable or has failed.
+    """
+    return await _request(
+        "GET",
+        f"/v1/episodes/{episode_id}",
+        headers={"Prefer": f"wait={wait_seconds:g}"} if wait_seconds > 0 else None,
+    )
 
 
 @mcp.tool()

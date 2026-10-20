@@ -23,7 +23,7 @@ from albert.models import (
     WorkingMemory,
     utcnow,
 )
-from albert.services import enrich_episode, enrich_memory
+from albert.services import MAX_JOB_ATTEMPTS, enrich_episode, enrich_memory
 from albert.trace_writer import get_trace_writer
 from albert.tracing import traced_job
 
@@ -78,7 +78,7 @@ def process_job(session: Session, job: Job) -> None:
         if job is None:
             raise
         job.last_error = f"{type(exc).__name__}: {exc}"[:10_000]
-        if job.attempts >= 5:
+        if job.attempts >= MAX_JOB_ATTEMPTS:
             job.status = "failed"
             if job.job_type == "enrich_episode":
                 episode = session.get(Episode, UUID(job.payload["episode_id"]))

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import math
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import UUID
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -60,6 +62,7 @@ from albert.services import (
     create_working_memory,
     delete_episode,
     delete_memory,
+    episode_read,
     finish_working_memory,
     get_episode,
     get_memory,
@@ -69,6 +72,7 @@ from albert.services import (
     resolve_workspace,
     update_memory,
     update_working_memory,
+    wait_for_indexing,
 )
 from albert.trace_writer import get_trace_writer
 from albert.tracing import RecordingMiddleware
@@ -168,29 +172,74 @@ def ready(session: Session = Depends(get_session)) -> HealthResponse:
     )
 
 
+def _preferred_wait(prefer: str | None) -> float | None:
+    """Seconds from an RFC 7240 `Prefer: wait=N` header, capped by configuration."""
+    for preference in (prefer or "").split(","):
+        name, _, value = preference.strip().partition("=")
+        if name.strip().lower() == "wait":
+            try:
+                seconds = float(value.strip().strip('"'))
+            except ValueError:
+                return None
+            if seconds != seconds or seconds < 0:  # NaN or negative
+                return None
+            return min(seconds, float(get_settings().max_index_wait_seconds))
+    return None
+
+
+def _episode_response(
+    session: Session, episode: Episode, response: Response, prefer: str | None
+) -> EpisodeRead:
+    """The episode with its indexing status, after waiting if the caller asked to.
+
+    Location always points at the episode; Retry-After is set while it is not
+    yet searchable, so a client that cannot wait knows when to look again.
+    """
+    wait = _preferred_wait(prefer)
+    if wait is not None:
+        view = wait_for_indexing(session, episode, wait)
+        response.headers["Preference-Applied"] = f"wait={wait:g}"
+    else:
+        view = episode_read(session, episode)
+    response.headers["Location"] = f"/v1/episodes/{view.id}"
+    indexing = view.indexing
+    if indexing is not None and indexing.state not in ("complete", "failed"):
+        retry_after = 1
+        if indexing.next_attempt_at is not None:
+            delta = indexing.next_attempt_at.replace(
+                tzinfo=indexing.next_attempt_at.tzinfo or UTC
+            ) - datetime.now(UTC)
+            retry_after = max(1, math.ceil(delta.total_seconds()))
+        response.headers["Retry-After"] = str(retry_after)
+    return view
+
+
 @app.post("/v1/episodes", response_model=EpisodeRead, status_code=201, tags=["episodes"])
 def post_episode(
     data: EpisodeCreate,
     response: Response,
+    prefer: str | None = Header(default=None),
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
-) -> Episode:
+) -> EpisodeRead:
     episode, created = create_episode(session, auth, data)
     if not created:
         response.status_code = status.HTTP_200_OK
-    return episode
+    return _episode_response(session, episode, response, prefer)
 
 
 @app.get("/v1/episodes/{episode_id}", response_model=EpisodeRead, tags=["episodes"])
 def read_episode(
     episode_id: UUID,
+    response: Response,
+    prefer: str | None = Header(default=None),
     auth: AuthContext = Depends(authenticate),
     session: Session = Depends(get_session),
-) -> Episode:
+) -> EpisodeRead:
     episode = get_episode(session, auth, episode_id)
     audit(session, auth, "episode.read", resource_type="episode", resource_id=str(episode.id))
     session.commit()
-    return episode
+    return _episode_response(session, episode, response, prefer)
 
 
 @app.delete("/v1/episodes/{episode_id}", status_code=204, tags=["episodes"])

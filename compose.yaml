@@ -80,6 +80,7 @@ services:
       ALBERT_HOUSEKEEPING_SECONDS: ${ALBERT_HOUSEKEEPING_SECONDS:-60}
       ALBERT_PUBLIC_BASE_URL: ${ALBERT_PUBLIC_BASE_URL:-http://localhost:8080}
       ALBERT_PUBLIC_MCP_URL: ${ALBERT_PUBLIC_MCP_URL:-http://localhost:8081/mcp}
+      ALBERT_MAX_INDEX_WAIT_SECONDS: ${ALBERT_MAX_INDEX_WAIT_SECONDS:-30}
       ALBERT_MAP_NODE_LIMIT: ${ALBERT_MAP_NODE_LIMIT:-1500}
       HF_HOME: /var/cache/albert-models
     command: ["alembic", "upgrade", "head"]

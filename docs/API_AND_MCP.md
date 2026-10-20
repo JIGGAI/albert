@@ -48,6 +48,44 @@ and `source_uri` from the same API key returns the existing episode with
 status `200` instead of `201`. Another principal posting identical text gets its
 own episode; nothing about other principals' episodes is disclosed.
 
+An episode is stored durably as soon as it is accepted, but it is only
+searchable once the worker has indexed it (classified, chunked, embedded and
+written to the graph). Every episode response says where it is in that process:
+
+```json
+"indexing": {
+  "state": "retrying",
+  "searchable": false,
+  "attempt": 2,
+  "max_attempts": 5,
+  "last_error": "TimeoutError: model call exceeded 30s",
+  "next_attempt_at": "2026-10-20T02:14:09Z",
+  "memory_id": null
+}
+```
+
+| `state` | Meaning |
+|---|---|
+| `queued` | Waiting for a worker. |
+| `running` | A worker is indexing it now. |
+| `retrying` | An attempt failed; `last_error` says why and `next_attempt_at` when the next one runs. |
+| `complete` | Searchable. `memory_id` is the memory it became. |
+| `failed` | Every attempt failed; `last_error` holds the final error. |
+
+`last_error` is the first line of the worker's error, at most 300 characters.
+While an episode is not yet searchable, responses carry `Retry-After` (seconds
+until it is worth asking again) and `Location` (the episode's URL).
+
+To avoid polling, send `Prefer: wait=N` ([RFC 7240](https://www.rfc-editor.org/rfc/rfc7240))
+on `POST /v1/episodes` or `GET /v1/episodes/{id}`. Albert holds the response
+until the episode is `complete` or `failed`, or `N` seconds pass, whichever is
+first, and answers `Preference-Applied: wait=N`. `N` is capped by
+`ALBERT_MAX_INDEX_WAIT_SECONDS` (default 30). The status code does not change
+with the wait: `201` still means the episode was created, `200` that it already
+existed; read `indexing.state` for whether it is searchable. With the default
+hashing embeddings and no model, indexing takes well under a second; with an
+LLM classifier or Graphiti, allow for several model calls.
+
 `DELETE /v1/memories/{id}` scrubs the memory's subject, content, metadata and
 chunks and closes its extracted relationships. `DELETE /v1/episodes/{id}` does
 the same for the episode and every memory derived from it. Both need
@@ -186,10 +224,10 @@ albert-mcp --transport stdio
 Tools include:
 
 - `memory_remember`
-- `memory_ingest`
+- `memory_ingest` (`wait_seconds` returns once the episode is searchable)
 - `memory_get`
 - `memory_update`
-- `memory_get_episode`
+- `memory_get_episode` (includes `indexing`; also takes `wait_seconds`)
 - `memory_forget_episode`
 - `memory_search`
 - `memory_assemble_context`

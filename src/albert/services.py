@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -41,6 +42,8 @@ from albert.models import (
 from albert.recorder import span
 from albert.schemas import (
     EpisodeCreate,
+    EpisodeRead,
+    IndexingStatus,
     LockAcquire,
     MemoryCreate,
     MemoryUpdate,
@@ -52,6 +55,9 @@ from albert.schemas import (
 from albert.security import AuthContext, hash_lock_token, verify_lock_token
 
 SENSITIVITY_ORDER = ("public", "internal", "confidential", "restricted")
+# Attempts the worker makes at a job before marking it failed.
+MAX_JOB_ATTEMPTS = 5
+INDEXING_POLL_SECONDS = 0.25
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -172,7 +178,9 @@ def create_episode(
         if existing is not None:
             return existing, False
         raise HTTPException(status_code=409, detail="Episode was concurrently ingested") from exc
-    enqueue(session, auth.organization_id, "enrich_episode", {"episode_id": str(episode.id)})
+    job = enqueue(session, auth.organization_id, "enrich_episode", {"episode_id": str(episode.id)})
+    session.flush()
+    episode.enrichment_job_id = job.id
     audit(session, auth, "episode.created", resource_type="episode", resource_id=str(episode.id))
     session.commit()
     session.refresh(episode)
@@ -374,6 +382,78 @@ def get_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Episod
     if episode is None or episode.sensitivity not in auth.allowed_sensitivities():
         raise HTTPException(status_code=404, detail="Episode not found")
     return episode
+
+
+def _short_error(value: str | None) -> str | None:
+    """First line of a worker error, bounded: enough to tell a timeout from a bad config."""
+    if not value:
+        return None
+    return value.strip().splitlines()[0][:300]
+
+
+def indexing_status(session: Session, episode: Episode) -> IndexingStatus:
+    job = session.get(Job, episode.enrichment_job_id) if episode.enrichment_job_id else None
+    attempt = job.attempts if job is not None else 0
+    if episode.enrichment_status == "complete":
+        memory_id = session.scalar(
+            select(Memory.id)
+            .where(Memory.episode_id == episode.id, Memory.status == "active")
+            .order_by(Memory.created_at.desc())
+            .limit(1)
+        )
+        return IndexingStatus(
+            state="complete",
+            searchable=True,
+            attempt=attempt,
+            max_attempts=MAX_JOB_ATTEMPTS,
+            memory_id=memory_id,
+        )
+    if episode.enrichment_status == "failed" or (job is not None and job.status == "failed"):
+        return IndexingStatus(
+            state="failed",
+            searchable=False,
+            attempt=attempt,
+            max_attempts=MAX_JOB_ATTEMPTS,
+            last_error=_short_error(episode.enrichment_error or (job and job.last_error)),
+        )
+    if job is not None and job.status == "running":
+        state = "running"
+    elif job is not None and job.attempts > 0:
+        state = "retrying"
+    else:
+        state = "queued"
+    return IndexingStatus(
+        state=state,
+        searchable=False,
+        attempt=attempt,
+        max_attempts=MAX_JOB_ATTEMPTS,
+        last_error=_short_error(job.last_error) if job is not None else None,
+        next_attempt_at=job.available_at if state == "retrying" else None,
+    )
+
+
+def episode_read(session: Session, episode: Episode) -> EpisodeRead:
+    view = EpisodeRead.model_validate(episode)
+    view.indexing = indexing_status(session, episode)
+    return view
+
+
+def wait_for_indexing(session: Session, episode: Episode, seconds: float) -> EpisodeRead:
+    """Poll until the episode is searchable or has failed, for at most `seconds`.
+
+    Each poll runs in its own short transaction, so the worker's commits are
+    visible and no pooled connection is held while sleeping.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        session.commit()
+        session.refresh(episode)
+        view = episode_read(session, episode)
+        session.commit()
+        state = view.indexing.state if view.indexing else "queued"
+        if state in ("complete", "failed") or time.monotonic() >= deadline:
+            return view
+        time.sleep(INDEXING_POLL_SECONDS)
 
 
 def delete_episode(session: Session, auth: AuthContext, episode_id: UUID) -> None:

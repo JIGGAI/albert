@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     lock_default_ttl_seconds: int = Field(default=900, ge=10, le=86400)
     max_search_limit: int = Field(default=100, ge=1, le=500)
+    # Ceiling on `Prefer: wait=N` for episode writes and reads; each wait holds a worker thread.
+    max_index_wait_seconds: int = Field(default=30, ge=0, le=120)
     min_vector_similarity: float = Field(default=0.2, ge=-1, le=1)
     chunk_characters: int = Field(default=1500, ge=200, le=20_000)
     chunk_overlap_characters: int = Field(default=200, ge=0, le=5_000)
