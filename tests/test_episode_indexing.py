@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 import albert.worker as worker
-from albert.api import _preferred_wait
+from albert.api import _preferred_wait, app
 from albert.db import SessionLocal
 from albert.models import Job
 from albert.services import MAX_JOB_ATTEMPTS
@@ -159,3 +159,30 @@ async def test_mcp_ingest_forwards_wait(monkeypatch) -> None:  # type: ignore[no
     assert seen["headers"] == {"Prefer": "wait=12"}
     await mcp_server.memory_ingest("probe")
     assert seen["headers"] is None
+
+
+async def test_repost_with_wait_needs_only_write(identity) -> None:  # type: ignore[no-untyped-def]
+    """Albert Cloud's ingestion key is write-only; re-posting is how it waits."""
+    from .conftest import create_principal_key
+
+    _key, organization, workspace = identity
+    writer = create_principal_key(organization, workspace, "Ingestion", ["memory.write"])
+    body = {"content": "Write-only wait probe.", "source_uri": "albert-cloud://documents/j/0"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {writer}"},
+    ) as client:
+        drain_jobs()
+        first = await client.post("/v1/episodes", json=body)
+        assert first.status_code == 201
+        assert (await client.get(f"/v1/episodes/{first.json()['id']}")).status_code == 403
+        background = threading.Timer(0.3, drain_jobs)
+        background.start()
+        try:
+            again = await client.post("/v1/episodes", json=body, headers={"Prefer": "wait=10"})
+        finally:
+            background.join()
+    assert again.status_code == 200
+    assert again.json()["id"] == first.json()["id"]
+    assert again.json()["indexing"]["state"] == "complete"
