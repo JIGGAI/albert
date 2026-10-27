@@ -167,6 +167,30 @@ async def test_concurrent_event_retry_stores_one_canonical_result(
         ) == 1
 
 
+async def test_concurrent_checkpoint_retry_stores_one_canonical_result(
+    client: httpx.AsyncClient,
+) -> None:
+    started = await _start(client, key="concurrent-checkpoint-session")
+    event_url = f"/v1/capture/sessions/{started['id']}/events"
+    assert (await client.post(event_url, json=_event(1))).status_code == 201
+    checkpoint_url = f"/v1/capture/sessions/{started['id']}/checkpoints"
+    checkpoint = {"through_sequence": 1, "idempotency_key": "concurrent-checkpoint"}
+
+    first, second = await asyncio.gather(
+        client.post(checkpoint_url, json=checkpoint),
+        client.post(checkpoint_url, json=checkpoint),
+    )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 201]
+    assert first.json()["id"] == second.json()["id"]
+    with SessionLocal() as session:
+        assert session.scalar(
+            select(func.count()).select_from(CaptureCheckpoint).where(
+                CaptureCheckpoint.session_id == UUID(started["id"])
+            )
+        ) == 1
+
+
 async def test_capture_versions_capabilities_and_identifiers_do_not_leak(
     client: httpx.AsyncClient, identity
 ) -> None:  # type: ignore[no-untyped-def]

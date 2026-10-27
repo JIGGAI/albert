@@ -446,15 +446,28 @@ def write_checkpoint(
         metadata_=data.metadata,
     )
     session.add(checkpoint)
-    audit(
-        session,
-        auth,
-        "capture.checkpoint.created",
-        resource_type="capture_checkpoint",
-        resource_id=str(checkpoint.id),
-        detail={"through_sequence": data.through_sequence},
-    )
-    session.commit()
+    try:
+        audit(
+            session,
+            auth,
+            "capture.checkpoint.created",
+            resource_type="capture_checkpoint",
+            resource_id=str(checkpoint.id),
+            detail={"through_sequence": data.through_sequence},
+        )
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        concurrent = session.scalar(
+            select(CaptureCheckpoint).where(
+                CaptureCheckpoint.session_id == session_id,
+                CaptureCheckpoint.idempotency_key == data.idempotency_key,
+            )
+        )
+        if concurrent is not None and concurrent.request_hash == request_hash:
+            response.status_code = status.HTTP_200_OK
+            return _checkpoint_read(concurrent)
+        raise HTTPException(status_code=409, detail="Checkpoint was concurrently written") from exc
     return _checkpoint_read(checkpoint)
 
 
