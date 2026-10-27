@@ -53,6 +53,8 @@ def create_identity(
                     "graph.write",
                     "working_memory.write",
                     "locks.acquire",
+                    "capture.write",
+                    "capture.system",
                 ],
             )
         )

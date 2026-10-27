@@ -32,6 +32,8 @@ ALL_CAPABILITIES = [
     "working_memory.read",
     "working_memory.write",
     "locks.acquire",
+    "capture.write",
+    "capture.system",
     "console.read",
     "keys.manage",
     "admin",

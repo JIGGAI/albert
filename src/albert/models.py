@@ -153,6 +153,107 @@ class Episode(Base, TimestampMixin):
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class CaptureSession(Base, TimestampMixin):
+    """A principal-owned automatic-capture stream."""
+
+    __tablename__ = "capture_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_principal_id", "client_session_id", name="uq_capture_sessions_principal_client"
+        ),
+        UniqueConstraint(
+            "owner_principal_id", "idempotency_key", name="uq_capture_sessions_principal_key"
+        ),
+        Index("ix_capture_sessions_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    owner_principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    client_session_id: Mapped[str] = mapped_column(String(300))
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    contract_version: Mapped[str] = mapped_column(String(16), default="1")
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_idempotency_key: Mapped[str | None] = mapped_column(String(200))
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaptureEvent(Base, TimestampMixin):
+    """One ordered, canonical event in a capture session."""
+
+    __tablename__ = "capture_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "sequence", name="uq_capture_events_session_sequence"),
+        UniqueConstraint(
+            "session_id", "idempotency_key", name="uq_capture_events_session_key"
+        ),
+        Index("ix_capture_events_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("capture_sessions.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    owner_principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    contract_version: Mapped[str] = mapped_column(String(16), default="1")
+    event_class: Mapped[str] = mapped_column(String(64), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    episode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("episodes.id", ondelete="SET NULL"), index=True
+    )
+    derived_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CaptureCheckpoint(Base, TimestampMixin):
+    """A retry-safe marker linking a session position to durable memory records."""
+
+    __tablename__ = "capture_checkpoints"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "through_sequence", name="uq_capture_checkpoints_session_sequence"
+        ),
+        UniqueConstraint(
+            "session_id", "idempotency_key", name="uq_capture_checkpoints_session_key"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("capture_sessions.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    owner_principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    through_sequence: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    contract_version: Mapped[str] = mapped_column(String(16), default="1")
+    episode_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("episodes.id", ondelete="SET NULL"), index=True
+    )
+    derived_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), index=True
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Memory(Base, TimestampMixin):
     __tablename__ = "memories"
     __table_args__ = (
