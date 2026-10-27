@@ -167,7 +167,7 @@ async def test_branch_recall_is_preferred_with_project_wide_fallback(
             json={
                 "sequence": 1,
                 "idempotency_key": f"event-{marker}",
-                "event_class": "observation",
+                "event_class": "assistant_outcome",
                 "content": "Branch preference sentinel knowledge",
             },
         )
