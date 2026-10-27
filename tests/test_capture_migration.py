@@ -33,6 +33,11 @@ def _capture_tables(database: Path) -> set[str]:
         }
 
 
+def _columns(database: Path, table: str) -> set[str]:
+    with sqlite3.connect(database) as connection:
+        return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
 def test_capture_migration_upgrade_rollback_and_reapply(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     database = tmp_path / "capture-migration.sqlite3"
@@ -45,6 +50,17 @@ def test_capture_migration_upgrade_rollback_and_reapply(tmp_path: Path) -> None:
 
     _alembic(project_root, database, "upgrade", "head")
     assert _capture_tables(database) == expected
+    provenance_columns = {"provenance", "project_identity", "source_commit", "branch_ref"}
+    assert provenance_columns <= _columns(database, "capture_sessions")
+    assert provenance_columns <= _columns(database, "capture_events")
+
+    _alembic(project_root, database, "downgrade", "0009")
+    assert provenance_columns.isdisjoint(_columns(database, "capture_sessions"))
+    assert provenance_columns.isdisjoint(_columns(database, "capture_events"))
+
+    _alembic(project_root, database, "upgrade", "head")
+    assert provenance_columns <= _columns(database, "capture_sessions")
+    assert provenance_columns <= _columns(database, "capture_events")
 
     _alembic(project_root, database, "downgrade", "0008")
     assert _capture_tables(database) == set()

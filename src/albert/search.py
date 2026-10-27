@@ -173,6 +173,7 @@ def _filters(request: SearchRequest, workspace_id: UUID | None) -> dict[str, Any
         "project_ref": request.project_ref,
         "task_ref": request.task_ref,
         "run_ref": request.run_ref,
+        "branch_ref": request.branch_ref,
         "memory_types": request.memory_types,
         "sensitivity": request.sensitivity,
         "temporal_as_of": request.temporal_as_of.isoformat() if request.temporal_as_of else None,
@@ -189,6 +190,9 @@ def _candidates(items: list[tuple[Any, float]], kind: str) -> list[dict[str, Any
 
 
 def _memory_hit(memory: Memory, request: SearchRequest, backend: str, score: float) -> SearchHit:
+    provenance = memory.metadata_.get("provenance", {})
+    if not isinstance(provenance, dict):
+        provenance = {}
     return SearchHit(
         memory_id=memory.id,
         kind="memory",
@@ -201,6 +205,7 @@ def _memory_hit(memory: Memory, request: SearchRequest, backend: str, score: flo
             "memory_type": memory.memory_type,
             "sensitivity": memory.sensitivity,
             "confidence": memory.confidence,
+            "provenance": provenance,
             "backend_scores": {backend: score},
         },
     )
@@ -332,6 +337,14 @@ def hybrid_search(
                 else:
                     hits[key] = hit
                 backend_names[key].append(backend)
+        if request.branch_ref:
+            for key, hit in hits.items():
+                provenance = hit.metadata.get("provenance", {})
+                if provenance.get("branch") == request.branch_ref or provenance.get(
+                    "ref"
+                ) == request.branch_ref:
+                    scores[key] += 1.0 / (RRF_K + 1)
+                    contributions[key]["branch_preference"] = round(1.0 / (RRF_K + 1), 6)
         ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
         result = []
         for key in ordered:

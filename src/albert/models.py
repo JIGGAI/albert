@@ -215,6 +215,10 @@ class CaptureSession(Base, TimestampMixin):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_idempotency_key: Mapped[str | None] = mapped_column(String(200))
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    project_identity: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_commit: Mapped[str | None] = mapped_column(String(128), index=True)
+    branch_ref: Mapped[str | None] = mapped_column(String(300), index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -251,6 +255,10 @@ class CaptureEvent(Base, TimestampMixin):
     body_kind: Mapped[str] = mapped_column(String(16), default="summary")
     content: Mapped[str] = mapped_column(Text)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    project_identity: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_commit: Mapped[str | None] = mapped_column(String(128), index=True)
+    branch_ref: Mapped[str | None] = mapped_column(String(300), index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     episode_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("episodes.id", ondelete="SET NULL"), index=True
