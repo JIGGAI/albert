@@ -153,6 +153,37 @@ class Episode(Base, TimestampMixin):
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class CaptureProfile(Base, TimestampMixin):
+    """An immutable, tenant-scoped version of server capture policy."""
+
+    __tablename__ = "capture_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "scope_key",
+            "profile_key",
+            "version",
+            name="uq_capture_profiles_scope_key_version",
+        ),
+        Index("ix_capture_profiles_scope_key", "organization_id", "workspace_id", "profile_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    scope_key: Mapped[str] = mapped_column(String(36))
+    profile_key: Mapped[str] = mapped_column(String(100))
+    version: Mapped[int] = mapped_column(Integer)
+    allowed_event_classes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_allowlists: Mapped[dict[str, list[str]]] = mapped_column(JSON, default=dict)
+    event_bounds: Mapped[dict[str, dict[str, int]]] = mapped_column(JSON, default=dict)
+    sensitivity_floor: Mapped[str] = mapped_column(String(32), default="internal")
+    source_trust: Mapped[str] = mapped_column(String(32), default="untrusted")
+    retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    raw_body_policy: Mapped[str] = mapped_column(String(16), default="deny")
+    deny_reasons: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+
+
 class CaptureSession(Base, TimestampMixin):
     """A principal-owned automatic-capture stream."""
 
@@ -175,6 +206,9 @@ class CaptureSession(Base, TimestampMixin):
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_hash: Mapped[str] = mapped_column(String(64))
     contract_version: Mapped[str] = mapped_column(String(16), default="1")
+    profile_key: Mapped[str] = mapped_column(String(100), default="safe-default")
+    local_event_classes: Mapped[list[str] | None] = mapped_column(JSON)
+    local_metadata_allowlists: Mapped[dict[str, list[str]] | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -208,6 +242,13 @@ class CaptureEvent(Base, TimestampMixin):
     request_hash: Mapped[str] = mapped_column(String(64))
     contract_version: Mapped[str] = mapped_column(String(16), default="1")
     event_class: Mapped[str] = mapped_column(String(64), index=True)
+    profile_key: Mapped[str] = mapped_column(String(100), default="safe-default")
+    profile_version: Mapped[int] = mapped_column(Integer, default=1)
+    policy_decision: Mapped[str] = mapped_column(String(16), default="allow")
+    sensitivity: Mapped[str] = mapped_column(String(32), default="internal")
+    source_trust: Mapped[str] = mapped_column(String(32), default="untrusted")
+    retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    body_kind: Mapped[str] = mapped_column(String(16), default="summary")
     content: Mapped[str] = mapped_column(Text)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
