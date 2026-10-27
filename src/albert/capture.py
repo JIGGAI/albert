@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from albert.capture_security import screen_capture
 from albert.db import get_session
 from albert.models import (
     CaptureCheckpoint,
@@ -36,7 +37,7 @@ from albert.schemas import (
     CaptureSessionStart,
 )
 from albert.security import AuthContext, authenticate
-from albert.services import audit, enqueue, reject_secrets
+from albert.services import audit, enqueue
 
 router = APIRouter(prefix="/v1/capture", tags=["capture"])
 PRIVILEGED_EVENT_CLASSES = frozenset({"system", "instruction"})
@@ -68,6 +69,8 @@ class CapturePolicy:
     source_trust: str
     retention_days: int
     raw_body_policy: str
+    secret_policy: str
+    derivative_policy: str
     deny_reasons: dict[str, str]
 
 
@@ -77,6 +80,8 @@ class PolicyResult:
     policy: CapturePolicy
     dropped_fields: tuple[str, ...]
     request_hash: str
+    screening_decision: str
+    screening_reasons: tuple[str, ...]
 
 
 def _default_policy() -> CapturePolicy:
@@ -93,6 +98,8 @@ def _default_policy() -> CapturePolicy:
         source_trust="untrusted",
         retention_days=30,
         raw_body_policy="deny",
+        secret_policy="reject",
+        derivative_policy="cascade",
         deny_reasons={},
     )
 
@@ -108,6 +115,8 @@ def _profile_policy(value: CaptureProfile) -> CapturePolicy:
         source_trust=value.source_trust,
         retention_days=value.retention_days,
         raw_body_policy=value.raw_body_policy,
+        secret_policy=value.secret_policy,
+        derivative_policy=value.derivative_policy,
         deny_reasons=value.deny_reasons,
     )
 
@@ -121,6 +130,15 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _hash(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _reject_secret_identifiers(*values: str) -> None:
+    screening = screen_capture("", {"values": list(values)})
+    if screening.reasons:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "capture_identifier_rejected", "reasons": list(screening.reasons)},
+        )
 
 
 def _require_version(version: str) -> None:
@@ -225,33 +243,64 @@ def _apply_policy(
     if data.body_kind == "raw" and policy.raw_body_policy != "allow":
         _deny_policy(session, auth, capture_session, policy, data.event_class, "raw_body_denied")
 
+    screening = screen_capture(data.content, data.metadata)
+    if screening.reasons and policy.secret_policy == "reject":
+        audit(
+            session,
+            auth,
+            "capture.secret.rejected",
+            resource_type="capture_session",
+            resource_id=str(capture_session.id),
+            detail={
+                "event_class": data.event_class,
+                "profile_key": policy.profile_key,
+                "profile_version": policy.version,
+                "decision": "reject",
+                "reasons": list(screening.reasons),
+            },
+        )
+        session.commit()
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "capture_secret_rejected", "reasons": list(screening.reasons)},
+        )
+    screened_data = data.model_copy(
+        update={"content": screening.content, "metadata": screening.metadata}
+    )
+
     bounds = policy.event_bounds.get(data.event_class, {})
     max_content = bounds.get("max_content_chars", 64_000)
-    if len(data.content) > max_content:
+    if len(screened_data.content) > max_content:
         _deny_policy(session, auth, capture_session, policy, data.event_class, "content_too_large")
 
     allowed_metadata = set(policy.metadata_allowlists.get(data.event_class, []))
     if capture_session.local_metadata_allowlists is not None:
         allowed_metadata &= set(capture_session.local_metadata_allowlists.get(data.event_class, []))
     filtered_metadata = {
-        key: value for key, value in data.metadata.items() if key in allowed_metadata
+        key: value for key, value in screened_data.metadata.items() if key in allowed_metadata
     }
     max_metadata = bounds.get("max_metadata_chars", 64_000)
     if len(json.dumps(filtered_metadata, default=str)) > max_metadata:
         _deny_policy(session, auth, capture_session, policy, data.event_class, "metadata_too_large")
 
-    sensitivity = max((data.sensitivity, policy.sensitivity_floor), key=SENSITIVITY_ORDER.index)
+    sensitivity = max(
+        (screened_data.sensitivity, policy.sensitivity_floor), key=SENSITIVITY_ORDER.index
+    )
     if sensitivity not in auth.allowed_sensitivities():
         _deny_policy(
             session, auth, capture_session, policy, data.event_class, "credential_capability_denied"
         )
-    dropped = tuple(sorted(set(data.metadata) - set(filtered_metadata)))
-    effective = data.model_copy(update={"metadata": filtered_metadata, "sensitivity": sensitivity})
+    dropped = tuple(sorted(set(screened_data.metadata) - set(filtered_metadata)))
+    effective = screened_data.model_copy(
+        update={"metadata": filtered_metadata, "sensitivity": sensitivity}
+    )
     return PolicyResult(
         data=effective,
         policy=policy,
         dropped_fields=dropped,
         request_hash=_event_hash(data),
+        screening_decision="redacted" if screening.reasons else "clean",
+        screening_reasons=screening.reasons,
     )
 
 
@@ -300,6 +349,8 @@ def _event_read(value: CaptureEvent) -> CaptureEventRead:
         sensitivity=value.sensitivity,
         source_trust=value.source_trust,
         retention_days=value.retention_days,
+        screening_decision=value.screening_decision,
+        screening_reasons=value.screening_reasons,
         occurred_at=_as_utc(value.occurred_at),
         episode_id=value.episode_id,
         derived_memory_id=value.derived_memory_id,
@@ -394,6 +445,9 @@ def _stage_event(
         source_trust=policy.source_trust,
         retention_days=policy.retention_days,
         body_kind=data.body_kind,
+        screening_decision=result.screening_decision,
+        screening_reasons=list(result.screening_reasons),
+        derivative_policy=policy.derivative_policy,
         content=data.content,
         metadata_=data.metadata,
         occurred_at=occurred_at,
@@ -416,6 +470,8 @@ def _profile_read(value: CaptureProfile) -> CaptureProfileRead:
         source_trust=value.source_trust,
         retention_days=value.retention_days,
         raw_body_policy=value.raw_body_policy,
+        secret_policy=value.secret_policy,
+        derivative_policy=value.derivative_policy,
         deny_reasons=value.deny_reasons,
         created_at=_as_utc(value.created_at),
     )
@@ -463,6 +519,8 @@ def create_profile(
         source_trust=data.source_trust,
         retention_days=data.retention_days,
         raw_body_policy=data.raw_body_policy,
+        secret_policy=data.secret_policy,
+        derivative_policy=data.derivative_policy,
         deny_reasons=data.deny_reasons,
     )
     session.add(profile)
@@ -519,9 +577,18 @@ def start_session(
 ) -> CaptureSessionRead:
     auth.require("capture.write")
     _require_version(data.version)
-    reject_secrets(data.metadata, what="Capture metadata")
+    _reject_secret_identifiers(data.client_session_id, data.idempotency_key)
     workspace_id = _workspace(session, auth, data.workspace_id)
     policy = _latest_policy(session, auth, workspace_id, data.profile_key)
+    screened_metadata = screen_capture("", data.metadata)
+    if screened_metadata.reasons and policy.secret_policy == "reject":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "capture_secret_rejected",
+                "reasons": list(screened_metadata.reasons),
+            },
+        )
     if data.local_event_classes is not None:
         local_classes = set(data.local_event_classes)
         if len(local_classes) != len(data.local_event_classes):
@@ -564,7 +631,7 @@ def start_session(
         profile_key=data.profile_key,
         local_event_classes=data.local_event_classes,
         local_metadata_allowlists=data.local_metadata_allowlists,
-        metadata_=data.metadata,
+        metadata_=screened_metadata.metadata,
     )
     session.add(capture_session)
     try:
@@ -603,7 +670,7 @@ def write_event(
 ) -> CaptureEventRead:
     _require_version(data.version)
     _require_event_capability(auth, data.event_class)
-    reject_secrets(data.content, data.metadata, what="Capture event")
+    _reject_secret_identifiers(data.idempotency_key)
     capture_session = _capture_session(session, auth, session_id, lock=True)
     existing = _existing_event(session, capture_session, data)
     if existing is not None:
@@ -634,6 +701,8 @@ def write_event(
                 "profile_version": result.policy.version,
                 "decision": "allow",
                 "dropped_fields": list(result.dropped_fields),
+                "screening_decision": result.screening_decision,
+                "screening_reasons": list(result.screening_reasons),
             },
         )
         session.commit()
@@ -666,7 +735,7 @@ def write_event_batch(
     for item in data.events:
         _require_version(item.version)
         _require_event_capability(auth, item.event_class)
-        reject_secrets(item.content, item.metadata, what="Capture event")
+        _reject_secret_identifiers(item.idempotency_key)
     capture_session = _capture_session(session, auth, session_id, lock=True)
     existing = [_existing_event(session, capture_session, item) for item in data.events]
     if all(item is not None for item in existing):
@@ -706,6 +775,10 @@ def write_event_batch(
                 "profile_version": results[0].policy.version,
                 "decision": "allow",
                 "dropped_field_count": sum(len(item.dropped_fields) for item in results),
+                "redacted_count": sum(item.screening_decision == "redacted" for item in results),
+                "screening_reasons": sorted(
+                    {reason for item in results for reason in item.screening_reasons}
+                ),
             },
         )
         session.commit()
@@ -741,8 +814,20 @@ def write_checkpoint(
 ) -> CaptureCheckpointRead:
     auth.require("capture.write")
     _require_version(data.version)
-    reject_secrets(data.metadata, what="Capture checkpoint metadata")
+    _reject_secret_identifiers(data.idempotency_key)
     capture_session = _capture_session(session, auth, session_id, lock=True)
+    policy = _latest_policy(
+        session, auth, capture_session.workspace_id, capture_session.profile_key
+    )
+    screened_metadata = screen_capture("", data.metadata)
+    if screened_metadata.reasons and policy.secret_policy == "reject":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "capture_secret_rejected",
+                "reasons": list(screened_metadata.reasons),
+            },
+        )
     request_hash = _hash(data.model_dump(mode="json"))
     existing = session.scalar(
         select(CaptureCheckpoint).where(
@@ -779,7 +864,7 @@ def write_checkpoint(
         contract_version=data.version,
         episode_id=event.episode_id,
         derived_memory_id=event.derived_memory_id,
-        metadata_=data.metadata,
+        metadata_=screened_metadata.metadata,
     )
     session.add(checkpoint)
     try:
@@ -816,6 +901,7 @@ def end_session(
 ) -> CaptureSessionRead:
     auth.require("capture.write")
     _require_version(data.version)
+    _reject_secret_identifiers(data.idempotency_key)
     capture_session = _capture_session(session, auth, session_id, lock=True)
     if capture_session.status == "ended":
         if (

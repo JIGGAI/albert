@@ -181,6 +181,8 @@ class CaptureProfile(Base, TimestampMixin):
     source_trust: Mapped[str] = mapped_column(String(32), default="untrusted")
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
     raw_body_policy: Mapped[str] = mapped_column(String(16), default="deny")
+    secret_policy: Mapped[str] = mapped_column(String(16), default="reject")
+    derivative_policy: Mapped[str] = mapped_column(String(16), default="cascade")
     deny_reasons: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
 
 
@@ -249,6 +251,9 @@ class CaptureEvent(Base, TimestampMixin):
     source_trust: Mapped[str] = mapped_column(String(32), default="untrusted")
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
     body_kind: Mapped[str] = mapped_column(String(16), default="summary")
+    screening_decision: Mapped[str] = mapped_column(String(16), default="clean")
+    screening_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    derivative_policy: Mapped[str] = mapped_column(String(16), default="cascade")
     content: Mapped[str] = mapped_column(Text)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -45,6 +45,13 @@ def test_capture_migration_upgrade_rollback_and_reapply(tmp_path: Path) -> None:
 
     _alembic(project_root, database, "upgrade", "head")
     assert _capture_tables(database) == expected
+    with sqlite3.connect(database) as connection:
+        profile_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(capture_profiles)")
+        }
+        event_columns = {row[1] for row in connection.execute("PRAGMA table_info(capture_events)")}
+    assert {"secret_policy", "derivative_policy"} <= profile_columns
+    assert {"screening_decision", "screening_reasons", "derivative_policy"} <= event_columns
 
     _alembic(project_root, database, "downgrade", "0008")
     assert _capture_tables(database) == set()

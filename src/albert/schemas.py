@@ -99,6 +99,8 @@ class CaptureProfileWrite(BaseModel):
     source_trust: Literal["untrusted", "verified", "trusted"] = "untrusted"
     retention_days: int = Field(default=30, ge=1, le=3650)
     raw_body_policy: Literal["deny", "allow"] = "deny"
+    secret_policy: Literal["reject", "redact"] = "reject"
+    derivative_policy: Literal["cascade", "invalidate"] = "cascade"
     deny_reasons: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -210,6 +212,8 @@ class CaptureEventRead(BaseModel):
     sensitivity: str
     source_trust: str
     retention_days: int
+    screening_decision: Literal["clean", "redacted"]
+    screening_reasons: list[str]
     occurred_at: datetime
     episode_id: UUID
     derived_memory_id: UUID | None = None
