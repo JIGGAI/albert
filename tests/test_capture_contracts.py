@@ -24,7 +24,7 @@ async def _start(client: httpx.AsyncClient, *, key: str = "session-1") -> dict:
     return response.json()
 
 
-def _event(sequence: int, *, key: str | None = None, event_class: str = "message") -> dict:
+def _event(sequence: int, *, key: str | None = None, event_class: str = "user_goal") -> dict:
     return {
         "sequence": sequence,
         "idempotency_key": key or f"event-{sequence}",

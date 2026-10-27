@@ -88,11 +88,52 @@ CAPTURE_CONTRACT_VERSION = "1"
 MAX_CAPTURE_BATCH_EVENTS = 100
 
 
+class CaptureProfileWrite(BaseModel):
+    profile_key: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version: int = Field(ge=1)
+    workspace_id: UUID | None = None
+    allowed_event_classes: list[str] = Field(min_length=1, max_length=64)
+    metadata_allowlists: dict[str, list[str]] = Field(default_factory=dict)
+    event_bounds: dict[str, dict[str, int]] = Field(default_factory=dict)
+    sensitivity_floor: Literal["public", "internal", "confidential", "restricted"] = "internal"
+    source_trust: Literal["untrusted", "verified", "trusted"] = "untrusted"
+    retention_days: int = Field(default=30, ge=1, le=3650)
+    raw_body_policy: Literal["deny", "allow"] = "deny"
+    deny_reasons: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_profile(self):  # type: ignore[no-untyped-def]
+        allowed = set(self.allowed_event_classes)
+        if len(allowed) != len(self.allowed_event_classes):
+            raise ValueError("allowed event classes must be unique")
+        if not set(self.metadata_allowlists).issubset(allowed):
+            raise ValueError("metadata allowlists must reference allowed event classes")
+        if not set(self.event_bounds).issubset(allowed):
+            raise ValueError("event bounds must reference allowed event classes")
+        for event_class, bounds in self.event_bounds.items():
+            if not set(bounds).issubset({"max_content_chars", "max_metadata_chars"}):
+                raise ValueError(f"unsupported bound for {event_class}")
+            if any(
+                not isinstance(value, int) or value < 0 or value > 2_000_000
+                for value in bounds.values()
+            ):
+                raise ValueError(f"invalid bound for {event_class}")
+        return self
+
+
+class CaptureProfileRead(CaptureProfileWrite):
+    id: UUID
+    created_at: datetime
+
+
 class CaptureSessionStart(BaseModel):
     version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
     workspace_id: UUID | None = None
     client_session_id: str = Field(min_length=1, max_length=300)
     idempotency_key: str = Field(min_length=1, max_length=200)
+    profile_key: str = Field(default="safe-default", min_length=1, max_length=100)
+    local_event_classes: list[str] | None = Field(default=None, max_length=64)
+    local_metadata_allowlists: dict[str, list[str]] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     _bounded_metadata = field_validator("metadata")(_bounded_json)
@@ -102,8 +143,10 @@ class CaptureEventWrite(BaseModel):
     version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
     sequence: int = Field(ge=1)
     idempotency_key: str = Field(min_length=1, max_length=200)
-    event_class: Literal["message", "tool", "decision", "observation", "system", "instruction"]
+    event_class: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     content: str = Field(min_length=1, max_length=64_000)
+    sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
+    body_kind: Literal["summary", "raw"] = "summary"
     occurred_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -149,6 +192,7 @@ class CaptureSessionRead(BaseModel):
     version: str
     client_session_id: str
     workspace_id: UUID | None
+    profile_key: str
     status: Literal["active", "ended"]
     last_sequence: int
     started_at: datetime
@@ -161,6 +205,11 @@ class CaptureEventRead(BaseModel):
     version: str
     sequence: int
     event_class: str
+    profile_key: str
+    profile_version: int
+    sensitivity: str
+    source_trust: str
+    retention_days: int
     occurred_at: datetime
     episode_id: UUID
     derived_memory_id: UUID | None = None
