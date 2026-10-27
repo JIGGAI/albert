@@ -84,6 +84,101 @@ class EpisodeRead(ORMModel):
     indexing: IndexingStatus | None = None
 
 
+CAPTURE_CONTRACT_VERSION = "1"
+MAX_CAPTURE_BATCH_EVENTS = 100
+
+
+class CaptureSessionStart(BaseModel):
+    version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
+    workspace_id: UUID | None = None
+    client_session_id: str = Field(min_length=1, max_length=300)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
+
+class CaptureEventWrite(BaseModel):
+    version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
+    sequence: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    event_class: Literal["message", "tool", "decision", "observation", "system", "instruction"]
+    content: str = Field(min_length=1, max_length=64_000)
+    occurred_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _visible_content = field_validator("content")(_require_visible_text)
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
+
+class CaptureEventBatch(BaseModel):
+    version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
+    events: list[CaptureEventWrite] = Field(min_length=1, max_length=MAX_CAPTURE_BATCH_EVENTS)
+
+    @model_validator(mode="after")
+    def validate_batch(self):  # type: ignore[no-untyped-def]
+        if any(event.version != self.version for event in self.events):
+            raise ValueError("batch and event versions must match")
+        if len({event.sequence for event in self.events}) != len(self.events):
+            raise ValueError("batch event sequences must be unique")
+        if len({event.idempotency_key for event in self.events}) != len(self.events):
+            raise ValueError("batch idempotency keys must be unique")
+        encoded = json.dumps(self.model_dump(mode="json"), separators=(",", ":"))
+        if len(encoded) > 512_000:
+            raise ValueError("capture batch exceeds 512000 serialized characters")
+        return self
+
+
+class CaptureCheckpointWrite(BaseModel):
+    version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
+    through_sequence: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _bounded_metadata = field_validator("metadata")(_bounded_json)
+
+
+class CaptureSessionEnd(BaseModel):
+    version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    final_sequence: int = Field(ge=0)
+
+
+class CaptureSessionRead(BaseModel):
+    id: UUID
+    version: str
+    client_session_id: str
+    workspace_id: UUID | None
+    status: Literal["active", "ended"]
+    last_sequence: int
+    started_at: datetime
+    ended_at: datetime | None = None
+
+
+class CaptureEventRead(BaseModel):
+    id: UUID
+    session_id: UUID
+    version: str
+    sequence: int
+    event_class: str
+    occurred_at: datetime
+    episode_id: UUID
+    derived_memory_id: UUID | None = None
+
+
+class CaptureEventBatchRead(BaseModel):
+    events: list[CaptureEventRead]
+
+
+class CaptureCheckpointRead(BaseModel):
+    id: UUID
+    session_id: UUID
+    version: str
+    through_sequence: int
+    episode_id: UUID
+    derived_memory_id: UUID | None = None
+
+
 class MemoryCreate(ScopeFields):
     subject: str = Field(default="", max_length=500)
     content: str = Field(min_length=1, max_length=200_000)

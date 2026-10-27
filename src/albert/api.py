@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from albert import __version__
+from albert.capture import router as capture_router
 from albert.config import get_settings
 from albert.console import router as console_router
 from albert.console_backends import router as console_backends_router
@@ -97,6 +98,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(RecordingMiddleware)
+app.include_router(capture_router)
 app.include_router(console_router)
 app.include_router(console_backends_router)
 app.include_router(console_map_router)
