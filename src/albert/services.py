@@ -1039,7 +1039,14 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
         sensitivity=_highest_sensitivity(episode.sensitivity, result.sensitivity),
         confidence=result.confidence,
         valid_from=episode.occurred_at,
-        metadata_={"derived_from_episode": True},
+        metadata_={
+            "derived_from_episode": True,
+            **(
+                {"provenance": episode.extra["provenance"]}
+                if isinstance(episode.extra.get("provenance"), dict)
+                else {}
+            ),
+        },
     )
     session.add(memory)
     session.flush()
