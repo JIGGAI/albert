@@ -487,6 +487,9 @@ def delete_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Non
     episode.extra = {}
     episode.enrichment_error = None
     episode.deleted_at = now
+    from albert.capture_retention import delete_capture_for_episode
+
+    delete_capture_for_episode(session, episode.id, now)
     audit(session, auth, "episode.deleted", resource_type="episode", resource_id=str(episode.id))
     session.commit()
 
@@ -1050,6 +1053,14 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     )
     session.add(memory)
     session.flush()
+    from albert.models import CaptureCheckpoint, CaptureEvent
+
+    session.query(CaptureEvent).filter(CaptureEvent.episode_id == episode.id).update(
+        {CaptureEvent.derived_memory_id: memory.id}, synchronize_session=False
+    )
+    session.query(CaptureCheckpoint).filter(CaptureCheckpoint.episode_id == episode.id).update(
+        {CaptureCheckpoint.derived_memory_id: memory.id}, synchronize_session=False
+    )
     index_memory_chunks(session, memory)
     with span("write_edges") as edges_span:
         closed, written = _apply_built_relationships(

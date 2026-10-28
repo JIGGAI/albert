@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from albert.capture_retention import expire_capture_events
 from albert.config import get_settings
 from albert.db import SessionLocal
 from albert.links import process_recall_traces
@@ -125,6 +126,7 @@ def housekeeping(session: Session) -> None:
     session.query(MemoryRecall).filter(MemoryRecall.recalled_at < now - retention).delete(
         synchronize_session=False
     )
+    expire_capture_events(session, now=now)
     session.commit()
     try:
         for _ in range(RECALL_BATCHES_PER_PASS):
