@@ -52,8 +52,10 @@ def _screen_value(value: Any) -> tuple[Any, set[str]]:
         output: dict[str, Any] = {}
         reasons: set[str] = set()
         for key, item in value.items():
+            screened_key, key_reasons = _screen_text(key)
             screened, found = _screen_value(item)
-            output[key] = screened
+            output[screened_key] = screened
+            reasons.update(key_reasons)
             reasons.update(found)
         return output, reasons
     if isinstance(value, list):

@@ -79,6 +79,7 @@ class CapturePolicy:
 class PolicyResult:
     data: CaptureEventWrite
     policy: CapturePolicy
+    provenance: dict[str, object]
     dropped_fields: tuple[str, ...]
     request_hash: str
     screening_decision: str
@@ -244,7 +245,16 @@ def _apply_policy(
     if data.body_kind == "raw" and policy.raw_body_policy != "allow":
         _deny_policy(session, auth, capture_session, policy, data.event_class, "raw_body_denied")
 
-    screening = screen_capture(data.content, data.metadata)
+    observed = normalize_provenance(
+        data.provenance,
+        organization_id=auth.organization_id,
+        allow_absolute_path="admin" in auth.capabilities,
+    )
+    provenance = merge_event_provenance(capture_session.provenance, observed)
+    screening = screen_capture(
+        data.content,
+        {"metadata": data.metadata, "provenance": provenance},
+    )
     if screening.reasons and policy.secret_policy == "reject":
         audit(
             session,
@@ -266,8 +276,9 @@ def _apply_policy(
             detail={"error": "capture_secret_rejected", "reasons": list(screening.reasons)},
         )
     screened_data = data.model_copy(
-        update={"content": screening.content, "metadata": screening.metadata}
+        update={"content": screening.content, "metadata": screening.metadata["metadata"]}
     )
+    screened_provenance = screening.metadata["provenance"]
 
     bounds = policy.event_bounds.get(data.event_class, {})
     max_content = bounds.get("max_content_chars", 64_000)
@@ -298,6 +309,7 @@ def _apply_policy(
     return PolicyResult(
         data=effective,
         policy=policy,
+        provenance=screened_provenance,
         dropped_fields=dropped,
         request_hash=_event_hash(data),
         screening_decision="redacted" if screening.reasons else "clean",
@@ -404,12 +416,7 @@ def _stage_event(
     event_id = uuid4()
     occurred_at = data.occurred_at or utcnow()
     content_hash = hashlib.sha256(data.content.encode()).hexdigest()
-    observed = normalize_provenance(
-        data.provenance,
-        organization_id=auth.organization_id,
-        allow_absolute_path="admin" in auth.capabilities,
-    )
-    provenance = merge_event_provenance(capture_session.provenance, observed)
+    provenance = result.provenance
     project_identity = provenance.get("project_id")
     source_commit = provenance.get("source_commit")
     branch_ref = provenance.get("branch") or provenance.get("ref")
@@ -600,13 +607,21 @@ def start_session(
     _reject_secret_identifiers(data.client_session_id, data.idempotency_key)
     workspace_id = _workspace(session, auth, data.workspace_id)
     policy = _latest_policy(session, auth, workspace_id, data.profile_key)
-    screened_metadata = screen_capture("", data.metadata)
-    if screened_metadata.reasons and policy.secret_policy == "reject":
+    provenance = normalize_provenance(
+        data.provenance,
+        organization_id=auth.organization_id,
+        allow_absolute_path="admin" in auth.capabilities,
+    )
+    screening = screen_capture(
+        "",
+        {"metadata": data.metadata, "provenance": provenance},
+    )
+    if screening.reasons and policy.secret_policy == "reject":
         raise HTTPException(
             status_code=422,
             detail={
                 "error": "capture_secret_rejected",
-                "reasons": list(screened_metadata.reasons),
+                "reasons": list(screening.reasons),
             },
         )
     if data.local_event_classes is not None:
@@ -628,11 +643,8 @@ def start_session(
                 raise HTTPException(
                     status_code=422, detail="Local policy cannot widen Brain policy"
                 )
-    provenance = normalize_provenance(
-        data.provenance,
-        organization_id=auth.organization_id,
-        allow_absolute_path="admin" in auth.capabilities,
-    )
+    screened_metadata = screening.metadata["metadata"]
+    provenance = screening.metadata["provenance"]
     request_hash = _hash(data.model_dump(mode="json"))
     existing = session.scalar(
         select(CaptureSession).where(
@@ -656,7 +668,7 @@ def start_session(
         profile_key=data.profile_key,
         local_event_classes=data.local_event_classes,
         local_metadata_allowlists=data.local_metadata_allowlists,
-        metadata_=screened_metadata.metadata,
+        metadata_=screened_metadata,
         provenance=provenance,
         project_identity=provenance.get("project_id"),
         source_commit=provenance.get("source_commit"),
