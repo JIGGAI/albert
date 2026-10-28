@@ -128,6 +128,25 @@ class CaptureProfileRead(CaptureProfileWrite):
     created_at: datetime
 
 
+class CaptureProvenance(BaseModel):
+    client: str | None = Field(default=None, max_length=200)
+    agent: str | None = Field(default=None, max_length=200)
+    project: str | None = Field(default=None, max_length=300)
+    remote_url: str | None = Field(default=None, max_length=1000)
+    worktree_path: str | None = Field(default=None, max_length=2000)
+    vcs: Literal["git", "none"] | None = None
+    branch: str | None = Field(default=None, max_length=300)
+    ref: str | None = Field(default=None, max_length=500)
+    head: str | None = Field(default=None, min_length=1, max_length=128)
+    dirty: bool | None = None
+    task: str | None = Field(default=None, max_length=300)
+    run: str | None = Field(default=None, max_length=300)
+    event: str | None = Field(default=None, max_length=300)
+    source_session: str | None = Field(default=None, max_length=300)
+    adapter_version: str | None = Field(default=None, max_length=100)
+    include_absolute_path: bool = False
+
+
 class CaptureSessionStart(BaseModel):
     version: str = Field(default=CAPTURE_CONTRACT_VERSION, max_length=16)
     workspace_id: UUID | None = None
@@ -137,6 +156,7 @@ class CaptureSessionStart(BaseModel):
     local_event_classes: list[str] | None = Field(default=None, max_length=64)
     local_metadata_allowlists: dict[str, list[str]] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: CaptureProvenance | None = None
 
     _bounded_metadata = field_validator("metadata")(_bounded_json)
 
@@ -151,6 +171,7 @@ class CaptureEventWrite(BaseModel):
     body_kind: Literal["summary", "raw"] = "summary"
     occurred_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: CaptureProvenance | None = None
 
     _visible_content = field_validator("content")(_require_visible_text)
     _bounded_metadata = field_validator("metadata")(_bounded_json)
@@ -199,6 +220,7 @@ class CaptureSessionRead(BaseModel):
     last_sequence: int
     started_at: datetime
     ended_at: datetime | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class CaptureEventRead(BaseModel):
@@ -217,6 +239,7 @@ class CaptureEventRead(BaseModel):
     occurred_at: datetime
     episode_id: UUID
     derived_memory_id: UUID | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class CaptureEventBatchRead(BaseModel):
@@ -297,6 +320,7 @@ class SearchRequest(ScopeFields):
     temporal_as_of: datetime | None = None
     include_graph: bool = True
     include_content: bool = True
+    branch_ref: str | None = Field(default=None, max_length=300)
 
 
 class SearchHit(BaseModel):

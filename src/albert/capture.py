@@ -22,6 +22,7 @@ from albert.models import (
     Workspace,
     utcnow,
 )
+from albert.provenance import merge_event_provenance, normalize_provenance
 from albert.schemas import (
     CAPTURE_CONTRACT_VERSION,
     CaptureCheckpointRead,
@@ -332,6 +333,7 @@ def _session_read(value: CaptureSession) -> CaptureSessionRead:
         last_sequence=value.last_sequence,
         started_at=_as_utc(value.started_at),
         ended_at=_as_utc(value.ended_at),
+        provenance=value.provenance,
     )
 
 
@@ -354,6 +356,7 @@ def _event_read(value: CaptureEvent) -> CaptureEventRead:
         occurred_at=_as_utc(value.occurred_at),
         episode_id=value.episode_id,
         derived_memory_id=value.derived_memory_id,
+        provenance=value.provenance,
     )
 
 
@@ -401,9 +404,21 @@ def _stage_event(
     event_id = uuid4()
     occurred_at = data.occurred_at or utcnow()
     content_hash = hashlib.sha256(data.content.encode()).hexdigest()
+    observed = normalize_provenance(
+        data.provenance,
+        organization_id=auth.organization_id,
+        allow_absolute_path="admin" in auth.capabilities,
+    )
+    provenance = merge_event_provenance(capture_session.provenance, observed)
+    project_identity = provenance.get("project_id")
+    source_commit = provenance.get("source_commit")
+    branch_ref = provenance.get("branch") or provenance.get("ref")
     episode = Episode(
         organization_id=auth.organization_id,
         workspace_id=capture_session.workspace_id,
+        project_ref=str(project_identity) if project_identity else None,
+        task_ref=str(provenance["task"]) if provenance.get("task") else None,
+        run_ref=str(provenance["run"]) if provenance.get("run") else None,
         owner_principal_id=auth.principal_id,
         source_type="automatic_capture",
         source_uri=f"capture://{capture_session.id}/events/{data.sequence}",
@@ -420,6 +435,7 @@ def _stage_event(
             "capture_profile_version": policy.version,
             "capture_source_trust": policy.source_trust,
             "capture_retention_days": policy.retention_days,
+            "provenance": provenance,
         },
     )
     session.add(episode)
@@ -450,6 +466,10 @@ def _stage_event(
         derivative_policy=policy.derivative_policy,
         content=data.content,
         metadata_=data.metadata,
+        provenance=provenance,
+        project_identity=str(project_identity) if project_identity else None,
+        source_commit=str(source_commit) if source_commit else None,
+        branch_ref=str(branch_ref) if branch_ref else None,
         occurred_at=occurred_at,
         episode_id=episode.id,
     )
@@ -608,6 +628,11 @@ def start_session(
                 raise HTTPException(
                     status_code=422, detail="Local policy cannot widen Brain policy"
                 )
+    provenance = normalize_provenance(
+        data.provenance,
+        organization_id=auth.organization_id,
+        allow_absolute_path="admin" in auth.capabilities,
+    )
     request_hash = _hash(data.model_dump(mode="json"))
     existing = session.scalar(
         select(CaptureSession).where(
@@ -632,6 +657,10 @@ def start_session(
         local_event_classes=data.local_event_classes,
         local_metadata_allowlists=data.local_metadata_allowlists,
         metadata_=screened_metadata.metadata,
+        provenance=provenance,
+        project_identity=provenance.get("project_id"),
+        source_commit=provenance.get("source_commit"),
+        branch_ref=provenance.get("branch") or provenance.get("ref"),
     )
     session.add(capture_session)
     try:
