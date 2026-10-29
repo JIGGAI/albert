@@ -16,18 +16,24 @@ def _row(status: str = "ok") -> dict:
     return Recorder("request", "GET /v1/health/live").finish(status=status)
 
 
-def _count() -> int:
+def _stored(rows: list[dict]) -> int:
+    """How many of these rows are in the table.
+
+    Counting the whole table would also count traces other tests' background
+    writers commit meanwhile.
+    """
     with SessionLocal() as session:
-        return session.scalar(select(func.count(Trace.id))) or 0
+        ids = [row["id"] for row in rows]
+        return session.scalar(select(func.count(Trace.id)).where(Trace.id.in_(ids))) or 0
 
 
 def test_submitted_rows_are_written_in_batches() -> None:
     writer = TraceWriter(SessionLocal, queue_size=100, sample_rate=1.0)
-    before = _count()
-    for _ in range(7):
-        assert writer.submit(_row())
+    rows = [_row() for _ in range(7)]
+    for row in rows:
+        assert writer.submit(row)
     writer.flush()
-    assert _count() == before + 7
+    assert _stored(rows) == 7
     assert writer.written == 7
 
 
@@ -65,7 +71,7 @@ def test_background_thread_drains_without_explicit_flush() -> None:
 
 def test_flush_waits_for_an_in_flight_background_write(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     writer = TraceWriter(SessionLocal, queue_size=10, sample_rate=1.0)
-    before = _count()
+    row = _row()
     write_started = threading.Event()
     release_write = threading.Event()
     foreground_started = threading.Event()
@@ -83,7 +89,7 @@ def test_flush_waits_for_an_in_flight_background_write(monkeypatch) -> None:  # 
         foreground_done.set()
 
     monkeypatch.setattr(writer, "_write", blocked_write)
-    assert writer.submit(_row())
+    assert writer.submit(row)
     background = threading.Thread(target=writer.flush)
     foreground = threading.Thread(target=foreground_flush)
     background.start()
@@ -97,4 +103,4 @@ def test_flush_waits_for_an_in_flight_background_write(monkeypatch) -> None:  # 
         background.join(timeout=2)
         foreground.join(timeout=2)
     assert foreground_done.is_set()
-    assert _count() == before + 1
+    assert _stored([row]) == 1
