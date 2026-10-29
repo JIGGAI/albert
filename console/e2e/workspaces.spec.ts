@@ -43,9 +43,14 @@ test("shared memories have their own map view and say so in the reading pane", a
   await expect(page.getByTestId("reading-workspace")).toContainText(SHARED);
 });
 
-test("settings creates and renames a workspace and issues a key into it", async ({ page }) => {
+test("workspaces creates and renames a workspace that settings issues a key into", async ({
+  page,
+}) => {
   const name = `Research ${Date.now()}`;
-  await page.goto("/settings");
+  await page.goto("/ops");
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Workspaces" }).click();
+  await expect(page).toHaveURL(/\/workspaces$/);
+  await expect(page.getByRole("link", { name: "Workspaces" })).toHaveAttribute("aria-current", "page");
   const card = page.locator("section", { has: page.getByRole("heading", { name: "Workspaces" }) });
   await card.getByLabel("New workspace name").fill(name);
   await card.getByRole("button", { name: "Create workspace" }).click();
@@ -58,6 +63,8 @@ test("settings creates and renames a workspace and issues a key into it", async 
   await row.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("workspaces")).toContainText(`${name} Lab`);
 
+  await page.goto("/settings");
+  await expect(page.getByTestId("workspaces")).toHaveCount(0);
   const keyCard = page.locator("section", {
     has: page.getByRole("heading", { name: "Least-privilege API key" }),
   });
@@ -82,7 +89,7 @@ test("operations and live can be narrowed to a workspace", async ({ page, reques
   await expect(page.getByTestId("trace-row").first()).toContainText("E2E · Default");
 });
 
-test("settings deletes a workspace, moving or deleting its memories", async ({
+test("workspaces deletes a workspace, moving or deleting its memories", async ({
   page,
   request,
   baseURL,
@@ -110,7 +117,7 @@ test("settings deletes a workspace, moving or deleting its memories", async ({
     return { id, memory: (await stored.json()).id as string };
   }
 
-  await page.goto("/settings");
+  await page.goto("/workspaces");
   const moving = await workspaceWithMemory(`Moving ${stamp}`);
   const doomed = await workspaceWithMemory(`Doomed ${stamp}`);
   await page.reload();

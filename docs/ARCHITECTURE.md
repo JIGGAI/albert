@@ -165,7 +165,8 @@ change something.
 | Map | Memories, their links and named clusters; live pulses; search; reading pane |
 | Operations | Agent activity, memory health, retrieval quality, service health |
 | Backends | Graph stores and builders: in use, reachable, working, how to switch |
-| Settings | Workspaces, scoped API keys and one-time connection links |
+| Workspaces | Create, rename and delete workspaces, with what happens to their memories |
+| Settings | Scoped API keys and one-time connection links |
 
 ## Settings
 

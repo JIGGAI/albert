@@ -64,8 +64,9 @@ Implemented and tested:
 - Derived memory links and recall statistics, rebuildable with
   `albert-admin rebuild-links`
 - Workspace, principal, API-key listing, issuance, and revocation commands
-- Console Settings: workspaces (create, rename, and delete, sharing, moving or
-  forgetting the memories they held), least-privilege API keys and
+- Console Workspaces page: create, rename, and delete, sharing, moving or
+  forgetting the memories they held
+- Console Settings: least-privilege API keys and
   one-time connection links, each scoped to a workspace or the organization
   and never wider than the issuing key
 - Console scoped to its key: its own organization, and its own workspace plus

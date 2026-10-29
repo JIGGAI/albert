@@ -305,7 +305,7 @@ separate environment periodically.
 
 Use `albert-admin create-workspace`, `create-principal`, `list-principals`,
 `create-key`, `list-keys`, and `revoke-key` inside the API container, or the
-console's Settings page for workspaces and per-agent credentials. Prefer
+console's Workspaces and Settings pages for workspaces and per-agent credentials. Prefer
 workspace-scoped principals for ordinary agents: they read their workspace and
 the shared organization-wide memories. Keep organization-scoped principals for
 administration, cross-workspace retrieval and imports, and grant
