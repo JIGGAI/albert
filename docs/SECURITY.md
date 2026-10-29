@@ -54,6 +54,12 @@ make supplied memory content trustworthy.
   caller-supplied level is retained in `metadata.classification`.
 - Deletion scrubs content rather than only flagging rows, so a forgotten memory
   or episode is not recoverable through any read path.
+- A graph builder with a store of its own is forgotten too. Under Graphiti,
+  deleting a memory or episode, retention expiry and workspace deletion queue a
+  retried job that removes Graphiti's episode, the facts it created and the
+  entities only it mentioned, and clears the summaries of entities it shared,
+  since those may repeat it. A build that finishes after its memory was
+  forgotten is removed the same way.
 - Traces record ids, scores, timings and search query text, never memory
   subjects or content, so the recorder is not a second copy of the corpus.
 - Imported instructions are data; retrieval does not grant them authority.

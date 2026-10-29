@@ -23,7 +23,12 @@ from albert.classifier import (
 )
 from albert.config import get_settings
 from albert.embeddings import get_embedder
-from albert.graph_builders import BuildRequest, BuiltRelationship, get_graph_builder
+from albert.graph_builders import (
+    BuildRequest,
+    BuiltRelationship,
+    get_graph_builder,
+    graphiti_episode_id,
+)
 from albert.graph_store import StoredRelationship, get_graph_store
 from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
 from albert.models import (
@@ -373,8 +378,70 @@ def index_memory_chunks(session: Session, memory: Memory) -> None:
     }
 
 
+def forget_built_graph(
+    session: Session,
+    *,
+    organization_id: UUID,
+    workspace_id: UUID | None,
+    source_ids: list[UUID],
+    episode_ids: list[str],
+    memory_id: UUID | None = None,
+) -> None:
+    """Queue removal of what a builder keeps of its own about forgotten sources.
+
+    Only Graphiti keeps a store of its own. Its episodes are found by the source
+    they were tagged with, by the episode ids given, and, for episodes built
+    before tagging, by the provenance on the memory's edges in Albert's store.
+    A queued job retries until the builder's store is reachable.
+    """
+    if not getattr(get_graph_builder(), "keeps_own_store", False):
+        return
+    found = set(episode_ids)
+    if memory_id is not None:
+        for metadata in get_graph_store().memory_edge_metadata(
+            session, organization_id=organization_id, memory_id=memory_id
+        ):
+            if isinstance(metadata.get("graphiti_episode_id"), str):
+                found.add(metadata["graphiti_episode_id"])
+    enqueue(
+        session,
+        organization_id,
+        "graph_forget",
+        {
+            "workspace_id": str(workspace_id) if workspace_id else None,
+            "source_ids": sorted({str(source_id) for source_id in source_ids}),
+            "episode_ids": sorted(found),
+        },
+    )
+
+
+def forget_episode_graph(session: Session, episode: Episode) -> None:
+    """Queue removal of the builder's copy of an episode; call before blanking it."""
+    forget_built_graph(
+        session,
+        organization_id=episode.organization_id,
+        workspace_id=episode.workspace_id,
+        source_ids=[episode.id],
+        episode_ids=[graphiti_episode_id(episode.id, episode.content_hash)],
+    )
+
+
 def _scrub_memory(session: Session, memory: Memory, now: datetime) -> None:
     """Forget a memory: keep the row for audit identity, drop everything it said."""
+    sources = [memory.id]
+    if memory.episode_id is not None and (memory.metadata_ or {}).get("derived_from_episode"):
+        # The episode's text is the memory's text: the builder's copy goes too.
+        sources.append(memory.episode_id)
+    forget_built_graph(
+        session,
+        organization_id=memory.organization_id,
+        workspace_id=memory.workspace_id,
+        source_ids=sources,
+        episode_ids=[
+            graphiti_episode_id(memory.id, _content_fingerprint(memory.subject, memory.content))
+        ],
+        memory_id=memory.id,
+    )
     memory.status = "deleted"
     memory.subject = ""
     memory.content = ""
@@ -504,6 +571,7 @@ def delete_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Non
         select(Memory).where(Memory.episode_id == episode.id, Memory.status != "deleted")
     ):
         _scrub_memory(session, memory, now)
+    forget_episode_graph(session, episode)
     episode.content = ""
     episode.extra = {}
     episode.enrichment_error = None
@@ -979,6 +1047,16 @@ def enrich_memory(
 
     memory = session.get(Memory, memory_id, with_for_update=True)
     if memory is None or memory.status != "active":
+        if memory is not None and memory.status == "deleted":
+            # Forgotten while the builder ran: whatever it just stored goes too.
+            forget_built_graph(
+                session,
+                organization_id=request.organization_id,
+                workspace_id=request.workspace_id,
+                source_ids=[memory.id],
+                episode_ids=[graphiti_episode_id(memory.id, request.content_fingerprint)],
+            )
+            session.commit()
         return
     if _content_fingerprint(memory.subject, memory.content) != request.content_fingerprint:
         # The memory was edited while extraction ran, so this result describes a
@@ -1047,7 +1125,18 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     built_relationships = builder.build(request, result.relationships)
 
     episode = session.get(Episode, episode_id)
-    if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
+    if episode is not None and episode.deleted_at is not None:
+        # Forgotten while the builder ran: whatever it just stored goes too.
+        forget_built_graph(
+            session,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            source_ids=[episode.id],
+            episode_ids=[graphiti_episode_id(episode.id, request.content_fingerprint)],
+        )
+        session.commit()
+        return
+    if episode is None or episode.enrichment_status == "complete":
         return
     if episode.content_hash != request.content_fingerprint:
         return

@@ -110,7 +110,10 @@ LLM classifier or Graphiti, allow for several model calls.
 `DELETE /v1/memories/{id}` scrubs the memory's subject, content, metadata and
 chunks and closes its extracted relationships. `DELETE /v1/episodes/{id}` does
 the same for the episode and every memory derived from it. Both need
-`memory.delete`.
+`memory.delete`. With the Graphiti builder, both also queue a worker job that
+removes Graphiti's own copy: the episode, the facts it created, entities only
+it mentioned, and the summaries of entities it shared with other episodes.
+The job retries until Graphiti's store is reachable.
 
 ## Console API
 

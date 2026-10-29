@@ -74,16 +74,37 @@ class BuiltRelationship:
 class GraphBuilder(Protocol):
     name: str
     version: str
+    # True when the builder keeps a store of its own that forgetting must reach.
+    keeps_own_store: bool
 
     def build(
         self, request: BuildRequest, fallback: list[ExtractedRelationship]
     ) -> list[BuiltRelationship]: ...
+
+    def forget(
+        self,
+        organization_id: UUID,
+        workspace_id: UUID | None,
+        source_ids: list[UUID],
+        episode_ids: list[str],
+    ) -> int:
+        """Remove what a builder keeps of its own about forgotten sources; returns episodes.
+
+        A builder with a store of its own (Graphiti) must not keep facts, summaries
+        or text from a memory or episode Albert has forgotten.
+        """
+        ...
+
+    def forget_scope(self, organization_id: UUID, workspace_id: UUID | None) -> None:
+        """Remove everything a builder keeps for one deleted workspace."""
+        ...
 
     def readiness(self) -> str: ...
 
 
 class ClassifierGraphBuilder:
     version = "built-in"
+    keeps_own_store = False
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -95,6 +116,19 @@ class ClassifierGraphBuilder:
             BuiltRelationship(relationship=edge, valid_from=request.occurred_at)
             for edge in fallback
         ]
+
+    def forget(
+        self,
+        organization_id: UUID,
+        workspace_id: UUID | None,
+        source_ids: list[UUID],
+        episode_ids: list[str],
+    ) -> int:
+        # Everything this builder produces lives in Albert's own graph store.
+        return 0
+
+    def forget_scope(self, organization_id: UUID, workspace_id: UUID | None) -> None:
+        return None
 
     def readiness(self) -> str:
         return "built-in"
@@ -114,6 +148,11 @@ def _graphiti_group_id(organization_id: UUID, workspace_id: UUID | None) -> str:
     """Encode Albert's scope using Graphiti's restricted group-id alphabet."""
     workspace = str(workspace_id) if workspace_id is not None else "global"
     return f"org_{organization_id}_workspace_{workspace}"
+
+
+def graphiti_episode_id(source_id: UUID, content_fingerprint: str) -> str:
+    """The Graphiti episode one revision of a memory or episode is built into."""
+    return str(uuid5(_EPISODE_NAMESPACE, f"{source_id}:{content_fingerprint}"))
 
 
 def _normalized_entity_name(value: str) -> str:
@@ -192,6 +231,7 @@ def _graphiti_prompt_entity_names(messages: list[Any]) -> list[str]:
 
 class GraphitiGraphBuilder:
     name = "graphiti"
+    keeps_own_store = True
 
     @property
     def version(self) -> str:
@@ -516,7 +556,21 @@ class GraphitiGraphBuilder:
             episode.source_description = "Albert memory"
             episode.valid_at = request.occurred_at
         await self._save_episode(driver, episode)
+        await self._tag_episode(driver, episode_uuid, request.memory_id)
         return previous_ids
+
+    @staticmethod
+    async def _tag_episode(driver: Any, episode_uuid: str, source_id: UUID) -> None:
+        """Record which Albert memory or episode an episode came from, for forgetting.
+
+        Graphiti rewrites the node's properties whenever it saves the episode, so
+        this runs after every save Albert causes.
+        """
+        await driver.execute_query(
+            "MATCH (e:Episodic {uuid: $uuid}) SET e.albert_source_id = $source",
+            uuid=episode_uuid,
+            source=str(source_id),
+        )
 
     @staticmethod
     async def _settle_background_tasks(client: Any) -> None:
@@ -536,12 +590,7 @@ class GraphitiGraphBuilder:
         client = self._client()
         failing = False
         try:
-            episode_uuid = str(
-                uuid5(
-                    _EPISODE_NAMESPACE,
-                    f"{request.memory_id}:{request.content_fingerprint}",
-                )
-            )
+            episode_uuid = graphiti_episode_id(request.memory_id, request.content_fingerprint)
             group_id = _graphiti_group_id(request.organization_id, request.workspace_id)
             previous_episode_uuids = await self._prepare_episode(
                 client, request, episode_uuid, group_id
@@ -571,6 +620,7 @@ class GraphitiGraphBuilder:
                 )
             nodes = {node.uuid: node for node in result.nodes}
             _, driver, _ = client._resolve_request_scope(group_id)
+            await self._tag_episode(driver, episode_uuid, request.memory_id)
             built: list[BuiltRelationship] = []
             for edge in result.edges:
                 provenance = {
@@ -651,6 +701,106 @@ class GraphitiGraphBuilder:
     ) -> list[BuiltRelationship]:
         del fallback
         return asyncio.run(self._build(request))
+
+    @staticmethod
+    async def _remove_episode(driver: Any, episode_uuid: str) -> None:
+        """Graphiti's remove_episode, on the request-scoped driver, plus summaries.
+
+        Facts this episode created and entities only it mentioned are deleted.
+        An entity other episodes also mention survives, but its summary is
+        cleared: Graphiti writes summaries from every episode mentioning the
+        entity, so the old one may repeat what was forgotten.
+        """
+        await driver.execute_query(
+            """
+            MATCH (ep:Episodic {uuid: $uuid})
+            MATCH (:Entity)-[r:RELATES_TO]->(:Entity)
+            WHERE r.uuid IN ep.entity_edges AND r.episodes[0] = $uuid
+            DELETE r
+            """,
+            uuid=episode_uuid,
+        )
+        records, _, _ = await driver.execute_query(
+            """
+            MATCH (:Episodic {uuid: $uuid})-[:MENTIONS]->(n:Entity)
+            MATCH (other:Episodic)-[:MENTIONS]->(n)
+            RETURN n.uuid AS uuid, count(other) AS mentions
+            """,
+            uuid=episode_uuid,
+        )
+        only_here = [record["uuid"] for record in records if record["mentions"] <= 1]
+        shared = [record["uuid"] for record in records if record["mentions"] > 1]
+        if only_here:
+            await driver.execute_query(
+                "MATCH (n:Entity) WHERE n.uuid IN $uuids DETACH DELETE n", uuids=only_here
+            )
+        if shared:
+            await driver.execute_query(
+                "MATCH (n:Entity) WHERE n.uuid IN $uuids SET n.summary = ''", uuids=shared
+            )
+        await driver.execute_query(
+            "MATCH (ep:Episodic {uuid: $uuid}) DETACH DELETE ep", uuid=episode_uuid
+        )
+
+    async def _forget(
+        self,
+        organization_id: UUID,
+        workspace_id: UUID | None,
+        source_ids: list[UUID],
+        episode_ids: list[str],
+    ) -> int:
+        client = self._client()
+        try:
+            group_id = _graphiti_group_id(organization_id, workspace_id)
+            _, driver, _ = client._resolve_request_scope(group_id)
+            init_task = getattr(driver, "_init_task", None)
+            if init_task is not None:
+                await init_task
+            records, _, _ = await driver.execute_query(
+                """
+                MATCH (ep:Episodic)
+                WHERE ep.group_id = $group
+                  AND (ep.uuid IN $uuids OR ep.albert_source_id IN $sources)
+                RETURN ep.uuid AS uuid
+                """,
+                group=group_id,
+                uuids=episode_ids,
+                sources=[str(source_id) for source_id in source_ids],
+            )
+            found = sorted({record["uuid"] for record in records})
+            for episode_uuid in found:
+                await self._remove_episode(driver, episode_uuid)
+            return len(found)
+        finally:
+            await self._settle_background_tasks(client)
+            await self._close_client(client)
+
+    def forget(
+        self,
+        organization_id: UUID,
+        workspace_id: UUID | None,
+        source_ids: list[UUID],
+        episode_ids: list[str],
+    ) -> int:
+        return asyncio.run(self._forget(organization_id, workspace_id, source_ids, episode_ids))
+
+    async def _forget_scope(self, organization_id: UUID, workspace_id: UUID | None) -> None:
+        client = self._client()
+        try:
+            group_id = _graphiti_group_id(organization_id, workspace_id)
+            _, driver, _ = client._resolve_request_scope(group_id)
+            init_task = getattr(driver, "_init_task", None)
+            if init_task is not None:
+                await init_task
+            await driver.execute_query(
+                "MATCH (n) WHERE n.group_id = $group DETACH DELETE n", group=group_id
+            )
+        finally:
+            await self._settle_background_tasks(client)
+            await self._close_client(client)
+
+    def forget_scope(self, organization_id: UUID, workspace_id: UUID | None) -> None:
+        asyncio.run(self._forget_scope(organization_id, workspace_id))
 
     def readiness(self) -> str:
         async def probe() -> None:

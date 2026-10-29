@@ -301,6 +301,20 @@ class CypherGraphStore:
         )
         return int(rows[0][0]) if rows else 0
 
+    def memory_edge_metadata(
+        self, session: Session, *, organization_id: UUID, memory_id: UUID
+    ) -> list[dict]:
+        rows = self._run(
+            """
+            MATCH (:Entity)-[r:REL]->(:Entity)
+            WHERE r.organization_id = $org AND r.source_memory_id = $memory
+            RETURN r.metadata
+            """,
+            org=str(organization_id),
+            memory=str(memory_id),
+        )
+        return [json.loads(row[0]) if row[0] else {} for row in rows]
+
     def move_workspace(
         self,
         session: Session,

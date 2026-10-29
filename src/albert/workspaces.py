@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, aliased
 
+from albert.graph_builders import get_graph_builder
 from albert.graph_store import get_graph_store
 from albert.models import (
     APIKey,
@@ -38,7 +39,7 @@ from albert.models import (
     utcnow,
 )
 from albert.security import AuthContext
-from albert.services import _scrub_memory, audit
+from albert.services import _scrub_memory, audit, enqueue
 
 MemoryOutcome = Literal["organization", "workspace", "delete"]
 
@@ -229,6 +230,11 @@ def delete_workspace(
     else:
         records = _move_records(session, organization_id, workspace.id, to.id if to else None)
     credentials = _retire_credentials(session, workspace.id)
+    if getattr(get_graph_builder(), "keeps_own_store", False):
+        # Graphiti keeps its own graph per workspace. Albert's copy of the facts
+        # was moved or removed above; Graphiti's, under a scope that no longer
+        # exists, is dropped (moved memories lose only its temporal history).
+        enqueue(session, organization_id, "graph_forget_scope", {"workspace_id": str(workspace.id)})
     result = {
         "id": str(workspace.id),
         "name": workspace.name,

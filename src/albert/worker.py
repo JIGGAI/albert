@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from albert.capture_retention import expire_capture_events
 from albert.config import get_settings
 from albert.db import SessionLocal
+from albert.graph_builders import get_graph_builder
 from albert.links import process_recall_traces
 from albert.models import (
     Episode,
@@ -74,6 +75,18 @@ def process_job(session: Session, job: Job) -> None:
                 )
             elif job.job_type == "enrich_episode":
                 enrich_episode(session, UUID(job.payload["episode_id"]))
+            elif job.job_type == "graph_forget":
+                workspace = job.payload.get("workspace_id")
+                get_graph_builder().forget(
+                    job.organization_id,
+                    UUID(workspace) if workspace else None,
+                    [UUID(value) for value in job.payload["source_ids"]],
+                    job.payload["episode_ids"],
+                )
+            elif job.job_type == "graph_forget_scope":
+                get_graph_builder().forget_scope(
+                    job.organization_id, UUID(job.payload["workspace_id"])
+                )
             else:
                 raise ValueError(f"Unknown job type: {job.job_type}")
         job.status = "complete"

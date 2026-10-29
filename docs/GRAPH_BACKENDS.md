@@ -142,7 +142,13 @@ normal graph contract, where organization, workspace, sensitivity, provenance,
 and temporal filters remain mandatory. Neo4j uses the configured database but
 separate Graphiti relationship types. Deterministic episode IDs make retries
 idempotent; an edit creates a new temporal episode while Albert closes the old
-memory's current facts immediately. Deletes close all Albert facts.
+memory's current facts immediately. Deletes close all Albert facts and queue a
+worker job that removes Graphiti's own copy of the memory or episode: its
+episodes (tagged with the Albert id they came from, or found through the
+provenance on Albert's edges for episodes built before tagging), the facts they
+created, entities only they mentioned, and the summaries of entities they
+shared. Deleting a workspace drops its whole Graphiti group; memories moved out
+of it keep their facts in Albert but lose Graphiti's temporal history.
 
 Run `albert-admin validate-runtime --probe-embedding` before starting API and
 worker processes. It checks the graph store, embedding model, and Graphiti
@@ -187,7 +193,9 @@ What to expect from the facts Graphiti writes:
 
 To roll back, set `ALBERT_GRAPH_BUILDER=llm-classifier` (or `regex`), restart API
 and worker, and re-index. Existing Graphiti data can remain for a later rollback
-forward; it is not read by other builders.
+forward; it is not read by other builders. While Graphiti is not the builder,
+deletions do not reach that data, so drop Graphiti's graph if forgotten
+memories must not survive there.
 
 ## How a store plugs in
 
