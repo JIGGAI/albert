@@ -81,3 +81,60 @@ test("operations and live can be narrowed to a workspace", async ({ page, reques
   await page.goto("/live");
   await expect(page.getByTestId("trace-row").first()).toContainText("E2E · Default");
 });
+
+test("settings deletes a workspace, moving or deleting its memories", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const stamp = Date.now();
+  const origin = { origin: baseURL! };
+  async function workspaceWithMemory(name: string): Promise<{ id: string; memory: string }> {
+    const created = await request.post("/api/albert/v1/settings/workspaces", {
+      headers: origin,
+      data: { name },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const id = (await created.json()).id as string;
+    // A key that lives in the new workspace stores the memory there.
+    const key = await request.post("/api/albert/v1/settings/api-keys", {
+      headers: origin,
+      data: { name: `${name} writer`, capabilities: ["memory.write"], workspace_id: id },
+    });
+    expect(key.status(), await key.text()).toBe(201);
+    const stored = await request.post(`${api}/v1/memories`, {
+      headers: { Authorization: `Bearer ${(await key.json()).credential}` },
+      data: { content: `Kept note for ${name}: the Ibex queue drains nightly` },
+    });
+    expect(stored.status(), await stored.text()).toBe(201);
+    return { id, memory: (await stored.json()).id as string };
+  }
+
+  await page.goto("/settings");
+  const moving = await workspaceWithMemory(`Moving ${stamp}`);
+  const doomed = await workspaceWithMemory(`Doomed ${stamp}`);
+  await page.reload();
+  const table = page.getByTestId("workspaces");
+
+  await table.getByRole("row", { name: new RegExp(`Moving ${stamp}`) }).getByRole("button", { name: "Delete" }).click();
+  const panel = page.getByTestId("delete-workspace");
+  await expect(panel).toContainText("1 memory");
+  await expect(page.getByTestId("delete-workspace-revokes")).toContainText("stop working");
+  await panel.getByLabel("Move them to another workspace").check();
+  await panel.getByLabel("Move to").selectOption({ label: "Default" });
+  await panel.getByRole("button", { name: "Delete workspace" }).click();
+  await expect(table).not.toContainText(`Moving ${stamp}`);
+  const moved = await request.get(`${api}/v1/memories/${moving.memory}`, { headers });
+  expect(moved.status()).toBe(200);
+  expect((await moved.json()).workspace_id).not.toBe(moving.id);
+
+  await table.getByRole("row", { name: new RegExp(`Doomed ${stamp}`) }).getByRole("button", { name: "Delete" }).click();
+  await panel.getByLabel("Delete them").check();
+  const confirm = panel.getByRole("button", { name: "Delete workspace" });
+  await expect(confirm).toBeDisabled();
+  await panel.getByLabel("Type the workspace name to confirm").fill(`Doomed ${stamp}`);
+  await confirm.click();
+  await expect(table).not.toContainText(`Doomed ${stamp}`);
+  const gone = await request.get(`${api}/v1/memories/${doomed.memory}`, { headers });
+  expect(gone.status()).toBe(404);
+});

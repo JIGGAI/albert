@@ -64,6 +64,21 @@ test("proxy refuses other hosts and cross-origin writes", async ({ request, base
     { headers: { origin: "https://attacker.example" }, data: { name: "taken" } },
   );
   expect(crossSiteRename.status()).toBe(403);
+  const workspace = "/api/albert/v1/settings/workspaces/00000000-0000-0000-0000-000000000000";
+  const crossSiteDelete = await request.delete(`${workspace}?memories=organization`, {
+    headers: { origin: "https://attacker.example" },
+  });
+  expect(crossSiteDelete.status()).toBe(403);
+  const noChoice = await request.delete(workspace, { headers: { origin: baseURL! } });
+  expect(noChoice.status()).toBe(422);
+  const badTarget = await request.delete(`${workspace}?memories=workspace&to=../memories`, {
+    headers: { origin: baseURL! },
+  });
+  expect(badTarget.status()).toBe(422);
+  const missing = await request.delete(`${workspace}?memories=organization`, {
+    headers: { origin: baseURL! },
+  });
+  expect(missing.status()).toBe(404);
   const sameOrigin = await request.post("/api/albert/v1/console/search", {
     headers: { origin: baseURL! },
     data: { query: "anything" },

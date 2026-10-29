@@ -18,7 +18,9 @@ const POST_PATHS = new Set([
 ]);
 const SETTINGS_READS = new Set(["v1/settings/credentials", "v1/settings/workspaces"]);
 const DELETE_PATH = /^v1\/settings\/(api-keys|connection-links)\/[0-9a-f-]{36}$/;
-const PATCH_PATH = /^v1\/settings\/workspaces\/[0-9a-f-]{36}$/;
+const WORKSPACE_PATH = /^v1\/settings\/workspaces\/[0-9a-f-]{36}$/;
+const UUID = /^[0-9a-f-]{36}$/;
+const MEMORY_OUTCOMES = new Set(["organization", "workspace", "delete"]);
 const POST_BODY_LIMIT = 4096;
 
 // The console has no login, so the network it is published on is its access
@@ -130,7 +132,7 @@ export async function PATCH(
 ): Promise<Response> {
   const { path } = await params;
   const target = path.join("/");
-  if (!PATCH_PATH.test(target)) {
+  if (!WORKSPACE_PATH.test(target)) {
     return Response.json({ detail: "Method not allowed" }, { status: 405 });
   }
   return forwardBody(request, "PATCH", target);
@@ -167,12 +169,22 @@ export async function DELETE(
 ): Promise<Response> {
   const { path } = await params;
   const target = path.join("/");
-  if (!DELETE_PATH.test(target)) {
+  // Deleting a workspace carries its choice in the query; only those two
+  // parameters are forwarded, and only in the shapes Albert accepts.
+  let query = "";
+  if (WORKSPACE_PATH.test(target)) {
+    const memories = request.nextUrl.searchParams.get("memories") ?? "";
+    const to = request.nextUrl.searchParams.get("to");
+    if (!MEMORY_OUTCOMES.has(memories) || (to !== null && !UUID.test(to))) {
+      return Response.json({ detail: "Choose what happens to the memories" }, { status: 422 });
+    }
+    query = `?${new URLSearchParams(to ? { memories, to } : { memories })}`;
+  } else if (!DELETE_PATH.test(target)) {
     return Response.json({ detail: "Method not allowed" }, { status: 405 });
   }
   const refusal = refused(request, true);
   if (refusal) return refusal;
-  const upstream = await fetch(`${API}/${target}`, {
+  const upstream = await fetch(`${API}/${target}${query}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${KEY}` },
     cache: "no-store",

@@ -473,7 +473,7 @@ table.data td.graph { color: var(--graph); }
 .settings .field strong { font-weight: 500; }
 .settings .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 .settings td .inline-form { margin-top: 0; }
-.settings input:not([type="checkbox"]), .settings select, .settings button { background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; }
+.settings input:not([type="checkbox"]):not([type="radio"]), .settings select, .settings button { background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; }
 .settings button { cursor: pointer; }
 .settings button:disabled { color: var(--faint); cursor: default; }
 .settings input:focus-visible, .settings select:focus-visible, .settings button:focus-visible { outline: 2px solid var(--lexical); outline-offset: 1px; }
@@ -489,4 +489,14 @@ table.data td.graph { color: var(--graph); }
 .secret .notice { margin: 0; }
 .settings .error-box pre, .error-box pre { white-space: pre-wrap; margin: 8px 0 0; }
 .settings table.data td { vertical-align: middle; }
+.settings .row-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.settings button.danger:not(:disabled) { color: var(--error); border-color: var(--error); }
+.delete-workspace { display: grid; gap: 10px; padding: 8px 0 4px; align-items: start; justify-items: start; }
+.delete-workspace fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0; padding: 8px 10px; display: grid; gap: 6px; }
+.delete-workspace legend { padding: 0 4px; }
+.delete-workspace .check { display: grid; grid-template-columns: max-content max-content 1fr; gap: 8px; align-items: baseline; cursor: pointer; }
+.delete-workspace .check:has(input:disabled) { cursor: default; color: var(--faint); }
+.delete-workspace .check input { accent-color: var(--error); margin: 0; }
+.delete-workspace .inline-form { margin-top: 0; }
+@media (max-width: 700px) { .delete-workspace .check { grid-template-columns: max-content 1fr; } .delete-workspace .check .muted { grid-column: 2; } }
 @media (max-width: 700px) { .capabilities .check { grid-template-columns: max-content 1fr; } .capabilities .check .muted { grid-column: 2; } }
