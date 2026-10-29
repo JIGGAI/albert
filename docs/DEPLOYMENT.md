@@ -119,6 +119,14 @@ browser only ever talks to the console. Like the API and MCP, the console binds
 to loopback by default; put it behind the same TLS reverse proxy before exposing
 it, and treat anyone who can reach it as an operator.
 
+The console answers only to the host names in `ALBERT_CONSOLE_ALLOWED_HOSTS`
+(loopback by default), so a page on another site cannot reach it by pointing
+its own DNS name at your machine. When you publish it under a name, add that
+name, for example
+`ALBERT_CONSOLE_ALLOWED_HOSTS=albert-console.internal.example.com`; requests
+under any other name get `421`. Settings changes must also come from a console
+page itself: a write whose `Origin` is missing or names another site gets `403`.
+
 After upgrading an install that already holds memories, build the map's links
 once (new memories are linked as they are indexed):
 

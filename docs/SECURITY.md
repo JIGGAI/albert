@@ -31,6 +31,9 @@ make supplied memory content trustworthy.
 - The console's operator key is held by the console server process only; the
   browser never receives it. Its proxy forwards only `/v1/console/*` reads and
   the operator search.
+- The console proxy answers only to the hosts in `ALBERT_CONSOLE_ALLOWED_HOSTS`
+  (loopback by default), which defeats DNS rebinding, and accepts a write only
+  when its `Origin` is the console's own, which defeats cross-site requests.
 - The console map shows memory titles and its reading pane full content, across
   every sensitivity. Each map load, memory read and operator search writes an
   audit event. Traces, recall rows and link rows still hold ids, scores and
