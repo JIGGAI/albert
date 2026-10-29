@@ -38,6 +38,17 @@ test("proxy only exposes console reads, the operator search and settings", async
   expect(deleteMemory.status()).toBe(405);
 });
 
+test("proxy answers to its own names", async ({ request, baseURL }) => {
+  // The default allow-list names localhost, and a published name comes from
+  // ALBERT_CONSOLE_ALLOWED_HOSTS (the harness sets console.example.test).
+  // A host containing the letter "s" once failed the parser's whitespace check.
+  const port = new URL(baseURL!).port;
+  for (const host of [`localhost:${port}`, "console.example.test", `console.example.test:${port}`]) {
+    const response = await request.get("/api/albert/v1/console/overview", { headers: { host } });
+    expect(response.status(), host).not.toBe(421);
+  }
+});
+
 test("proxy refuses other hosts and cross-origin writes", async ({ request, baseURL }) => {
   // A DNS-rebinding page reaches the console under its own name.
   const rebound = await request.get("/api/albert/v1/console/overview", {

@@ -18,6 +18,8 @@ key=$(.venv/bin/albert-admin bootstrap --organization E2E --workspace Default | 
 API_PORT="${ALBERT_E2E_API_PORT:-18080}"
 export ALBERT_E2E_CONSOLE_PORT="${ALBERT_E2E_CONSOLE_PORT:-18082}"
 export ALBERT_E2E_KEY="$key" ALBERT_CONSOLE_API_KEY="$key" ALBERT_API_URL="http://127.0.0.1:$API_PORT"
+# A published name, so the proxy spec can show the allow-list is honoured.
+export ALBERT_CONSOLE_ALLOWED_HOSTS="localhost,127.0.0.1,[::1],console.example.test"
 .venv/bin/uvicorn albert.api:app --port "$API_PORT" --log-level warning &
 api=$!
 .venv/bin/albert-worker &

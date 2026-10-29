@@ -36,7 +36,7 @@ const ALLOWED_HOSTS = (process.env.ALBERT_CONSOLE_ALLOWED_HOSTS ?? "localhost,12
   .filter((entry): entry is { hostname: string; port: string } => entry !== null);
 
 function parseHost(value: string): { hostname: string; port: string } | null {
-  if (/[/?#@\\s]/.test(value)) return null;
+  if (/[/?#@\s]/.test(value)) return null;
   try {
     const url = new URL(`http://${value}`);
     return { hostname: url.hostname, port: url.port };

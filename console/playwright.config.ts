@@ -29,6 +29,7 @@ export default defineConfig({
         env: {
           ALBERT_API_URL: process.env.ALBERT_API_URL ?? "http://127.0.0.1:18080",
           ALBERT_CONSOLE_API_KEY: process.env.ALBERT_CONSOLE_API_KEY ?? "",
+          ALBERT_CONSOLE_ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],console.example.test",
         },
       },
 });
