@@ -1052,6 +1052,9 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
         },
     )
     session.add(memory)
+    # The episode holds the same text, so it must be at least as hard to read:
+    # otherwise GET /v1/episodes serves what classification just restricted.
+    episode.sensitivity = memory.sensitivity
     session.flush()
     from albert.models import CaptureCheckpoint, CaptureEvent
 

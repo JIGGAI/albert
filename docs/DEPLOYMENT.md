@@ -71,8 +71,9 @@ each result, and a memory map: every memory as a node, linked to the ones it
 resembles, follows or is recalled with, gathered into named clusters, pulsing
 as agents recall and store. Selecting a memory opens it in full. An Operations
 page reports who is using memory, what it holds, how well retrieval is working
-and how the service itself is doing. It sees every
-tenant, so it is for operators, not end users.
+and how the service itself is doing. It sees the console key's own
+organization; give the key `admin` instead if one console should see every
+tenant on the instance.
 
 Issue it a key on a dedicated service principal, then start it:
 

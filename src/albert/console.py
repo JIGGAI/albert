@@ -1,8 +1,11 @@
 """Operator read API for the memory console.
 
-Everything here is read-only and operator-scoped: it crosses tenants on purpose
-and is gated by the console.read capability. Memory content is returned only by
-the explicit detail endpoints, audited (memory detail lives in console_map).
+Everything here is read-only and gated by the console.read capability. A
+console.read key sees only its own organization, and only its own workspace
+when the key is workspace-scoped: keys.manage holders and connection links can
+issue console.read, so it must never reach further than the issuer could. Only
+an admin key crosses tenants. Memory content is returned only by the explicit
+detail endpoints, audited (memory detail lives in console_map).
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
@@ -59,6 +62,33 @@ def _operator(auth: AuthContext = Depends(authenticate)) -> AuthContext:
     return auth
 
 
+def tenant(auth: AuthContext, requested: UUID | None) -> UUID | None:
+    """The organization a console read covers; None means every tenant (admin only)."""
+    if "admin" in auth.capabilities:
+        return requested
+    if requested is not None and requested != auth.organization_id:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return auth.organization_id
+
+
+def tenant_workspace(auth: AuthContext, requested: UUID | None) -> UUID | None:
+    """The workspace a console read covers; a workspace-scoped key is held to its own."""
+    if "admin" in auth.capabilities or auth.workspace_id is None:
+        return requested
+    if requested is not None and requested != auth.workspace_id:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return auth.workspace_id
+
+
+def visible(auth: AuthContext, organization_id: UUID | None, workspace_id: UUID | None) -> bool:
+    """Whether one record falls inside the key's console scope."""
+    if "admin" in auth.capabilities:
+        return True
+    return organization_id == auth.organization_id and (
+        auth.workspace_id is None or workspace_id == auth.workspace_id
+    )
+
+
 def _opt(value: UUID | None) -> str | None:
     return str(value) if value is not None else None
 
@@ -99,9 +129,10 @@ def list_traces(
     q: str | None = None,
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    organization_id = tenant(auth, organization_id)
     statement = select(Trace)
     equalities = (
         (Trace.kind, kind),
@@ -145,7 +176,7 @@ def list_traces(
 @router.get("/stream")
 def stream(
     request: Request,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     """Server-sent events: one `trace` event per recorded trace, newest last.
@@ -156,6 +187,8 @@ def stream(
     """
     after = parse_event_id(request.headers.get("last-event-id"))
     session.close()
+    organization = tenant(auth, None)
+    own = str(organization) if organization is not None else None
 
     async def body() -> AsyncIterator[str]:
         last_keepalive = time.monotonic()
@@ -164,6 +197,8 @@ def stream(
                 if time.monotonic() - last_keepalive >= KEEPALIVE_SECONDS:
                     last_keepalive = time.monotonic()
                     yield ": keepalive\n\n"
+                continue
+            if own is not None and event["data"]["organization_id"] != own:
                 continue
             payload = json.dumps(event["data"])
             yield f"id: {event['id']}\nevent: trace\ndata: {payload}\n\n"
@@ -178,11 +213,11 @@ def stream(
 @router.get("/traces/{trace_id}")
 def get_trace(
     trace_id: UUID,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     trace = session.get(Trace, trace_id)
-    if trace is None:
+    if trace is None or tenant(auth, None) not in (None, trace.organization_id):
         raise HTTPException(status_code=404, detail="Trace not found")
     return {**_trace_summary(trace), "spans": trace.spans}
 
@@ -217,7 +252,7 @@ def graph_snapshot(
     workspace_id: UUID | None = None,
     temporal_as_of: datetime | None = None,
     limit: int = Query(default=2000, ge=1, le=GRAPH_NODE_CAP),
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Entities, active memories and the edges among them, capped and cached.
@@ -225,6 +260,8 @@ def graph_snapshot(
     Memory nodes are labelled by type only; subjects and content stay behind the
     audited detail endpoint.
     """
+    tenant(auth, organization_id)
+    workspace_id = tenant_workspace(auth, workspace_id)
     # The tenant's data version is part of the key, so a cached snapshot is only
     # reused while nothing in that tenant has changed. Without it, a tenant viewed
     # while empty kept showing empty for the whole TTL after its first memory.
@@ -302,10 +339,11 @@ def graph_snapshot(
 
 @router.get("/organizations")
 def list_organizations(
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    """Every tenant by name with how much it holds, for the console's tenant picker."""
+    """Every tenant the key may see, by name with how much it holds, for the tenant picker."""
+    own = tenant(auth, None)
 
     def counts(model: Any, *conditions: Any) -> dict[UUID, int]:
         rows = session.execute(
@@ -325,16 +363,23 @@ def list_organizations(
             "entities": graph.get(organization.id, (0, 0))[0],
             "relationships": graph.get(organization.id, (0, 0))[1],
         }
-        for organization in session.scalars(select(Organization).order_by(Organization.name))
+        for organization in session.scalars(
+            select(Organization)
+            .where(Organization.id == own if own is not None else true())
+            .order_by(Organization.name)
+        )
     ]
     return {"items": items}
 
 
 @router.get("/overview")
 def overview(
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    own = tenant(auth, None)
+    trace_scope = [Trace.organization_id == own] if own is not None else []
+    job_scope = [Job.organization_id == own] if own is not None else []
     now = datetime.now(UTC).replace(second=0, microsecond=0)
     start = now - timedelta(minutes=59)
     buckets = {
@@ -347,7 +392,7 @@ def overview(
         else start
     )
     recent = session.execute(
-        select(Trace.started_at, Trace.status).where(Trace.started_at >= query_start)
+        select(Trace.started_at, Trace.status).where(Trace.started_at >= query_start, *trace_scope)
     )
     for started_at, trace_status in recent:
         started = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
@@ -360,8 +405,12 @@ def overview(
             bucket["errors"] += 1
         elif trace_status == "degraded":
             bucket["degraded"] += 1
-    jobs = session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status)).all()
-    oldest = session.scalar(select(func.min(Job.available_at)).where(Job.status == "pending"))
+    jobs = session.execute(
+        select(Job.status, func.count(Job.id)).where(*job_scope).group_by(Job.status)
+    ).all()
+    oldest = session.scalar(
+        select(func.min(Job.available_at)).where(Job.status == "pending", *job_scope)
+    )
     if oldest is not None and oldest.tzinfo is None:
         oldest = oldest.replace(tzinfo=UTC)
     last_job = session.scalar(select(func.max(Trace.started_at)).where(Trace.kind == "job"))
@@ -371,7 +420,7 @@ def overview(
         "oldest_pending_seconds": (
             (datetime.now(UTC) - oldest).total_seconds() if oldest is not None else None
         ),
-        "trace_count": int(session.scalar(select(func.count(Trace.id))) or 0),
+        "trace_count": int(session.scalar(select(func.count(Trace.id)).where(*trace_scope)) or 0),
         "traces_dropped": get_trace_writer().dropped,
         "worker_last_seen": _iso(last_job),
     }
@@ -384,7 +433,7 @@ def operator_entity(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     entity = get_graph_store().get_entity(session, entity_id=entity_id)
-    if entity is None:
+    if entity is None or not visible(auth, entity.organization_id, entity.workspace_id):
         raise HTTPException(status_code=404, detail="Entity not found")
     audit(
         session,

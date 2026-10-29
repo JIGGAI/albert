@@ -12,12 +12,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.orm import Session, defer
 
 from albert.clusters import cluster_nodes, name_clusters
 from albert.config import get_settings
-from albert.console import _cache_get, _cache_put, _iso, _operator, _opt
+from albert.console import (
+    _cache_get,
+    _cache_put,
+    _iso,
+    _operator,
+    _opt,
+    tenant,
+    tenant_workspace,
+    visible,
+)
 from albert.db import get_session
 from albert.models import (
     Episode,
@@ -111,10 +120,12 @@ def _require_organization(session: Session, organization_id: UUID) -> None:
 @router.get("/workspaces")
 def list_workspaces(
     organization_id: UUID,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """A tenant's workspaces with how many active memories each holds."""
+    tenant(auth, organization_id)
+    own_workspace = tenant_workspace(auth, None)
     counts = dict(
         session.execute(
             select(Memory.workspace_id, func.count(Memory.id))
@@ -130,11 +141,16 @@ def list_workspaces(
         }
         for workspace in session.scalars(
             select(Workspace)
-            .where(Workspace.organization_id == organization_id)
+            .where(
+                Workspace.organization_id == organization_id,
+                Workspace.id == own_workspace if own_workspace is not None else true(),
+            )
             .order_by(Workspace.name)
         )
     ]
-    return {"items": items, "unscoped_memories": int(counts.get(None, 0))}
+    # A workspace-scoped key cannot read organization-wide memories either.
+    unscoped = 0 if own_workspace is not None else int(counts.get(None, 0))
+    return {"items": items, "unscoped_memories": unscoped}
 
 
 @router.get("/map")
@@ -146,6 +162,8 @@ def memory_map(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Titled memory nodes, the links among them and named clusters; newest first."""
+    tenant(auth, organization_id)
+    workspace_id = tenant_workspace(auth, workspace_id)
     limit = limit or get_settings().map_node_limit
     audit(
         session,
@@ -265,7 +283,11 @@ def operator_memory(
 ) -> dict[str, Any]:
     """One memory in full for the reading pane, with what it connects to."""
     memory = session.get(Memory, memory_id)
-    if memory is None or memory.status == "deleted":
+    if (
+        memory is None
+        or memory.status == "deleted"
+        or not visible(auth, memory.organization_id, memory.workspace_id)
+    ):
         raise HTTPException(status_code=404, detail="Memory not found")
     audit(
         session,
@@ -297,6 +319,7 @@ def operator_memory(
             for other in session.scalars(
                 select(Memory).where(Memory.id.in_(other_ids), Memory.status == "active")
             )
+            if visible(auth, other.organization_id, other.workspace_id)
         }
         if other_ids
         else {}
@@ -390,6 +413,8 @@ def console_search(
     the full replay.
     """
     started = time.perf_counter()
+    tenant(auth, data.organization_id)
+    workspace_id = tenant_workspace(auth, data.workspace_id)
     _require_organization(session, data.organization_id)
     request = SearchRequest(
         query=data.query,
@@ -403,7 +428,7 @@ def console_search(
     result = hybrid_search(
         session,
         organization_id=data.organization_id,
-        workspace_id=data.workspace_id,
+        workspace_id=workspace_id,
         request=request,
         allowed_sensitivities=ALL_SENSITIVITIES,
     )
