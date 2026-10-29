@@ -1,7 +1,9 @@
 "use client";
 
 import { COLOR_BY, LINK_KINDS, distinct, type ColorBy, type Filters } from "@/lib/map";
-import type { MapNode, Organization, Workspace } from "@/lib/types";
+import { seesAllTenants } from "@/lib/scope";
+import type { ConsoleScope, MapNode, Organization, Workspace } from "@/lib/types";
+import { WorkspacePicker } from "./WorkspacePicker";
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -37,7 +39,9 @@ export function MapToolbar({
   organizations,
   organization,
   onOrganization,
+  scope,
   workspaces,
+  shared,
   workspace,
   onWorkspace,
   nodes,
@@ -51,7 +55,10 @@ export function MapToolbar({
   organizations: Organization[];
   organization: string;
   onOrganization: (id: string) => void;
+  scope: ConsoleScope | null;
   workspaces: Workspace[];
+  /** Organization-wide memories in this tenant. */
+  shared: number;
   workspace: string;
   onWorkspace: (id: string) => void;
   nodes: MapNode[];
@@ -64,25 +71,28 @@ export function MapToolbar({
   children?: React.ReactNode;
 }) {
   const known = organizations.some((o) => o.id === organization);
+  // A key that sees one tenant has nothing to pick; the side menu already names it.
+  const tenantPicker = seesAllTenants(scope) || organizations.length > 1;
   return (
     <div className="toolbar map-toolbar">
-      <select aria-label="Tenant" value={organization} onChange={(e) => onOrganization(e.target.value)}>
-        {organization && !known ? <option value={organization}>selected tenant</option> : null}
-        {organizations.map((o) => (
-          <option key={o.id} value={o.id}>
-            {`${o.name} · ${plural(o.memories, "memory", "memories")}`}
-          </option>
-        ))}
-        {organizations.length === 0 && !organization ? <option value="">no tenants yet</option> : null}
-      </select>
-      <select aria-label="Workspace" value={workspace} onChange={(e) => onWorkspace(e.target.value)}>
-        <option value="">All workspaces</option>
-        {workspaces.map((w) => (
-          <option key={w.id} value={w.id}>
-            {`${w.name} · ${w.memories}`}
-          </option>
-        ))}
-      </select>
+      {tenantPicker ? (
+        <select aria-label="Tenant" value={organization} onChange={(e) => onOrganization(e.target.value)}>
+          {organization && !known ? <option value={organization}>selected tenant</option> : null}
+          {organizations.map((o) => (
+            <option key={o.id} value={o.id}>
+              {`${o.name} · ${plural(o.memories, "memory", "memories")}`}
+            </option>
+          ))}
+          {organizations.length === 0 && !organization ? <option value="">no tenants yet</option> : null}
+        </select>
+      ) : null}
+      <WorkspacePicker
+        scope={scope}
+        workspaces={workspaces}
+        value={workspace}
+        onChange={onWorkspace}
+        shared={shared}
+      />
       {compact ? null : (
         <>
           {children}

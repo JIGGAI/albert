@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { scopeLabel, useConsoleScope } from "@/lib/scope";
 
 const links = [
   { href: "/ops", label: "Operations" },
@@ -13,12 +14,19 @@ const links = [
 
 export function Nav() {
   const pathname = usePathname();
+  const scope = useConsoleScope();
   return (
     <nav className="rail" aria-label="Console">
       <div className="brand">
         Albert
         <small>memory console</small>
       </div>
+      {scope ? (
+        <div className="scope" data-testid="console-scope" title="What this console's key can see">
+          <span className="label">Viewing</span>
+          {scopeLabel(scope)}
+        </div>
+      ) : null}
       {links.map((link) => {
         // A trace's replay belongs to Live, where traces are listed.
         const current =

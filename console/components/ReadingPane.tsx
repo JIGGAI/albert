@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { getMemory, relativeTime } from "@/lib/api";
+import { SHARED_LABEL } from "@/lib/scope";
 import type { MemoryDetail, RelatedMemory } from "@/lib/types";
 
 const MIN_WIDTH = 320;
@@ -25,11 +26,13 @@ export function ReadingPane({
   onNavigate,
   onClose,
   onLoaded,
+  workspaceNames,
 }: {
   memoryId: string;
   onNavigate: (id: string) => void;
   onClose: () => void;
   onLoaded?: (memory: MemoryDetail) => void;
+  workspaceNames?: Map<string, string>;
 }) {
   const [loadedMemory, setLoadedMemory] = useState<MemoryDetail | null>(null);
   const [failure, setFailure] = useState<{ id: string; message: string } | null>(null);
@@ -121,6 +124,12 @@ export function ReadingPane({
               <span className={`chip sensitivity ${memory.sensitivity}`}>{memory.sensitivity}</span>
             </div>
             <dl className="reading-meta">
+              <dt>Workspace</dt>
+              <dd data-testid="reading-workspace">
+                {memory.workspace_id
+                  ? (workspaceNames?.get(memory.workspace_id) ?? memory.workspace_id.slice(0, 8))
+                  : `${SHARED_LABEL}, read by every workspace`}
+              </dd>
               {memory.path || memory.source_uri ? (
                 <>
                   <dt>Source</dt>

@@ -8,13 +8,17 @@ import type {
   TraceSummary,
 } from "./types";
 
-export type ColorBy = "type" | "team" | "sensitivity" | "age";
+export type ColorBy = "type" | "team" | "workspace" | "sensitivity" | "age";
 export const COLOR_BY: { value: ColorBy; label: string }[] = [
   { value: "type", label: "Type" },
   { value: "team", label: "Team" },
+  { value: "workspace", label: "Workspace" },
   { value: "sensitivity", label: "Sensitivity" },
   { value: "age", label: "Age" },
 ];
+/** Organization-wide memories, shared by every workspace, get their own fixed color. */
+const SHARED_COLOR = "#f2f2f2";
+const SHARED_NAME = "Organization-wide (shared)";
 export const LINK_KINDS: { kind: LinkKind; label: string; hint: string }[] = [
   { kind: "similar", label: "Similar", hint: "about the same thing" },
   { kind: "sequence", label: "Sequence", hint: "the next dated entry" },
@@ -97,7 +101,25 @@ export interface ColorScale {
 }
 
 /** Node fill for the chosen dimension, with the legend that explains it. */
-export function colorScale(nodes: MapNode[], colorBy: ColorBy): ColorScale {
+export function colorScale(
+  nodes: MapNode[],
+  colorBy: ColorBy,
+  workspaceNames: Map<string, string> = new Map(),
+): ColorScale {
+  if (colorBy === "workspace") {
+    const name = (node: MapNode) =>
+      node.workspace_id ? (workspaceNames.get(node.workspace_id) ?? "other workspace") : SHARED_NAME;
+    const named = [...new Set(nodes.filter((n) => n.workspace_id).map(name))].sort();
+    const colors = new Map(named.map((value, index) => [value, PALETTE[index % PALETTE.length]]));
+    const legend = named.map((label) => ({ label, color: colors.get(label) as string }));
+    if (nodes.some((node) => !node.workspace_id)) {
+      legend.push({ label: SHARED_NAME, color: SHARED_COLOR });
+    }
+    return {
+      color: (node) => (node.workspace_id ? (colors.get(name(node)) ?? OTHER) : SHARED_COLOR),
+      legend,
+    };
+  }
   if (colorBy === "sensitivity") {
     const present = Object.keys(SENSITIVITY).filter((s) => nodes.some((n) => n.sensitivity === s));
     return {

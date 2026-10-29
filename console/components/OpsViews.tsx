@@ -128,7 +128,14 @@ function Capped({ show }: { show: boolean }) {
   ) : null;
 }
 
-export function AgentsView({ data }: { data: AgentActivity }) {
+export function AgentsView({
+  data,
+  workspaceNames,
+}: {
+  data: AgentActivity;
+  /** Names for the tenant's workspaces; a principal with none is organization-wide. */
+  workspaceNames: Map<string, string>;
+}) {
   const searches = data.principals.reduce((sum, p) => sum + p.searches, 0);
   const stores = data.principals.reduce((sum, p) => sum + p.stores, 0);
   const errors = data.principals.reduce((sum, p) => sum + p.errors, 0);
@@ -173,6 +180,7 @@ export function AgentsView({ data }: { data: AgentActivity }) {
             <thead>
               <tr>
                 <th>Principal</th>
+                <th>Workspace</th>
                 <th className="right">searches</th>
                 <th className="right">found nothing</th>
                 <th className="right">avg hits</th>
@@ -186,6 +194,11 @@ export function AgentsView({ data }: { data: AgentActivity }) {
                 <tr key={p.id} data-testid="agent-row">
                   <td>
                     {p.name} {p.type ? <span className="kind">{p.type}</span> : null}
+                  </td>
+                  <td className="muted">
+                    {p.workspace_id
+                      ? (workspaceNames.get(p.workspace_id) ?? p.workspace_id.slice(0, 8))
+                      : "organization-wide"}
                   </td>
                   <td className="right mono">{number.format(p.searches)}</td>
                   <td className={`right mono${p.zero_hit_searches ? " warn" : " faint"}`}>

@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-test("proxy only exposes console reads, the operator search and settings", async ({ request }) => {
+test("proxy only exposes console reads, the operator search and settings", async ({
+  request,
+  baseURL,
+}) => {
   const overview = await request.get("/api/albert/v1/console/overview");
   expect(overview.status()).toBe(200);
   const write = await request.post("/api/albert/v1/memories", { data: { content: "nope" } });
@@ -15,6 +18,20 @@ test("proxy only exposes console reads, the operator search and settings", async
   expect(settingsRead.status()).toBe(200);
   const otherSettings = await request.get("/api/albert/v1/settings/anything");
   expect(otherSettings.status()).toBe(404);
+  const workspaces = await request.get("/api/albert/v1/settings/workspaces");
+  expect(workspaces.status()).toBe(200);
+  const renameMissing = await request.patch(
+    "/api/albert/v1/settings/workspaces/00000000-0000-0000-0000-000000000000",
+    { headers: { origin: baseURL! }, data: { name: "nope" } },
+  );
+  expect(renameMissing.status()).toBe(404);
+  const patchMemory = await request.patch(
+    "/api/albert/v1/memories/00000000-0000-0000-0000-000000000000",
+    { data: { content: "nope" } },
+  );
+  expect(patchMemory.status()).toBe(405);
+  const scope = await request.get("/api/albert/v1/console/scope");
+  expect(scope.status()).toBe(200);
   const deleteMemory = await request.delete(
     "/api/albert/v1/memories/00000000-0000-0000-0000-000000000000",
   );
@@ -42,6 +59,11 @@ test("proxy refuses other hosts and cross-origin writes", async ({ request, base
     "/api/albert/v1/settings/api-keys/00000000-0000-0000-0000-000000000000",
   );
   expect(noOrigin.status()).toBe(403);
+  const crossSiteRename = await request.patch(
+    "/api/albert/v1/settings/workspaces/00000000-0000-0000-0000-000000000000",
+    { headers: { origin: "https://attacker.example" }, data: { name: "taken" } },
+  );
+  expect(crossSiteRename.status()).toBe(403);
   const sameOrigin = await request.post("/api/albert/v1/console/search", {
     headers: { origin: baseURL! },
     data: { query: "anything" },

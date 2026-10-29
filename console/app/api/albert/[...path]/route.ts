@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 // The operator key lives only here, on the server. The browser talks to this
 // route; this route talks to Albert, and only to the console API (reads, plus the
 // one POST that is itself a read: the operator search) and the Settings page's
-// credential endpoints, each listed exactly.
+// credential and workspace endpoints, each listed exactly.
 const API = (process.env.ALBERT_API_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
 const KEY = process.env.ALBERT_CONSOLE_API_KEY ?? "";
 const ALLOWED_PREFIX = ["v1", "console"];
@@ -14,9 +14,11 @@ const POST_PATHS = new Set([
   "v1/console/search",
   "v1/settings/api-keys",
   "v1/settings/connection-links",
+  "v1/settings/workspaces",
 ]);
-const SETTINGS_READ = "v1/settings/credentials";
+const SETTINGS_READS = new Set(["v1/settings/credentials", "v1/settings/workspaces"]);
 const DELETE_PATH = /^v1\/settings\/(api-keys|connection-links)\/[0-9a-f-]{36}$/;
+const PATCH_PATH = /^v1\/settings\/workspaces\/[0-9a-f-]{36}$/;
 const POST_BODY_LIMIT = 4096;
 
 // The console has no login, so the network it is published on is its access
@@ -72,7 +74,7 @@ function refused(request: NextRequest, write: boolean): Response | null {
 }
 
 function isAllowed(path: string[]): boolean {
-  if (path.join("/") === SETTINGS_READ) return true;
+  if (SETTINGS_READS.has(path.join("/"))) return true;
   return (
     path.length > ALLOWED_PREFIX.length &&
     ALLOWED_PREFIX.every((segment, index) => path[index] === segment) &&
@@ -89,6 +91,27 @@ function relay(upstream: Response): Response {
   return new Response(upstream.body, { status: upstream.status, headers: out });
 }
 
+async function forwardBody(
+  request: NextRequest,
+  method: "POST" | "PATCH",
+  target: string,
+): Promise<Response> {
+  const refusal = refused(request, true);
+  if (refusal) return refusal;
+  const body = await request.text();
+  if (body.length > POST_BODY_LIMIT) {
+    return Response.json({ detail: "Request too large" }, { status: 413 });
+  }
+  const upstream = await fetch(`${API}/${target}`, {
+    method,
+    headers: { Authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+    body,
+    cache: "no-store",
+    signal: request.signal,
+  });
+  return relay(upstream);
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
@@ -98,20 +121,19 @@ export async function POST(
   if (!POST_PATHS.has(target)) {
     return Response.json({ detail: "Method not allowed" }, { status: 405 });
   }
-  const refusal = refused(request, true);
-  if (refusal) return refusal;
-  const body = await request.text();
-  if (body.length > POST_BODY_LIMIT) {
-    return Response.json({ detail: "Request too large" }, { status: 413 });
+  return forwardBody(request, "POST", target);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  const { path } = await params;
+  const target = path.join("/");
+  if (!PATCH_PATH.test(target)) {
+    return Response.json({ detail: "Method not allowed" }, { status: 405 });
   }
-  const upstream = await fetch(`${API}/${target}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${KEY}`, "content-type": "application/json" },
-    body,
-    cache: "no-store",
-    signal: request.signal,
-  });
-  return relay(upstream);
+  return forwardBody(request, "PATCH", target);
 }
 
 export async function GET(

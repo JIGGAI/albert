@@ -3,6 +3,7 @@ import type {
   ApiKeyRow,
   Backends,
   ConnectionLinkRow,
+  ConsoleScope,
   Credentials,
   ConsoleSearchResult,
   MapSnapshot,
@@ -12,6 +13,8 @@ import type {
   Overview,
   RetrievalQuality,
   ServiceHealth,
+  SettingsWorkspace,
+  SettingsWorkspaces,
   TraceDetail,
   TraceSummary,
   Workspace,
@@ -42,25 +45,35 @@ export const listTraces = (params: Params) =>
 export const getTrace = (id: string) => get<TraceDetail>(`/traces/${id}`);
 export const listWorkspaces = (organization_id: string) =>
   get<{ items: Workspace[]; unscoped_memories: number }>("/workspaces", { organization_id });
-export const getMap = (params: { organization_id: string; workspace_id?: string; limit?: number }) =>
+/** A workspace picker's value as query parameters (see lib/scope.ts). */
+export type WorkspaceParams = { workspace_id?: string; shared_only?: string };
+
+export const getScope = () => get<ConsoleScope>("/scope");
+export const getMap = (params: { organization_id: string; limit?: number } & WorkspaceParams) =>
   get<MapSnapshot>("/map", params);
 export const getMemory = (id: string) => get<MemoryDetail>(`/memories/${id}`);
 
-export const getAgentActivity = (params: { organization_id?: string; hours: number }) =>
-  get<AgentActivity>("/ops/agents", params);
-export const getMemoryHealth = (params: { organization_id: string; workspace_id?: string }) =>
+export const getAgentActivity = (params: {
+  organization_id?: string;
+  workspace_id?: string;
+  hours: number;
+}) => get<AgentActivity>("/ops/agents", params);
+export const getMemoryHealth = (params: { organization_id: string } & WorkspaceParams) =>
   get<MemoryHealth>("/ops/memory", params);
 export const getServiceHealth = (params: { hours: number }) =>
   get<ServiceHealth>("/ops/service", params);
-export const getRetrievalQuality = (params: { organization_id?: string; hours: number }) =>
-  get<RetrievalQuality>("/ops/retrieval", params);
+export const getRetrievalQuality = (params: {
+  organization_id?: string;
+  workspace_id?: string;
+  hours: number;
+}) => get<RetrievalQuality>("/ops/retrieval", params);
 
 export const getBackends = (params: { hours: number }) => get<Backends>("/backends", params);
 
 // Credentials live outside /v1/console: they need keys.manage, not console.read.
 const settings = "/api/albert/v1/settings";
 
-async function send<T>(method: "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
+async function send<T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${settings}${path}`, {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
@@ -88,15 +101,28 @@ export async function getCredentials(): Promise<Credentials> {
   }
   return (await response.json()) as Credentials;
 }
-export const createApiKey = (body: { name: string; capabilities: string[] }) =>
-  send<ApiKeyRow & { credential: string }>("POST", "/api-keys", body);
+export const createApiKey = (body: {
+  name: string;
+  capabilities: string[];
+  workspace_id?: string;
+}) => send<ApiKeyRow & { credential: string }>("POST", "/api-keys", body);
 export const revokeApiKey = (id: string) => send<void>("DELETE", `/api-keys/${id}`);
 export const createConnectionLink = (body: {
   name: string;
   capabilities: string[];
   expires_in_seconds: number;
+  workspace_id?: string;
 }) => send<ConnectionLinkRow & { url: string }>("POST", "/connection-links", body);
 export const revokeConnectionLink = (id: string) => send<void>("DELETE", `/connection-links/${id}`);
+export async function listSettingsWorkspaces(): Promise<SettingsWorkspaces> {
+  const response = await fetch(`${settings}/workspaces`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+  return (await response.json()) as SettingsWorkspaces;
+}
+export const createWorkspace = (name: string) =>
+  send<SettingsWorkspace>("POST", "/workspaces", { name });
+export const renameWorkspace = (id: string, name: string) =>
+  send<SettingsWorkspace>("PATCH", `/workspaces/${id}`, { name });
 
 export async function searchMap(body: {
   organization_id: string;

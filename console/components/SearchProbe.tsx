@@ -13,18 +13,26 @@ function ms(value: number): string {
 export function SearchProbe({
   organization,
   organizations,
+  workspace,
+  workspaceName,
 }: {
   organization: string;
   organizations: Organization[];
+  /** Search the way a key in this workspace would: its memories plus the shared ones. */
+  workspace?: string;
+  workspaceName?: string;
 }) {
   const [query, setQuery] = useState("");
   const [withGraph, setWithGraph] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<
-    (ConsoleSearchResult & { query: string; organization: string }) | null
+    (ConsoleSearchResult & { query: string; organization: string; workspace?: string }) | null
   >(null);
   const tenantName = organizations.find((o) => o.id === organization)?.name;
+  const where = workspace
+    ? `${tenantName ?? "the selected tenant"} · ${workspaceName ?? "this workspace"} and its shared memories`
+    : (tenantName ?? "the selected tenant");
 
   const run = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -35,11 +43,12 @@ export function SearchProbe({
     try {
       const response = await searchMap({
         organization_id: organization,
+        workspace_id: workspace,
         query: text,
         limit: 10,
         include_graph: withGraph,
       });
-      setResult({ ...response, query: text, organization });
+      setResult({ ...response, query: text, organization, workspace });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -47,7 +56,8 @@ export function SearchProbe({
     }
   };
 
-  const shown = result?.organization === organization ? result : null;
+  const shown =
+    result?.organization === organization && result.workspace === workspace ? result : null;
   const span = shown
     ? Math.max(0.001, ...shown.path.map((step) => step.started_offset_ms + step.duration_ms))
     : 1;
@@ -74,7 +84,7 @@ export function SearchProbe({
         </button>
       </form>
       <p className="summary">
-        Searches <b>{tenantName ?? "the selected tenant"}</b> with operator access across every
+        Searches <b>{where}</b> with operator access across every
         sensitivity. It is audited, and is not counted in the figures below or in recall
         statistics.
       </p>

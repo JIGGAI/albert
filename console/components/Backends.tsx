@@ -11,7 +11,8 @@ export function backendsOf(trace: TraceSummary): string[] {
 
 export function Backends({ trace }: { trace: TraceSummary }) {
   const active = backendsOf(trace);
-  if (active.length === 0) return null;
+  // Always render the cell: the feed is a grid, and a missing cell shifts every column after it.
+  if (active.length === 0) return <span className="backends" />;
   return (
     <span className="backends" aria-label={`backends: ${active.join(", ")}`}>
       {active.map((backend) => (

@@ -52,6 +52,8 @@ h2 { font-size: 15px; font-weight: 500; margin: 0; }
 }
 .rail .brand { font-weight: 600; font-size: 15px; margin-bottom: 18px; padding-left: 8px; }
 .rail .brand small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+.rail .scope { margin: -6px 0 16px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--fg); }
+.rail .scope .label { display: block; color: var(--muted); font-size: 11px; }
 .rail a {
   padding: 7px 8px;
   border-radius: 6px;
@@ -90,7 +92,7 @@ main { padding: 20px 24px 40px; min-width: 0; }
 .table { border-top: 1px solid var(--line); }
 .row {
   display: grid;
-  grid-template-columns: 70px 64px 220px minmax(200px, 1fr) 150px 90px 80px 80px;
+  grid-template-columns: 70px 64px 220px minmax(200px, 1fr) 150px 90px 160px 80px;
   gap: 12px;
   align-items: center;
   height: 32px;
@@ -468,6 +470,9 @@ table.data td.graph { color: var(--graph); }
 .settings-card form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .settings .field { display: grid; gap: 4px; width: 100%; max-width: 360px; }
 .settings .field span { color: var(--muted); font-size: 12px; }
+.settings .field strong { font-weight: 500; }
+.settings .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.settings td .inline-form { margin-top: 0; }
 .settings input:not([type="checkbox"]), .settings select, .settings button { background: var(--bg); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; }
 .settings button { cursor: pointer; }
 .settings button:disabled { color: var(--faint); cursor: default; }

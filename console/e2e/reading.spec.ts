@@ -41,5 +41,6 @@ test("reading pane shows a memory in full, formatted, with what it connects to",
 
   await pane.getByRole("button", { name: "Close" }).click();
   await expect(pane).toHaveCount(0);
-  await expect(page).toHaveURL(/\/map$/);
+  // Closing drops the selection from the address; the tenant it was read in stays.
+  await expect(page).toHaveURL(/\/map(\?tenant=[0-9a-f-]+)?$/);
 });
