@@ -52,6 +52,7 @@ from albert.schemas import (
     WorkingMemoryFinish,
     WorkingMemoryUpdate,
 )
+from albert.scope import in_workspace
 from albert.security import AuthContext, hash_lock_token, verify_lock_token
 
 SENSITIVITY_ORDER = ("public", "internal", "confidential", "restricted")
@@ -104,6 +105,22 @@ def resolve_workspace(session: Session, auth: AuthContext, requested: UUID | Non
         return workspace_id
 
 
+def require_shared_write(auth: AuthContext) -> None:
+    """Writing or changing an organization-wide record from inside a workspace needs a grant."""
+    if auth.workspace_id is not None:
+        auth.require("memory.write.organization")
+
+
+def write_workspace(
+    session: Session, auth: AuthContext, requested: UUID | None, scope: str | None
+) -> UUID | None:
+    """Where a write lands: organization-wide when asked, else the requested or own workspace."""
+    if scope == "organization":
+        require_shared_write(auth)
+        return None
+    return resolve_workspace(session, auth, requested)
+
+
 def audit(
     session: Session,
     auth: AuthContext,
@@ -142,7 +159,7 @@ def create_episode(
     """
     auth.require("memory.write")
     reject_secrets(data.content, data.metadata)
-    workspace_id = resolve_workspace(session, auth, data.workspace_id)
+    workspace_id = write_workspace(session, auth, data.workspace_id, data.scope)
     digest = hashlib.sha256(data.content.encode()).hexdigest()
     duplicate_of = select(Episode).where(
         Episode.organization_id == auth.organization_id,
@@ -190,7 +207,7 @@ def create_episode(
 def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Memory:
     auth.require("memory.write")
     reject_secrets(data.subject, data.content, data.metadata)
-    workspace_id = resolve_workspace(session, auth, data.workspace_id)
+    workspace_id = write_workspace(session, auth, data.workspace_id, data.scope)
     memory = Memory(
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -231,8 +248,7 @@ def get_memory(session: Session, auth: AuthContext, memory_id: UUID) -> Memory:
         Memory.organization_id == auth.organization_id,
         Memory.status != "deleted",
     )
-    if auth.workspace_id is not None:
-        statement = statement.where(Memory.workspace_id == auth.workspace_id)
+    statement = statement.where(in_workspace(Memory.workspace_id, auth.workspace_id))
     memory = session.scalar(statement)
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -246,6 +262,8 @@ def update_memory(
 ) -> Memory:
     auth.require("memory.write")
     memory = get_memory(session, auth, memory_id)
+    if memory.workspace_id is None:
+        require_shared_write(auth)
     changes = data.model_dump(exclude_unset=True)
     if "valid_until" in changes:
         valid_until = changes["valid_until"]
@@ -382,6 +400,8 @@ def _scrub_memory(session: Session, memory: Memory, now: datetime) -> None:
 def delete_memory(session: Session, auth: AuthContext, memory_id: UUID) -> None:
     auth.require("memory.delete")
     memory = get_memory(session, auth, memory_id)
+    if memory.workspace_id is None:
+        require_shared_write(auth)
     _scrub_memory(session, memory, utcnow())
     audit(session, auth, "memory.deleted", resource_type="memory", resource_id=str(memory.id))
     session.commit()
@@ -394,8 +414,7 @@ def get_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Episod
         Episode.organization_id == auth.organization_id,
         Episode.deleted_at.is_(None),
     )
-    if auth.workspace_id is not None:
-        statement = statement.where(Episode.workspace_id == auth.workspace_id)
+    statement = statement.where(in_workspace(Episode.workspace_id, auth.workspace_id))
     episode = session.scalar(statement)
     if episode is None or episode.sensitivity not in auth.allowed_sensitivities():
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -478,6 +497,8 @@ def delete_episode(session: Session, auth: AuthContext, episode_id: UUID) -> Non
     """Delete a canonical episode together with everything derived from it."""
     auth.require("memory.delete")
     episode = get_episode(session, auth, episode_id)
+    if episode.workspace_id is None:
+        require_shared_write(auth)
     now = utcnow()
     for memory in session.scalars(
         select(Memory).where(Memory.episode_id == episode.id, Memory.status != "deleted")
@@ -506,7 +527,7 @@ def add_explicit_relationship(
         data.metadata,
         what="Relationship",
     )
-    workspace_id = resolve_workspace(session, auth, data.workspace_id)
+    workspace_id = write_workspace(session, auth, data.workspace_id, data.scope)
     if data.source_memory_id is not None:
         get_memory(session, auth, data.source_memory_id)
     extracted = ExtractedRelationship(

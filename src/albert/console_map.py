@@ -40,6 +40,7 @@ from albert.models import (
 )
 from albert.recorder import current_recorder
 from albert.schemas import SearchRequest
+from albert.scope import in_workspace
 from albert.search import hybrid_search
 from albert.security import AuthContext
 from albert.services import audit
@@ -112,6 +113,13 @@ def _map_version(session: Session, organization_id: UUID) -> str:
     return "|".join(parts)
 
 
+def shared_scope(workspace_id: UUID | None, shared_only: bool) -> Any:
+    """Memories a console view covers: shared ones only, or a workspace plus the shared."""
+    if shared_only:
+        return Memory.workspace_id.is_(None)
+    return in_workspace(Memory.workspace_id, workspace_id)
+
+
 def _require_organization(session: Session, organization_id: UUID) -> None:
     if session.get(Organization, organization_id) is None:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -148,20 +156,24 @@ def list_workspaces(
             .order_by(Workspace.name)
         )
     ]
-    # A workspace-scoped key cannot read organization-wide memories either.
-    unscoped = 0 if own_workspace is not None else int(counts.get(None, 0))
-    return {"items": items, "unscoped_memories": unscoped}
+    # Organization-wide memories are shared by every workspace, so every key sees them.
+    return {"items": items, "unscoped_memories": int(counts.get(None, 0))}
 
 
 @router.get("/map")
 def memory_map(
     organization_id: UUID,
     workspace_id: UUID | None = None,
+    shared_only: bool = False,
     limit: int | None = Query(default=None, ge=1, le=MAP_NODE_CAP),
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    """Titled memory nodes, the links among them and named clusters; newest first."""
+    """Titled memory nodes, the links among them and named clusters; newest first.
+
+    A workspace's map includes the organization-wide memories it shares;
+    shared_only draws just those.
+    """
     tenant(auth, organization_id)
     workspace_id = tenant_workspace(auth, workspace_id)
     limit = limit or get_settings().map_node_limit
@@ -171,18 +183,20 @@ def memory_map(
         "console.map.read",
         resource_type="organization",
         resource_id=str(organization_id),
-        detail={"console": True, "workspace_id": _opt(workspace_id)},
+        detail={"console": True, "workspace_id": _opt(workspace_id), "shared_only": shared_only},
     )
     session.commit()
     version = _map_version(session, organization_id)
-    key = f"map|{organization_id}|{workspace_id}|{limit}|{version}"
+    key = f"map|{organization_id}|{workspace_id}|{shared_only}|{limit}|{version}"
     cached = _cache_get(key)
     if cached is not None:
         return cached
 
-    scope = [Memory.organization_id == organization_id, Memory.status == "active"]
-    if workspace_id is not None:
-        scope.append(Memory.workspace_id == workspace_id)
+    scope = [
+        Memory.organization_id == organization_id,
+        Memory.status == "active",
+        shared_scope(workspace_id, shared_only),
+    ]
     # A title needs the subject or the first line, never the whole body.
     rows = session.execute(
         select(Memory, func.substr(Memory.content, 1, TITLE_SOURCE_CHARACTERS))

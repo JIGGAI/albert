@@ -32,6 +32,10 @@ EDGE_FIELDS = (
     "r.confidence, r.valid_from, r.valid_until, r.metadata, s, t"
 )
 VALID_AT = "r.valid_from <= $when AND (r.valid_until IS NULL OR r.valid_until > $when)"
+# A workspace scope also covers the organization-wide rows every workspace shares;
+# "*" means every workspace.
+IN_SCOPE_R = "($ws = '*' OR r.workspace_id IN [$ws, $shared])"
+IN_SCOPE_E = "($ws = '*' OR e.workspace_id IN [$ws, $shared])"
 
 
 def _canonical(value: str) -> str:
@@ -40,6 +44,11 @@ def _canonical(value: str) -> str:
 
 def _ws(workspace_id: UUID | None) -> str:
     return str(workspace_id) if workspace_id is not None else NO_WORKSPACE
+
+
+def _scope(workspace_id: UUID | None) -> dict[str, str]:
+    """Parameters for IN_SCOPE_R / IN_SCOPE_E."""
+    return {"ws": "*" if workspace_id is None else str(workspace_id), "shared": NO_WORKSPACE}
 
 
 def _epoch(value: datetime | None) -> float | None:
@@ -310,7 +319,7 @@ class CypherGraphStore:
             f"""
             MATCH (s:Entity)-[r:REL]->(t:Entity)
             WHERE r.organization_id = $org AND r.sensitivity IN $sensitivities AND {VALID_AT}
-              AND ($ws = '*' OR r.workspace_id = $ws)
+              AND {IN_SCOPE_R}
               AND any(term IN $terms WHERE s.canonical_name CONTAINS term
                       OR t.canonical_name CONTAINS term
                       OR toLower(r.relation_type) CONTAINS term)
@@ -321,7 +330,7 @@ class CypherGraphStore:
             org=str(organization_id),
             sensitivities=list(sensitivities),
             when=_epoch(temporal_as_of or datetime.now(UTC)),
-            ws="*" if workspace_id is None else str(workspace_id),
+            **_scope(workspace_id),
             terms=terms,
             limit=int(limit),
         )
@@ -361,7 +370,7 @@ class CypherGraphStore:
             rows = self._run(
                 f"""
                 MATCH (s:Entity)-[r:REL]->(t:Entity)
-                WHERE r.organization_id = $org AND r.workspace_id = $ws
+                WHERE r.organization_id = $org AND {IN_SCOPE_R}
                   AND r.sensitivity IN $sensitivities AND {VALID_AT}
                   AND (s.id IN $frontier OR t.id IN $frontier)
                 RETURN {EDGE_FIELDS}
@@ -369,7 +378,7 @@ class CypherGraphStore:
                 LIMIT $limit
                 """,
                 org=str(organization_id),
-                ws=_ws(workspace_id),
+                **_scope(workspace_id),
                 sensitivities=list(sensitivities),
                 when=when,
                 frontier=sorted(frontier),
@@ -399,13 +408,13 @@ class CypherGraphStore:
             f"""
             MATCH (s:Entity)-[r:REL]->(t:Entity)
             WHERE r.organization_id = $org AND r.sensitivity IN $sensitivities
-              AND NOT r.extracted AND ($ws = '*' OR r.workspace_id = $ws)
+              AND NOT r.extracted AND {IN_SCOPE_R}
             RETURN {EDGE_FIELDS}
             ORDER BY r.id
             """,
             org=str(organization_id),
             sensitivities=list(sensitivities),
-            ws="*" if workspace_id is None else str(workspace_id),
+            **_scope(workspace_id),
         )
         return [_stored(row) for row in rows]
 
@@ -419,13 +428,13 @@ class CypherGraphStore:
         limit: int,
     ) -> tuple[list[GraphEntity], list[StoredRelationship], bool]:
         nodes = self._run(
-            """
+            f"""
             MATCH (e:Entity)
-            WHERE e.organization_id = $org AND ($ws = '*' OR e.workspace_id = $ws)
+            WHERE e.organization_id = $org AND {IN_SCOPE_E}
             RETURN e ORDER BY e.created_at DESC, e.id LIMIT $limit
             """,
             org=str(organization_id),
-            ws="*" if workspace_id is None else str(workspace_id),
+            **_scope(workspace_id),
             limit=int(limit) + 1,
         )
         truncated = len(nodes) > limit

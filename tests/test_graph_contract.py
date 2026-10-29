@@ -370,6 +370,42 @@ def test_export_snapshot_counts_and_fingerprint(store, session) -> None:  # type
     assert store.counts(session, when=now)[org] == (3, 2)
 
 
+def test_workspace_reads_include_the_shared_organization_wide_graph(store, session) -> None:  # type: ignore[no-untyped-def]
+    """A workspace scope covers its own edges plus the organization-wide ones, never a sibling's."""
+    org, ws, sibling = uuid4(), uuid4(), uuid4()
+    shared, _ = _add(store, session, org, None, _edge("Shared Hub", "uses", "Shared Store"))
+    _add(store, session, org, None, _edge("Shared Store", "uses", "Shared Disk"))
+    _add(store, session, org, ws, _edge("Own Hub", "uses", "Own Store"))
+    _add(store, session, org, sibling, _edge("Sibling Hub", "uses", "Sibling Store"))
+
+    seen = {r.target_name for r in _query(store, session, org, "hub store", workspace_id=ws)}
+    assert seen == {"Shared Store", "Shared Disk", "Own Store"}
+    assert "Sibling Store" in {r.target_name for r in _query(store, session, org, "hub store")}
+
+    reached = store.subgraph(
+        session,
+        organization_id=org,
+        workspace_id=ws,
+        entity_id=shared.source.id,
+        hops=2,
+        temporal_as_of=None,
+        limit=50,
+        sensitivities=ALL,
+    )
+    assert {r.target_name for r in reached} == {"Shared Store", "Shared Disk"}
+
+    exported = store.export_relationships(
+        session, organization_id=org, workspace_id=ws, sensitivities=ALL
+    )
+    assert {r.target.name for r in exported} == {"Shared Store", "Shared Disk", "Own Store"}
+
+    entities, _edges, _truncated = store.snapshot(
+        session, organization_id=org, workspace_id=ws, when=datetime.now(UTC), limit=50
+    )
+    names = {e.name for e in entities}
+    assert {"Shared Hub", "Own Hub"} <= names and "Sibling Hub" not in names
+
+
 @pytest.mark.anyio
 async def test_the_api_works_end_to_end_on_falkordb(client, identity) -> None:  # type: ignore[no-untyped-def]
     """Indexing, graph query, hybrid search, traversal and forgetting through FalkorDB."""

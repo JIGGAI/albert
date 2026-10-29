@@ -19,6 +19,7 @@ from albert.schemas import (
     RelationshipExport,
     WorkspaceExport,
 )
+from albert.scope import in_workspace
 from albert.security import AuthContext
 from albert.services import audit, enqueue, reject_secrets, resolve_workspace
 
@@ -36,8 +37,7 @@ def export_bundle(session: Session, auth: AuthContext, workspace_id: UUID | None
         Memory.status == "active",
         Memory.sensitivity.in_(sensitivities),
     ]
-    if selected_workspace is not None:
-        memory_conditions.append(Memory.workspace_id == selected_workspace)
+    memory_conditions.append(in_workspace(Memory.workspace_id, selected_workspace))
 
     memories = list(session.scalars(select(Memory).where(*memory_conditions)))
     relationships = get_graph_store().export_relationships(

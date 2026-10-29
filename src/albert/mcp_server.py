@@ -78,6 +78,10 @@ async def _request(
     return None if response.status_code == 204 else response.json()
 
 
+def _shared(shared: bool) -> dict[str, str]:
+    return {"scope": "organization"} if shared else {}
+
+
 @mcp.tool()
 async def memory_remember(
     content: str,
@@ -86,8 +90,13 @@ async def memory_remember(
     project_ref: str | None = None,
     task_ref: str | None = None,
     sensitivity: str = "internal",
+    shared: bool = False,
 ) -> dict[str, Any]:
-    """Store an explicit durable memory and queue semantic/graph enrichment."""
+    """Store an explicit durable memory and queue semantic/graph enrichment.
+
+    shared=True stores it organization-wide, for every workspace to read; a
+    workspace-scoped key needs the memory.write.organization capability.
+    """
     return await _request(
         "POST",
         "/v1/memories",
@@ -98,6 +107,7 @@ async def memory_remember(
             "project_ref": project_ref,
             "task_ref": task_ref,
             "sensitivity": sensitivity,
+            **_shared(shared),
         },
     )
 
@@ -111,12 +121,14 @@ async def memory_ingest(
     task_ref: str | None = None,
     sensitivity: str = "internal",
     wait_seconds: float = 0,
+    shared: bool = False,
 ) -> dict[str, Any]:
     """Ingest a canonical episode for asynchronous classification and indexing.
 
     The result's `indexing.state` says whether it is searchable yet. Pass
     wait_seconds (up to the server's limit, 30 by default) to return only once
     it is searchable or has failed, so a search straight afterwards finds it.
+    shared=True stores it organization-wide, as for memory_remember.
     """
     return await _request(
         "POST",
@@ -128,6 +140,7 @@ async def memory_ingest(
             "project_ref": project_ref,
             "task_ref": task_ref,
             "sensitivity": sensitivity,
+            **_shared(shared),
         },
         headers={"Prefer": f"wait={wait_seconds:g}"} if wait_seconds > 0 else None,
     )
@@ -259,8 +272,12 @@ async def memory_add_relationship(
     target_type: str = "concept",
     sensitivity: str = "internal",
     source_memory_id: str | None = None,
+    shared: bool = False,
 ) -> dict[str, Any]:
-    """Create an explicit typed relationship in the authorized memory graph."""
+    """Create an explicit typed relationship in the authorized memory graph.
+
+    shared=True makes it organization-wide, as for memory_remember.
+    """
     return await _request(
         "POST",
         "/v1/relationships",
@@ -270,6 +287,7 @@ async def memory_add_relationship(
             "target": {"name": target_name, "entity_type": target_type},
             "sensitivity": sensitivity,
             "source_memory_id": source_memory_id,
+            **_shared(shared),
         },
     )
 

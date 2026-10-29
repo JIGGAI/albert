@@ -14,6 +14,7 @@ from albert.classifier import ExtractedEntity, ExtractedRelationship
 from albert.graph_store import GraphEntity, StoredRelationship
 from albert.models import Entity, Relationship
 from albert.schemas import RelationshipRead
+from albert.scope import in_workspace
 
 
 def canonical_name(value: str) -> str:
@@ -146,8 +147,7 @@ def query_relationships(
         Relationship.valid_from <= when,
         or_(Relationship.valid_until.is_(None), Relationship.valid_until > when),
     ]
-    if workspace_id is not None:
-        conditions.append(Relationship.workspace_id == workspace_id)
+    conditions.append(in_workspace(Relationship.workspace_id, workspace_id))
     statement = (
         select(Relationship, source, target)
         .join(source, Relationship.source_entity_id == source.id)
@@ -216,7 +216,7 @@ def subgraph(
             .join(target, Relationship.target_entity_id == target.id)
             .where(
                 Relationship.organization_id == organization_id,
-                Relationship.workspace_id == workspace_id,
+                in_workspace(Relationship.workspace_id, workspace_id),
                 Relationship.sensitivity.in_(sensitivities),
                 Relationship.valid_from <= when,
                 or_(Relationship.valid_until.is_(None), Relationship.valid_until > when),
@@ -459,8 +459,7 @@ class PostgresGraphStore:
             Relationship.organization_id == organization_id,
             Relationship.sensitivity.in_(sensitivities),
         ]
-        if workspace_id is not None:
-            conditions.append(Relationship.workspace_id == workspace_id)
+        conditions.append(in_workspace(Relationship.workspace_id, workspace_id))
         return [
             _stored(relationship)
             for relationship in session.scalars(select(Relationship).where(*conditions))
@@ -476,9 +475,10 @@ class PostgresGraphStore:
         when: datetime,
         limit: int,
     ) -> tuple[list[GraphEntity], list[StoredRelationship], bool]:
-        scope = [Entity.organization_id == organization_id]
-        if workspace_id is not None:
-            scope.append(Entity.workspace_id == workspace_id)
+        scope = [
+            Entity.organization_id == organization_id,
+            in_workspace(Entity.workspace_id, workspace_id),
+        ]
         entities = session.scalars(
             select(Entity).where(*scope).order_by(Entity.created_at.desc()).limit(limit + 1)
         ).all()

@@ -17,6 +17,7 @@ from albert.graph_store import get_graph_store
 from albert.models import Memory, MemoryChunk
 from albert.recorder import cap_candidates, current_recorder, span
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
+from albert.scope import in_workspace
 
 RRF_K = 60
 logger = logging.getLogger("albert.search")
@@ -32,8 +33,7 @@ def _scope_conditions(
         Memory.organization_id == organization_id,
         Memory.status == "active",
     ]
-    if workspace_id is not None:
-        conditions.append(Memory.workspace_id == workspace_id)
+    conditions.append(in_workspace(Memory.workspace_id, workspace_id))
     if request.project_ref is not None:
         conditions.append(Memory.project_ref == request.project_ref)
     if request.task_ref is not None:

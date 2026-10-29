@@ -2,9 +2,10 @@
 
 Everything here is read-only and gated by the console.read capability. A
 console.read key sees only its own organization, and only its own workspace
-when the key is workspace-scoped: keys.manage holders and connection links can
-issue console.read, so it must never reach further than the issuer could. Only
-an admin key crosses tenants. Memory content is returned only by the explicit
+(plus the organization-wide memories every workspace shares) when the key is
+workspace-scoped: keys.manage holders and connection links can issue
+console.read, so it must never reach further than the issuer could. Only an
+admin key crosses tenants. Memory content is returned only by the explicit
 detail endpoints, audited (memory detail lives in console_map).
 """
 
@@ -25,7 +26,8 @@ from sqlalchemy.orm import Session
 from albert.config import get_settings
 from albert.db import SessionLocal, engine, get_session
 from albert.graph_store import StoredRelationship, get_graph_store
-from albert.models import Job, Memory, Organization, Trace
+from albert.models import Job, Memory, Organization, Trace, Workspace
+from albert.scope import covers, in_workspace
 from albert.security import AuthContext, authenticate
 from albert.services import audit
 from albert.trace_feed import TraceFeed, parse_event_id, trace_summary
@@ -84,9 +86,7 @@ def visible(auth: AuthContext, organization_id: UUID | None, workspace_id: UUID 
     """Whether one record falls inside the key's console scope."""
     if "admin" in auth.capabilities:
         return True
-    return organization_id == auth.organization_id and (
-        auth.workspace_id is None or workspace_id == auth.workspace_id
-    )
+    return organization_id == auth.organization_id and covers(auth.workspace_id, workspace_id)
 
 
 def _opt(value: UUID | None) -> str | None:
@@ -272,9 +272,11 @@ def graph_snapshot(
         return cached
     when = temporal_as_of or datetime.now(UTC)
 
-    memory_scope = [Memory.organization_id == organization_id, Memory.status == "active"]
-    if workspace_id is not None:
-        memory_scope.append(Memory.workspace_id == workspace_id)
+    memory_scope = [
+        Memory.organization_id == organization_id,
+        Memory.status == "active",
+        in_workspace(Memory.workspace_id, workspace_id),
+    ]
 
     entities, relationships, truncated = get_graph_store().snapshot(
         session,
@@ -335,6 +337,28 @@ def graph_snapshot(
     result = {"nodes": nodes, "edges": edges, "truncated": truncated}
     _cache_put(key, result)
     return result
+
+
+@router.get("/scope")
+def console_scope(
+    auth: AuthContext = Depends(_operator),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """What this console's key can see, so the UI shows only pickers that change anything."""
+    organization = session.get(Organization, auth.organization_id)
+    workspace = session.get(Workspace, auth.workspace_id) if auth.workspace_id else None
+    admin = "admin" in auth.capabilities
+    return {
+        "admin": admin,
+        "organization": {
+            "id": str(auth.organization_id),
+            "name": organization.name if organization is not None else None,
+        },
+        "workspace": (
+            {"id": str(workspace.id), "name": workspace.name} if workspace is not None else None
+        ),
+        "capabilities": sorted(auth.capabilities),
+    }
 
 
 @router.get("/organizations")
