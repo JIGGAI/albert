@@ -15,11 +15,11 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select, text, true
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.console import _iso, _operator, _opt, tenant, tenant_workspace
+from albert.console import _iso, _operator, _opt, tenant, tenant_workspace, trace_scope
 from albert.console_map import clean_title, shared_scope
 from albert.db import get_session
 from albert.graph_store import get_graph_store
@@ -78,14 +78,12 @@ def _traces(
     session: Session,
     *columns: Any,
     since: datetime,
-    organization_id: UUID | None,
+    scope: list[Any],
     names: tuple[str, ...] | None = None,
     cap: int = TRACE_ROW_CAP,
 ) -> tuple[list[Any], bool]:
-    """Newest trace rows in the window, capped; (rows, truncated)."""
-    statement = select(*columns).where(Trace.started_at >= _bound(session, since))
-    if organization_id is not None:
-        statement = statement.where(Trace.organization_id == organization_id)
+    """Newest trace rows in the window and scope (see trace_scope), capped; (rows, truncated)."""
+    statement = select(*columns).where(Trace.started_at >= _bound(session, since), *scope)
     if names is not None:
         statement = statement.where(Trace.name.in_(names))
     rows = session.execute(statement.order_by(Trace.started_at.desc()).limit(cap + 1)).all()
@@ -95,12 +93,13 @@ def _traces(
 @router.get("/agents")
 def agent_activity(
     organization_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     hours: int = Hours,
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Who is using memory: searches, stores and errors per principal, and over time."""
-    organization_id = tenant(auth, organization_id)
+    scope = trace_scope(auth, organization_id, workspace_id)
     now = datetime.now(UTC)
     since = now - timedelta(hours=hours)
     rows, truncated = _traces(
@@ -111,7 +110,7 @@ def agent_activity(
         Trace.started_at,
         Trace.summary,
         since=since,
-        organization_id=organization_id,
+        scope=scope,
     )
     bucket_hours = 1 if hours <= 48 else 24
     bucket_count = math.ceil(hours / bucket_hours)
@@ -364,7 +363,8 @@ def service_health(
 ) -> dict[str, Any]:
     """How the service itself is doing: endpoints, the job queue, the recorder.
 
-    A non-admin key sees its own tenant's traffic and jobs; worker liveness and
+    A non-admin key sees its own tenant's traffic (its own workspace's when the
+    key is workspace-scoped) and its tenant's job queue; worker liveness and
     database size describe the instance and are shown to every operator.
     """
     own = tenant(auth, None)
@@ -377,7 +377,7 @@ def service_health(
         Trace.status,
         Trace.duration_ms,
         since=now - timedelta(hours=hours),
-        organization_id=own,
+        scope=trace_scope(auth),
     )
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {"durations": [], "errors": 0, "degraded": 0}
@@ -461,9 +461,7 @@ def service_health(
         "traces": {
             "stored": int(
                 session.scalar(
-                    select(func.count(Trace.id)).where(
-                        Trace.organization_id == own if own is not None else true()
-                    )
+                    select(func.count(Trace.id)).where(*trace_scope(auth))
                 )
                 or 0
             ),
@@ -487,12 +485,13 @@ def service_health(
 @router.get("/retrieval")
 def retrieval_quality(
     organization_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     hours: int = Hours,
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Whether searches find things, how fast, and which backend earns the hits."""
-    organization_id = tenant(auth, organization_id)
+    scope = trace_scope(auth, organization_id, workspace_id)
     since = datetime.now(UTC) - timedelta(hours=hours)
     rows, truncated = _traces(
         session,
@@ -503,7 +502,7 @@ def retrieval_quality(
         Trace.summary,
         Trace.spans,
         since=since,
-        organization_id=organization_id,
+        scope=scope,
         names=COUNTED_TRACE_NAMES,
         cap=SPAN_TRACE_CAP,
     )

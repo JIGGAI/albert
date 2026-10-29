@@ -54,6 +54,7 @@ def trace_summary(trace: Trace) -> dict[str, Any]:
         "name": trace.name,
         "organization_id": opt(trace.organization_id),
         "principal_id": opt(trace.principal_id),
+        "workspace_id": opt(trace.workspace_id),
         "status": trace.status,
         "http_status": trace.http_status,
         "started_at": _utc(trace.started_at).astimezone(UTC).isoformat(),
