@@ -13,6 +13,7 @@ import type {
   Overview,
   RetrievalQuality,
   ServiceHealth,
+  MemoryOutcome,
   SettingsWorkspace,
   SettingsWorkspaces,
   TraceDetail,
@@ -123,6 +124,11 @@ export const createWorkspace = (name: string) =>
   send<SettingsWorkspace>("POST", "/workspaces", { name });
 export const renameWorkspace = (id: string, name: string) =>
   send<SettingsWorkspace>("PATCH", `/workspaces/${id}`, { name });
+export const deleteWorkspace = (id: string, memories: MemoryOutcome, to?: string) =>
+  send<{ records: Record<string, number>; credentials: Record<string, number> }>(
+    "DELETE",
+    `/workspaces/${id}?${new URLSearchParams(to ? { memories, to } : { memories })}`,
+  );
 
 export async function searchMap(body: {
   organization_id: string;

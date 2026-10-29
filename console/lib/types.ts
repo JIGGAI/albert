@@ -100,8 +100,13 @@ export interface ConsoleScope {
 }
 
 export interface SettingsWorkspace extends Workspace {
+  /** Active API keys and unused connection links that deleting it revokes. */
+  credentials: number;
   created_at: string | null;
 }
+
+/** What deleting a workspace does with what it holds. */
+export type MemoryOutcome = "organization" | "workspace" | "delete";
 
 export interface SettingsWorkspaces {
   items: SettingsWorkspace[];
