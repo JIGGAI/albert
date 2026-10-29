@@ -135,6 +135,12 @@ class GraphStore(Protocol):
         """Make a memory's extracted edges follow its new sensitivity and validity."""
         ...
 
+    def memory_edge_metadata(
+        self, session: Session, *, organization_id: UUID, memory_id: UUID
+    ) -> list[dict]:
+        """The metadata of every edge a memory produced, open or closed."""
+        ...
+
     def move_workspace(
         self,
         session: Session,

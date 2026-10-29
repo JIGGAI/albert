@@ -393,6 +393,19 @@ class PostgresGraphStore:
         session.flush()
         return len(edges)
 
+    def memory_edge_metadata(
+        self, session: Session, *, organization_id: UUID, memory_id: UUID
+    ) -> list[dict]:
+        return [
+            dict(metadata or {})
+            for metadata in session.scalars(
+                select(Relationship.metadata_).where(
+                    Relationship.organization_id == organization_id,
+                    Relationship.source_memory_id == memory_id,
+                )
+            )
+        ]
+
     def move_workspace(
         self,
         session: Session,

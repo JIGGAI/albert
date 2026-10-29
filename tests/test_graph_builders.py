@@ -99,8 +99,17 @@ class FakeGraphiti:
         self.closed = False
         self.episodes: dict[str, object] = {}
         self.driver = SimpleNamespace(_init_task=None)
-        self.scoped_driver = SimpleNamespace(episodes=self.episodes, entities={})
+        self.tags: dict[str, str] = {}
+        self.scoped_driver = SimpleNamespace(
+            episodes=self.episodes, entities={}, execute_query=self._execute_query
+        )
         self.retrieve_drivers: list[object] = []
+
+    async def _execute_query(self, query: str, **params):  # type: ignore[no-untyped-def]
+        # Only the episode tag is a raw query on the build path.
+        assert "albert_source_id" in query
+        self.tags[params["uuid"]] = params["source"]
+        return [], None, None
 
     def _resolve_request_scope(self, group_id):  # type: ignore[no-untyped-def]
         return group_id, self.scoped_driver, SimpleNamespace(driver=self.scoped_driver)
@@ -210,6 +219,8 @@ def test_graphiti_maps_temporal_facts_and_scopes_episode() -> None:
     assert fact.valid_from == datetime(2026, 1, 15, tzinfo=UTC)
     assert fact.valid_until == datetime(2026, 2, 1, tzinfo=UTC)
     assert fact.metadata["builder"] == "graphiti"
+    # The episode is tagged with its memory, so forgetting the memory can find it.
+    assert fake.tags == {fake.calls[0]["uuid"]: str(memory_id)}
 
 
 def test_graphiti_episode_identity_is_stable_for_retries_and_changes_for_edits() -> None:

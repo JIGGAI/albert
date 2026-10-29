@@ -11,7 +11,7 @@ from albert.models import CaptureCheckpoint, CaptureEvent, Episode, Memory, utcn
 def _expire_event(session: Session, event: CaptureEvent, now: datetime) -> None:
     if event.deleted_at is not None:
         return
-    from albert.services import _scrub_memory
+    from albert.services import _scrub_memory, forget_episode_graph
 
     memories = list(
         session.scalars(
@@ -24,6 +24,7 @@ def _expire_event(session: Session, event: CaptureEvent, now: datetime) -> None:
             memory.status = "invalidated"
     episode = session.get(Episode, event.episode_id) if event.episode_id is not None else None
     if episode is not None and episode.deleted_at is None:
+        forget_episode_graph(session, episode)
         episode.content = ""
         episode.extra = {}
         episode.enrichment_error = None
