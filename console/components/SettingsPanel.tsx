@@ -508,7 +508,7 @@ export function SettingsPanel() {
       <section className="card" aria-labelledby="links-title">
         <h2 id="links-title">Connection links</h2>
         {data.connection_links.length ? (
-          <table className="data" data-testid="links">
+          <table className="data stack" data-testid="links">
             <thead>
               <tr>
                 <th>Name</th>
@@ -523,14 +523,16 @@ export function SettingsPanel() {
             <tbody>
               {data.connection_links.map((link) => (
                 <tr key={link.id}>
-                  <td>{link.name}</td>
-                  <td>{scopeName(link)}</td>
-                  <td className="mono">{link.capabilities.join(", ")}</td>
-                  <td>
+                  <td data-label="Name">{link.name}</td>
+                  <td data-label="Scope">{scopeName(link)}</td>
+                  <td data-label="Capabilities" className="mono">
+                    {link.capabilities.join(", ")}
+                  </td>
+                  <td data-label="State">
                     <span className={`badge ${link.state === "open" ? "on" : ""}`}>{link.state}</span>
                   </td>
-                  <td>{at(link.expires_at)}</td>
-                  <td>{at(link.used_at)}</td>
+                  <td data-label="Expires">{at(link.expires_at)}</td>
+                  <td data-label="Used">{at(link.used_at)}</td>
                   <td className="right">
                     {link.state === "open" ? (
                       <button type="button" className="revoke" onClick={() => revoke("link", link.id, link.name)}>
@@ -549,7 +551,7 @@ export function SettingsPanel() {
 
       <section className="card" aria-labelledby="keys-title">
         <h2 id="keys-title">API keys</h2>
-        <table className="data" data-testid="keys">
+        <table className="data stack" data-testid="keys">
           <thead>
             <tr>
               <th>Name</th>
@@ -565,16 +567,20 @@ export function SettingsPanel() {
           <tbody>
             {data.api_keys.map((key) => (
               <tr key={key.id}>
-                <td>
+                <td data-label="Name">
                   {key.name}
                   {key.current ? <span className="muted"> (this console)</span> : null}
                 </td>
-                <td>{scopeName(key)}</td>
-                <td className="mono">{key.prefix}</td>
-                <td className="mono">{key.capabilities.join(", ")}</td>
-                <td>{at(key.created_at)}</td>
-                <td>{at(key.last_used_at)}</td>
-                <td>
+                <td data-label="Scope">{scopeName(key)}</td>
+                <td data-label="Prefix" className="mono">
+                  {key.prefix}
+                </td>
+                <td data-label="Capabilities" className="mono">
+                  {key.capabilities.join(", ")}
+                </td>
+                <td data-label="Created">{at(key.created_at)}</td>
+                <td data-label="Last used">{at(key.last_used_at)}</td>
+                <td data-label="State">
                   <span className={`badge ${key.active ? "on" : ""}`}>{key.active ? "active" : "revoked"}</span>
                 </td>
                 <td className="right">
