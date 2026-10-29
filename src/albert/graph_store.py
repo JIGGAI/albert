@@ -135,6 +135,27 @@ class GraphStore(Protocol):
         """Make a memory's extracted edges follow its new sensitivity and validity."""
         ...
 
+    def move_workspace(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        workspace_id: UUID,
+        to_workspace_id: UUID | None,
+    ) -> int:
+        """Move a workspace's entities and edges into another scope; returns edges moved.
+
+        An entity that already exists in the target scope (same canonical name and
+        type) absorbs the moving one's edges, so the target keeps one node per name.
+        """
+        ...
+
+    def delete_workspace(
+        self, session: Session, *, organization_id: UUID, workspace_id: UUID
+    ) -> int:
+        """Remove a workspace's entities and edges outright; returns edges removed."""
+        ...
+
     def query(
         self,
         session: Session,
