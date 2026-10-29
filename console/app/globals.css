@@ -500,3 +500,14 @@ table.data td.graph { color: var(--graph); }
 .delete-workspace .inline-form { margin-top: 0; }
 @media (max-width: 700px) { .delete-workspace .check { grid-template-columns: max-content 1fr; } .delete-workspace .check .muted { grid-column: 2; } }
 @media (max-width: 700px) { .capabilities .check { grid-template-columns: max-content 1fr; } .capabilities .check .muted { grid-column: 2; } }
+/* Wide credential tables become one labelled card per row on a phone. */
+@media (max-width: 700px) {
+  table.data.stack thead { display: none; }
+  table.data.stack, table.data.stack tbody, table.data.stack tr { display: block; width: 100%; }
+  table.data.stack tr { border-bottom: 1px solid var(--line); padding: 6px 0; }
+  table.data.stack td { display: grid; grid-template-columns: 96px 1fr; gap: 8px; border: 0; padding: 2px 0; text-align: left; overflow-wrap: anywhere; }
+  table.data.stack td::before { content: attr(data-label); color: var(--muted); }
+  table.data.stack td > * { justify-self: start; }
+  table.data.stack td:not([data-label]) { display: block; }
+  table.data.stack td:not([data-label]):empty { display: none; }
+}
