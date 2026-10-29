@@ -117,16 +117,19 @@ the same for the episode and every memory derived from it. Both need
 Operator endpoints under `/v1/console`, gated by `console.read` (implied by
 `admin`). A `console.read` key sees only its own organization, and only its own
 workspace plus the shared organization-wide memories when its principal is
-workspace-scoped; a request naming another organization or workspace gets 404. Traces and job statistics are recorded per
-organization, so a workspace-scoped key sees its whole organization's traffic
-(ids, timings and search queries, never memory content). Only an `admin` key
+workspace-scoped; a request naming another organization or workspace gets 404.
+Every trace records the workspace it ran in: the key's for a request, the
+record's for a job, none for organization-wide work. A workspace-scoped key
+sees only its own workspace's traces; job-queue counts are kept per
+organization and never carry memory content. Only an `admin` key
 crosses tenants. `console.read` can be issued from Settings and by connection
 links, which is why it never reaches further than the key that issued it.
 
 - `GET /v1/console/scope`: what this key can see: `admin`, `organization`
   `{id, name}`, `workspace` (`{id, name}` or null) and `capabilities`
 - `GET /v1/console/traces` with filters `kind`, `status`, `organization_id`,
-  `principal_id`, `name`, `since`, `until`, `q`, keyset `cursor`, `limit`
+  `workspace_id`, `principal_id`, `name`, `since`, `until`, `q`, keyset
+  `cursor`, `limit`. Each trace carries `workspace_id`
 - `GET /v1/console/traces/{id}` including `spans`
 - `GET /v1/console/stream`: server-sent events, one `event: trace` per recorded
   trace; reconnect with `Last-Event-ID`
@@ -172,7 +175,7 @@ is the window (1 to 720, default 24); at most the newest 20,000 traces in it are
 read (3,000 for retrieval, which reads spans), and `truncated` says when that
 cap was hit.
 
-- `GET /v1/console/ops/agents?organization_id=…&hours=…`: per principal,
+- `GET /v1/console/ops/agents?organization_id=…&workspace_id=…&hours=…`: per principal,
   searches, searches that found nothing, average hits, stores, failures and
   last seen; plus recalls and stores per hour (per day past 48 hours)
 - `GET /v1/console/ops/memory?organization_id=…&workspace_id=…&shared_only=…`:
@@ -180,7 +183,7 @@ cap was hit.
   "Organization-wide (shared)"); never recalled, unlinked, unindexed and
   near-duplicate counts; memories added per day; most recalled and
   near-duplicate pairs with titles (audited)
-- `GET /v1/console/ops/retrieval?organization_id=…&hours=…`: zero-hit and
+- `GET /v1/console/ops/retrieval?organization_id=…&workspace_id=…&hours=…`: zero-hit and
   degraded rates, hits per search, latency percentiles, each backend's share of
   final hits and the share only it found, searches that found nothing, slowest
   searches

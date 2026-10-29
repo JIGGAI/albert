@@ -132,7 +132,7 @@ def authenticate(
         handle.set(capabilities=sorted(record.capabilities or []))
         recorder = current_recorder()
         if recorder is not None:
-            recorder.set_identity(principal.organization_id, principal.id)
+            recorder.set_identity(principal.organization_id, principal.id, principal.workspace_id)
     return AuthContext(
         principal_id=principal.id,
         organization_id=principal.organization_id,

@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.console import _operator, tenant
+from albert.console import _operator, tenant, trace_scope
 from albert.console_ops import _aware, _traces, percentile
 from albert.db import get_session
 from albert.graph_builders import probe_graph_builder
@@ -167,7 +167,7 @@ def backends(
         Trace.started_at,
         Trace.spans,
         since=since,
-        organization_id=own,
+        scope=trace_scope(auth),
         names=INDEXING_JOBS,
         cap=5000,
     )
@@ -195,7 +195,7 @@ def backends(
         session,
         Trace.spans,
         since=since,
-        organization_id=own,
+        scope=trace_scope(auth),
         names=(*COUNTED_TRACE_NAMES, "POST /v1/graph/query"),
         cap=3000,
     )

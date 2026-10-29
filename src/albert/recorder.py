@@ -75,13 +75,19 @@ class Recorder:
         self.spans: list[dict[str, Any]] = []
         self.organization_id: Any = None
         self.principal_id: Any = None
+        # The workspace the traced work ran in: the key's for a request, the
+        # record's for a job; None for organization-wide work.
+        self.workspace_id: Any = None
         self.http_status: int | None = None
         self.status: str | None = None
         self.summary: dict[str, Any] = {}
 
-    def set_identity(self, organization_id: Any, principal_id: Any) -> None:
+    def set_identity(
+        self, organization_id: Any, principal_id: Any, workspace_id: Any = None
+    ) -> None:
         self.organization_id = organization_id
         self.principal_id = principal_id
+        self.workspace_id = workspace_id
 
     def note(self, **fields: Any) -> None:
         if isinstance(fields.get("query"), str):
@@ -112,6 +118,7 @@ class Recorder:
             "name": self.name,
             "organization_id": self.organization_id,
             "principal_id": self.principal_id,
+            "workspace_id": self.workspace_id,
             "status": status,
             "http_status": self.http_status,
             "started_at": self.started_at,
@@ -119,6 +126,13 @@ class Recorder:
             "summary": dict(self.summary),
             "spans": list(self.spans),
         }
+
+
+def set_workspace(workspace_id: Any) -> None:
+    """Record which workspace the current job is working in, once it has loaded its record."""
+    recorder = current_recorder()
+    if recorder is not None:
+        recorder.workspace_id = workspace_id
 
 
 @contextmanager

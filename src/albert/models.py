@@ -507,6 +507,7 @@ class Trace(Base):
         Index("ix_traces_started", "started_at", "id"),
         Index("ix_traces_written", "written_at", "id"),
         Index("ix_traces_org_started", "organization_id", "started_at"),
+        Index("ix_traces_org_workspace_started", "organization_id", "workspace_id", "started_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -514,6 +515,8 @@ class Trace(Base):
     name: Mapped[str] = mapped_column(String(200), index=True)
     organization_id: Mapped[uuid.UUID | None] = mapped_column()
     principal_id: Mapped[uuid.UUID | None] = mapped_column()
+    # The key's workspace for a request, the record's for a job; None when organization-wide.
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column()
     status: Mapped[str] = mapped_column(String(16), index=True)
     http_status: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -39,7 +39,7 @@ from albert.models import (
     Workspace,
     utcnow,
 )
-from albert.recorder import span
+from albert.recorder import set_workspace, span
 from albert.schemas import (
     EpisodeCreate,
     EpisodeRead,
@@ -958,6 +958,7 @@ def enrich_memory(
     memory = session.get(Memory, memory_id)
     if memory is None or memory.status != "active":
         return
+    set_workspace(memory.workspace_id)
     current_fingerprint = _content_fingerprint(memory.subject, memory.content)
     if expected_fingerprint is not None and current_fingerprint != expected_fingerprint:
         return
@@ -1028,6 +1029,7 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     episode = session.get(Episode, episode_id)
     if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
         return
+    set_workspace(episode.workspace_id)
     subject = episode.content.strip().splitlines()[0][:500]
     request = BuildRequest(
         memory_id=episode.id,

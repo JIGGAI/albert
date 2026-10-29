@@ -82,6 +82,32 @@ def tenant_workspace(auth: AuthContext, requested: UUID | None) -> UUID | None:
     return auth.workspace_id
 
 
+def trace_scope(
+    auth: AuthContext, organization_id: UUID | None = None, workspace_id: UUID | None = None
+) -> list[Any]:
+    """Trace filters for a console read: the key's tenant, and its workspace when scoped.
+
+    A trace's workspace is the one the traced work ran in. Organization-wide work
+    (an organization-wide key's request, a job on a shared record) has none, so
+    a workspace-scoped key does not see it.
+    """
+    organization = tenant(auth, organization_id)
+    workspace = tenant_workspace(auth, workspace_id)
+    conditions: list[Any] = []
+    if organization is not None:
+        conditions.append(Trace.organization_id == organization)
+    if workspace is not None:
+        conditions.append(Trace.workspace_id == workspace)
+    return conditions
+
+
+def trace_visible(auth: AuthContext, trace: Trace) -> bool:
+    if tenant(auth, None) not in (None, trace.organization_id):
+        return False
+    workspace = tenant_workspace(auth, None)
+    return workspace is None or trace.workspace_id == workspace
+
+
 def visible(auth: AuthContext, organization_id: UUID | None, workspace_id: UUID | None) -> bool:
     """Whether one record falls inside the key's console scope."""
     if "admin" in auth.capabilities:
@@ -122,6 +148,7 @@ def list_traces(
     kind: str | None = None,
     status: str | None = None,
     organization_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     principal_id: UUID | None = None,
     name: str | None = None,
     since: datetime | None = None,
@@ -132,12 +159,10 @@ def list_traces(
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    organization_id = tenant(auth, organization_id)
-    statement = select(Trace)
+    statement = select(Trace).where(*trace_scope(auth, organization_id, workspace_id))
     equalities = (
         (Trace.kind, kind),
         (Trace.status, status),
-        (Trace.organization_id, organization_id),
         (Trace.principal_id, principal_id),
         (Trace.name, name),
     )
@@ -189,6 +214,8 @@ def stream(
     session.close()
     organization = tenant(auth, None)
     own = str(organization) if organization is not None else None
+    workspace = tenant_workspace(auth, None)
+    own_workspace = str(workspace) if workspace is not None else None
 
     async def body() -> AsyncIterator[str]:
         last_keepalive = time.monotonic()
@@ -199,6 +226,8 @@ def stream(
                     yield ": keepalive\n\n"
                 continue
             if own is not None and event["data"]["organization_id"] != own:
+                continue
+            if own_workspace is not None and event["data"]["workspace_id"] != own_workspace:
                 continue
             payload = json.dumps(event["data"])
             yield f"id: {event['id']}\nevent: trace\ndata: {payload}\n\n"
@@ -217,7 +246,7 @@ def get_trace(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     trace = session.get(Trace, trace_id)
-    if trace is None or tenant(auth, None) not in (None, trace.organization_id):
+    if trace is None or not trace_visible(auth, trace):
         raise HTTPException(status_code=404, detail="Trace not found")
     return {**_trace_summary(trace), "spans": trace.spans}
 
@@ -402,7 +431,7 @@ def overview(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     own = tenant(auth, None)
-    trace_scope = [Trace.organization_id == own] if own is not None else []
+    traces = trace_scope(auth)
     job_scope = [Job.organization_id == own] if own is not None else []
     now = datetime.now(UTC).replace(second=0, microsecond=0)
     start = now - timedelta(minutes=59)
@@ -416,7 +445,7 @@ def overview(
         else start
     )
     recent = session.execute(
-        select(Trace.started_at, Trace.status).where(Trace.started_at >= query_start, *trace_scope)
+        select(Trace.started_at, Trace.status).where(Trace.started_at >= query_start, *traces)
     )
     for started_at, trace_status in recent:
         started = started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at
@@ -444,7 +473,7 @@ def overview(
         "oldest_pending_seconds": (
             (datetime.now(UTC) - oldest).total_seconds() if oldest is not None else None
         ),
-        "trace_count": int(session.scalar(select(func.count(Trace.id)).where(*trace_scope)) or 0),
+        "trace_count": int(session.scalar(select(func.count(Trace.id)).where(*traces)) or 0),
         "traces_dropped": get_trace_writer().dropped,
         "worker_last_seen": _iso(last_job),
     }
