@@ -205,8 +205,11 @@ service healthy.
 **Backends** shows which graph store and graph builder are in use, proves the
 store is reachable, and gives the exact steps to switch.
 
-**Settings** creates, renames and deletes workspaces and issues least-privilege API keys
-and one-time connection links, each held to a workspace or the whole
+**Workspaces** creates, renames and deletes workspaces; deleting one asks whether
+its memories become organization-wide, move to another workspace, or are
+forgotten.
+
+**Settings** issues least-privilege API keys and one-time connection links, each held to a workspace or the whole
 organization and never wider than the console's own key.
 
 ![Backends: stores and builders with live status and how to turn each on](docs/images/console-backends.png)
