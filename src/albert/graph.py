@@ -393,6 +393,69 @@ class PostgresGraphStore:
         session.flush()
         return len(edges)
 
+    def move_workspace(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        workspace_id: UUID,
+        to_workspace_id: UUID | None,
+    ) -> int:
+        target = aliased(Entity)
+        pairs = session.execute(
+            select(Entity.id, target.id)
+            .join(
+                target,
+                (target.organization_id == organization_id)
+                & (
+                    target.workspace_id.is_(None)
+                    if to_workspace_id is None
+                    else target.workspace_id == to_workspace_id
+                )
+                & (target.canonical_name == Entity.canonical_name)
+                & (target.entity_type == Entity.entity_type),
+            )
+            .where(Entity.organization_id == organization_id, Entity.workspace_id == workspace_id)
+        ).all()
+        for moving, existing in pairs:
+            for column in (Relationship.source_entity_id, Relationship.target_entity_id):
+                session.query(Relationship).filter(column == moving).update(
+                    {column: existing}, synchronize_session=False
+                )
+            session.query(Entity).filter(Entity.id == moving).delete(synchronize_session=False)
+        session.query(Entity).filter(
+            Entity.organization_id == organization_id, Entity.workspace_id == workspace_id
+        ).update({Entity.workspace_id: to_workspace_id}, synchronize_session=False)
+        moved = (
+            session.query(Relationship)
+            .filter(
+                Relationship.organization_id == organization_id,
+                Relationship.workspace_id == workspace_id,
+            )
+            .update({Relationship.workspace_id: to_workspace_id}, synchronize_session=False)
+        )
+        session.flush()
+        return moved
+
+    def delete_workspace(
+        self, session: Session, *, organization_id: UUID, workspace_id: UUID
+    ) -> int:
+        removed = (
+            session.query(Relationship)
+            .filter(
+                Relationship.organization_id == organization_id,
+                Relationship.workspace_id == workspace_id,
+            )
+            .delete(synchronize_session=False)
+        )
+        # Edges from other scopes never point at a workspace's entities: an edge
+        # and both its entities always share one scope.
+        session.query(Entity).filter(
+            Entity.organization_id == organization_id, Entity.workspace_id == workspace_id
+        ).delete(synchronize_session=False)
+        session.flush()
+        return removed
+
     def query(
         self,
         session: Session,

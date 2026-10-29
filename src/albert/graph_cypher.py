@@ -301,6 +301,95 @@ class CypherGraphStore:
         )
         return int(rows[0][0]) if rows else 0
 
+    def move_workspace(
+        self,
+        session: Session,
+        *,
+        organization_id: UUID,
+        workspace_id: UUID,
+        to_workspace_id: UUID | None,
+    ) -> int:
+        org, ws, to = str(organization_id), _ws(workspace_id), _ws(to_workspace_id)
+        pairs = self._run(
+            """
+            MATCH (e:Entity {organization_id: $org, workspace_id: $ws}),
+                  (t:Entity {organization_id: $org, workspace_id: $to})
+            WHERE t.canonical_name = e.canonical_name AND t.entity_type = e.entity_type
+            RETURN e.id, t.id
+            """,
+            org=org,
+            ws=ws,
+            to=to,
+        )
+        # Cypher cannot change an edge's endpoints: each edge of a merged entity is
+        # recreated on the surviving one. Outgoing first, so a self-loop survives.
+        for moving, existing in pairs:
+            self._run(
+                """
+                MATCH (e:Entity {id: $moving})-[r:REL]->(o:Entity), (t:Entity {id: $existing})
+                CREATE (t)-[n:REL]->(o)
+                SET n = properties(r)
+                DELETE r
+                """,
+                moving=moving,
+                existing=existing,
+            )
+            self._run(
+                """
+                MATCH (o:Entity)-[r:REL]->(e:Entity {id: $moving}), (t:Entity {id: $existing})
+                CREATE (o)-[n:REL]->(t)
+                SET n = properties(r)
+                DELETE r
+                """,
+                moving=moving,
+                existing=existing,
+            )
+            self._run("MATCH (e:Entity {id: $moving}) DELETE e", moving=moving)
+        self._run(
+            """
+            MATCH (e:Entity {organization_id: $org, workspace_id: $ws})
+            SET e.workspace_id = $to, e.updated_at = $now
+            """,
+            org=org,
+            ws=ws,
+            to=to,
+            now=time.time(),
+        )
+        rows = self._run(
+            """
+            MATCH (:Entity)-[r:REL]->(:Entity)
+            WHERE r.organization_id = $org AND r.workspace_id = $ws
+            SET r.workspace_id = $to, r.updated_at = $now
+            RETURN count(r)
+            """,
+            org=org,
+            ws=ws,
+            to=to,
+            now=time.time(),
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def delete_workspace(
+        self, session: Session, *, organization_id: UUID, workspace_id: UUID
+    ) -> int:
+        org, ws = str(organization_id), _ws(workspace_id)
+        rows = self._run(
+            """
+            MATCH (:Entity)-[r:REL]->(:Entity)
+            WHERE r.organization_id = $org AND r.workspace_id = $ws
+            DELETE r
+            RETURN count(r)
+            """,
+            org=org,
+            ws=ws,
+        )
+        self._run(
+            "MATCH (e:Entity {organization_id: $org, workspace_id: $ws}) DETACH DELETE e",
+            org=org,
+            ws=ws,
+        )
+        return int(rows[0][0]) if rows else 0
+
     def query(
         self,
         session: Session,

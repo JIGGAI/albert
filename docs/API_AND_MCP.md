@@ -234,7 +234,7 @@ Routes under `/v1/settings` need `keys.manage`, which `console.read` never
 implies. A credential is never issued wider than its issuer: a
 workspace-scoped manager sees, issues and revokes only its own workspace's
 credentials, cannot grant
-`memory.write.organization`, and cannot create or rename workspaces. Neither
+`memory.write.organization`, and cannot create, rename or delete workspaces. Neither
 `admin` nor `keys.manage` can be granted.
 
 - `GET /v1/settings/credentials`: keys and connection links, each with its
@@ -245,10 +245,29 @@ credentials, cannot grant
   expires_in_seconds, workspace_id?}`: omit `workspace_id` to issue into the
   manager's own scope; a redeemed link's key keeps the link's workspace
 - `DELETE /v1/settings/api-keys/{id}`, `DELETE /v1/settings/connection-links/{id}`
-- `GET /v1/settings/workspaces`: workspaces with active-memory counts,
+- `GET /v1/settings/workspaces`: workspaces with active-memory counts, the
+  `credentials` (active keys and unused links) deleting each would revoke,
   `shared_memories`, and `can_manage`
 - `POST /v1/settings/workspaces` `{name}` and `PATCH /v1/settings/workspaces/{id}`
   `{name}`: organization-wide managers only; a duplicate name is a 409
+- `DELETE /v1/settings/workspaces/{id}?memories=organization|workspace|delete&to={id}`:
+  organization-wide managers only. `memories` is required and says what happens
+  to everything the workspace holds:
+  - `organization`: memories, episodes and their graph become organization-wide,
+    shared by every workspace.
+  - `workspace`: they move into the workspace named by `to`. An entity that
+    already exists there absorbs the moving one's edges, and an identical
+    episode from the same owner is merged into the one already there.
+  - `delete`: they are forgotten as `DELETE /v1/memories/{id}` would (scrubbed,
+    rows kept for audit identity) and the workspace's graph is removed. This
+    also needs `memory.delete`.
+
+  In every case the workspace's API keys and connection links are deleted and
+  its principals deactivated (kept, so audit events still name them), and its
+  working memory and locks follow the memories or are removed with them. Traces
+  and audit events keep the old workspace id as history. The response counts
+  what was moved or removed; one `workspace.delete` audit event records the
+  choice.
 
 ## Portability
 

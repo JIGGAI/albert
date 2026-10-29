@@ -406,6 +406,57 @@ def test_workspace_reads_include_the_shared_organization_wide_graph(store, sessi
     assert {"Shared Hub", "Own Hub"} <= names and "Sibling Hub" not in names
 
 
+def _scopes(store, session, org):  # type: ignore[no-untyped-def]
+    exported = store.export_relationships(
+        session, organization_id=org, workspace_id=None, sensitivities=ALL
+    )
+    return {r.workspace_id for r in exported}
+
+
+def test_moving_a_workspace_merges_entities_already_in_the_target(store, session) -> None:  # type: ignore[no-untyped-def]
+    """Moved edges keep their endpoints; a name already in the target keeps one node."""
+    org, ws, to = uuid4(), uuid4(), uuid4()
+    _add(store, session, org, ws, _edge("Mover Api", "uses", "Mover Db"))
+    _add(store, session, org, ws, _edge("Mover Api", "uses", "Mover Api"))
+    _add(store, session, org, to, _edge("Mover Portal", "calls", "Mover Api"))
+
+    moved = store.move_workspace(session, organization_id=org, workspace_id=ws, to_workspace_id=to)
+    assert moved == 2
+    edges = _query(store, session, org, "mover", workspace_id=to)
+    assert {(r.source_name, r.relation_type, r.target_name) for r in edges} == {
+        ("Mover Api", "uses", "Mover Db"),
+        ("Mover Api", "uses", "Mover Api"),
+        ("Mover Portal", "calls", "Mover Api"),
+    }
+    assert _scopes(store, session, org) == {to}
+    entities, _edges, _truncated = store.snapshot(
+        session, organization_id=org, workspace_id=to, when=datetime.now(UTC), limit=50
+    )
+    assert sorted(e.name for e in entities) == ["Mover Api", "Mover Db", "Mover Portal"]
+    assert _query(store, session, org, "mover", workspace_id=ws) == []
+
+    # Into the organization-wide scope as well.
+    _add(store, session, org, to, _edge("Mover Db", "stores", "Mover Disk"))
+    store.move_workspace(session, organization_id=org, workspace_id=to, to_workspace_id=None)
+    assert _scopes(store, session, org) == {None}
+
+
+def test_deleting_a_workspace_removes_only_its_graph(store, session) -> None:  # type: ignore[no-untyped-def]
+    org, ws, kept = uuid4(), uuid4(), uuid4()
+    _add(store, session, org, ws, _edge("Doomed Hub", "uses", "Doomed Store"))
+    _add(store, session, org, ws, _edge("Doomed Store", "uses", "Doomed Disk"))
+    _add(store, session, org, kept, _edge("Doomed Hub", "uses", "Kept Store"))
+    _add(store, session, org, None, _edge("Shared Doomed", "uses", "Shared Kept"))
+
+    assert store.delete_workspace(session, organization_id=org, workspace_id=ws) == 2
+    left = {(r.source_name, r.target_name) for r in _query(store, session, org, "doomed kept")}
+    assert left == {("Doomed Hub", "Kept Store"), ("Shared Doomed", "Shared Kept")}
+    entities, _edges, _truncated = store.snapshot(
+        session, organization_id=org, workspace_id=None, when=datetime.now(UTC), limit=50
+    )
+    assert "Doomed Disk" not in {e.name for e in entities}
+
+
 @pytest.mark.anyio
 async def test_the_api_works_end_to_end_on_falkordb(client, identity) -> None:  # type: ignore[no-untyped-def]
     """Indexing, graph query, hybrid search, traversal and forgetting through FalkorDB."""

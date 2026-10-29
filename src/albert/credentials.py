@@ -22,7 +22,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +40,7 @@ from albert.security import (
     require_capability,
 )
 from albert.services import audit
+from albert.workspaces import MemoryOutcome, credential_counts, delete_workspace
 
 settings_router = APIRouter(prefix="/v1/settings", tags=["settings"])
 onboard_router = APIRouter(prefix="/onboard", tags=["onboarding"])
@@ -372,11 +373,14 @@ def revoke_link(
         session.commit()
 
 
-def _workspace_row(workspace: Workspace, memories: dict[UUID, int]) -> dict:
+def _workspace_row(
+    workspace: Workspace, memories: dict[UUID, int], credentials: dict[UUID, int] | None = None
+) -> dict:
     return {
         "id": str(workspace.id),
         "name": workspace.name,
         "memories": memories.get(workspace.id, 0),
+        "credentials": (credentials or {}).get(workspace.id, 0),
         "created_at": _iso(workspace.created_at),
     }
 
@@ -407,9 +411,10 @@ def list_workspaces(
     if _workspace_bound(auth):
         statement = statement.where(Workspace.id == auth.workspace_id)
     counts = _memory_counts(session, auth.organization_id)
+    credentials = credential_counts(session, auth.organization_id)
     return {
         "items": [
-            _workspace_row(workspace, counts)  # type: ignore[arg-type]
+            _workspace_row(workspace, counts, credentials)  # type: ignore[arg-type]
             for workspace in session.scalars(statement.order_by(Workspace.name))
         ],
         "shared_memories": counts.get(None, 0),
@@ -474,7 +479,39 @@ def rename_workspace(
     )
     session.commit()
     session.refresh(workspace)
-    return _workspace_row(workspace, _memory_counts(session, auth.organization_id))  # type: ignore[arg-type]
+    return _workspace_row(
+        workspace,
+        _memory_counts(session, auth.organization_id),  # type: ignore[arg-type]
+        credential_counts(session, auth.organization_id),
+    )
+
+
+@settings_router.delete("/workspaces/{workspace_id}")
+def remove_workspace(
+    workspace_id: UUID,
+    memories: MemoryOutcome = Query(
+        description="What happens to its memories: organization (shared), workspace (moved "
+        "to `to`) or delete (forgotten; needs memory.delete)"
+    ),
+    to: UUID | None = Query(default=None, description="The workspace memories move to"),
+    auth: AuthContext = Depends(_manager),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Delete a workspace, first sharing, moving or forgetting its memories.
+
+    Its API keys and connection links stop working; its principals are kept,
+    deactivated, so the audit trail still names them.
+    """
+    _organization_manager(auth)
+    workspace = _workspace(session, auth, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    target = None
+    if to is not None:
+        target = _workspace(session, auth, to)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Target workspace not found")
+    return delete_workspace(session, auth, workspace, memories, target)
 
 
 def _open_link(session: Session, token: str) -> ConnectionLink:
