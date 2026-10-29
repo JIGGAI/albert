@@ -71,9 +71,11 @@ each result, and a memory map: every memory as a node, linked to the ones it
 resembles, follows or is recalled with, gathered into named clusters, pulsing
 as agents recall and store. Selecting a memory opens it in full. An Operations
 page reports who is using memory, what it holds, how well retrieval is working
-and how the service itself is doing. It sees the console key's own
-organization; give the key `admin` instead if one console should see every
-tenant on the instance.
+and how the service itself is doing. It sees what its key can see: give the
+console principal no workspace to see the whole organization, a workspace to
+limit it to that workspace and the organization-wide memories it shares, or
+give the key `admin` if one console should see every tenant on the instance.
+The side menu always says which.
 
 Issue it a key on a dedicated service principal, then start it:
 
@@ -87,8 +89,12 @@ docker compose exec api albert-admin create-key \
 docker compose up -d console
 ```
 
-`keys.manage` powers the console's **Settings** page, which issues and revokes
-agent credentials two ways:
+`keys.manage` powers the console's **Settings** page. It creates, renames and
+deletes workspaces (deleting asks whether the workspace's memories become
+organization-wide, move to another workspace, or are deleted too; the last
+needs `memory.delete` on the console key), and issues and revokes agent
+credentials two ways, each held to a workspace you pick or to the whole
+organization:
 
 - **One-time connection link.** Pick capabilities and an expiry; the link is
   shown once and mints one key, capped at those capabilities, the first time an
@@ -97,9 +103,11 @@ agent credentials two ways:
 - **Least-privilege API key.** Pick capabilities; the key is shown once.
 
 Every issued credential gets its own principal so it can be audited and revoked
-alone. Neither path can grant `admin` or `keys.manage`. Leave `keys.manage` off
-the console key to keep the console read-only; Settings then explains how to
-enable it.
+alone. Neither path can grant `admin` or `keys.manage`, and nothing is issued
+wider than the console's own key: a workspace-scoped console issues only into
+its workspace, cannot grant `memory.write.organization`, and cannot create
+workspaces. Leave `keys.manage` off the console key to keep the console
+read-only; Settings then explains how to enable it.
 
 Links and redeemed connections advertise `ALBERT_PUBLIC_BASE_URL` (REST, and
 the host the link points at) and `ALBERT_PUBLIC_MCP_URL`. Set both to the
@@ -145,6 +153,23 @@ subjects or content. `ALBERT_TRACE_SAMPLE_RATE` (default `1.0`) is the dial
 for busy installs; error and degraded traces are always kept.
 `ALBERT_TRACE_RETENTION_DAYS` (default `14`) bounds the table; the worker's
 housekeeping pass prunes older traces about once a minute.
+
+## Upgrading within 0.4
+
+Migrations `0006`–`0013` run with the usual `migrate` step; none needs a manual
+backfill. Behaviour to know about:
+
+- Workspace-scoped keys now also read the organization-wide memories (those
+  with no workspace), which every workspace shares. To keep something private
+  to one workspace, store it there. Writing or changing shared memories from a
+  workspace key needs `memory.write.organization`.
+- A `console.read` key now sees only its own organization (and workspace).
+  Give a console key `admin` if it must see every tenant.
+- Migration `0013` records each trace's workspace and backfills request traces
+  from their principal; older job traces stay organization-wide.
+- The console now answers only to the host names in
+  `ALBERT_CONSOLE_ALLOWED_HOSTS` (loopback by default). If you open it under a
+  DNS name, add that name to `.env` before upgrading, or it answers `421`.
 
 ## Upgrading to 0.4
 
@@ -269,7 +294,7 @@ rollback digest, and post-deploy readiness checks.
 git pull --ff-only
 docker compose build
 docker compose run --rm migrate
-docker compose up -d api worker mcp
+docker compose up -d api worker mcp console
 curl --fail http://127.0.0.1:8080/v1/health/ready
 ```
 
@@ -279,9 +304,13 @@ separate environment periodically.
 ## Identity administration
 
 Use `albert-admin create-workspace`, `create-principal`, `list-principals`,
-`create-key`, `list-keys`, and `revoke-key` inside the API container. Prefer
-workspace-scoped principals for ordinary agents and organization-scoped
-principals only for administration, cross-workspace retrieval, and imports.
+`create-key`, `list-keys`, and `revoke-key` inside the API container, or the
+console's Settings page for workspaces and per-agent credentials. Prefer
+workspace-scoped principals for ordinary agents: they read their workspace and
+the shared organization-wide memories. Keep organization-scoped principals for
+administration, cross-workspace retrieval and imports, and grant
+`memory.write.organization` only to the agents that should publish knowledge
+every workspace sees.
 
 ## Backups and restores
 

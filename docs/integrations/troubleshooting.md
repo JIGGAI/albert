@@ -44,6 +44,8 @@ deployed API.
 
 - `401`: the Albert key is absent, malformed, expired, or revoked.
 - `403`: the principal lacks a required capability or requested sensitivity.
+  Changing or deleting an organization-wide (shared) memory from a
+  workspace-scoped key also needs `memory.write.organization`.
 - `404` on a known id can intentionally hide a resource outside the caller's
   organization, workspace, or sensitivity access.
 

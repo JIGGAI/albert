@@ -12,6 +12,9 @@ Its MCP server should be configured under the name `albert`.
 - Do not store full source files, routine command output, transient status, or
   facts that are easier to read from the source system.
 - Use the narrowest available `project_ref` and `task_ref`.
+- Store in this workspace by default. Mark a memory `shared=True` only when
+  every workspace in the organization should see it, and only if this key has
+  `memory.write.organization`.
 - Store only verified facts. Label uncertainty in the memory content and use an
   appropriate confidence value through REST when needed.
 - Never persist lease tokens or API credentials in memory or task progress.
