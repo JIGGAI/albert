@@ -10,6 +10,10 @@ A connection link is redeemed by an agent with no credential at all, so the
 digest is stored, redemption is a single conditional UPDATE so a link can be
 used once even under concurrent redeems, and an issued key can never carry more
 than the link granted.
+
+An issued credential is never scoped wider than its issuer: a workspace-scoped
+manager sees, issues and revokes only its own workspace's credentials, cannot
+grant memory.write.organization, and cannot create or rename workspaces.
 """
 
 from __future__ import annotations
@@ -20,12 +24,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.db import get_session
-from albert.models import APIKey, ConnectionLink, Principal
+from albert.models import APIKey, ConnectionLink, Memory, Principal, Workspace
 from albert.security import (
     GRANTABLE_CAPABILITIES,
     AuthContext,
@@ -67,6 +72,8 @@ def _validated_capabilities(value: list[str]) -> list[str]:
 class KeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     capabilities: list[str] = Field(max_length=32)
+    # None: the issuer's own scope (organization-wide for an organization-wide issuer).
+    workspace_id: UUID | None = None
 
     _capabilities = field_validator("capabilities")(_validated_capabilities)
 
@@ -77,14 +84,81 @@ class LinkCreate(BaseModel):
     expires_in_seconds: int = Field(
         default=LINK_TTL_DEFAULT_SECONDS, ge=LINK_TTL_MIN_SECONDS, le=LINK_TTL_MAX_SECONDS
     )
+    workspace_id: UUID | None = None
 
     _capabilities = field_validator("capabilities")(_validated_capabilities)
+
+
+class WorkspaceWrite(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Name a workspace")
+        return value
 
 
 class Redeem(BaseModel):
     agent_name: str = Field(min_length=1, max_length=200)
     # Omitted means everything the link grants.
     capabilities: list[str] | None = Field(default=None, max_length=32)
+
+
+def _workspace_bound(auth: AuthContext) -> bool:
+    """A workspace-scoped key manages only its workspace; admin is never bound."""
+    return auth.workspace_id is not None and "admin" not in auth.capabilities
+
+
+def _manages(auth: AuthContext, organization_id: UUID | None, workspace_id: UUID | None) -> bool:
+    """Whether a credential in this scope is one the manager may see and revoke."""
+    if organization_id != auth.organization_id:
+        return False
+    return not _workspace_bound(auth) or workspace_id == auth.workspace_id
+
+
+def _issue_scope(
+    session: Session, auth: AuthContext, workspace_id: UUID | None, capabilities: list[str]
+) -> UUID | None:
+    """The workspace an issued credential is held to; never wider than the issuer's."""
+    if _workspace_bound(auth):
+        if workspace_id not in (None, auth.workspace_id):
+            raise HTTPException(
+                status_code=403, detail="A workspace-scoped key issues only into its workspace"
+            )
+        if "memory.write.organization" in capabilities:
+            raise HTTPException(
+                status_code=403,
+                detail="A workspace-scoped key cannot grant memory.write.organization",
+            )
+        return auth.workspace_id
+    if workspace_id is not None and _workspace(session, auth, workspace_id) is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return workspace_id
+
+
+def _workspace(session: Session, auth: AuthContext, workspace_id: UUID) -> Workspace | None:
+    workspace = session.get(Workspace, workspace_id)
+    if workspace is None or workspace.organization_id != auth.organization_id:
+        return None
+    return workspace
+
+
+def _workspace_names(session: Session, organization_id: UUID) -> dict[UUID, str]:
+    return dict(
+        session.execute(
+            select(Workspace.id, Workspace.name).where(Workspace.organization_id == organization_id)
+        ).all()
+    )
+
+
+def _scope_fields(workspace_id: UUID | None, names: dict[UUID, str]) -> dict:
+    return {
+        "workspace_id": str(workspace_id) if workspace_id else None,
+        "workspace_name": names.get(workspace_id) if workspace_id else None,
+    }
 
 
 def _mint_key(
@@ -117,8 +191,9 @@ def _mint_key(
     return key, raw
 
 
-def _key_row(key: APIKey, auth: AuthContext) -> dict:
+def _key_row(key: APIKey, auth: AuthContext, names: dict[UUID, str]) -> dict:
     return {
+        **_scope_fields(key.principal.workspace_id, names),
         "id": str(key.id),
         "name": key.name,
         "principal_name": key.principal.name,
@@ -142,8 +217,9 @@ def _link_state(link: ConnectionLink, now: datetime) -> str:
     return "open"
 
 
-def _link_row(link: ConnectionLink, now: datetime) -> dict:
+def _link_row(link: ConnectionLink, now: datetime, names: dict[UUID, str]) -> dict:
     return {
+        **_scope_fields(link.workspace_id, names),
         "id": str(link.id),
         "name": link.name,
         "capabilities": sorted(link.capabilities or []),
@@ -160,21 +236,32 @@ def list_credentials(
     auth: AuthContext = Depends(_manager), session: Session = Depends(get_session)
 ) -> dict:
     now = datetime.now(UTC)
+    names = _workspace_names(session, auth.organization_id)
+    key_scope = [Principal.organization_id == auth.organization_id]
+    link_scope = [ConnectionLink.organization_id == auth.organization_id]
+    if _workspace_bound(auth):
+        key_scope.append(Principal.workspace_id == auth.workspace_id)
+        link_scope.append(ConnectionLink.workspace_id == auth.workspace_id)
     keys = session.scalars(
         select(APIKey)
         .join(Principal, APIKey.principal_id == Principal.id)
-        .where(Principal.organization_id == auth.organization_id)
+        .where(*key_scope)
         .order_by(APIKey.created_at.desc())
     )
     links = session.scalars(
-        select(ConnectionLink)
-        .where(ConnectionLink.organization_id == auth.organization_id)
-        .order_by(ConnectionLink.created_at.desc())
+        select(ConnectionLink).where(*link_scope).order_by(ConnectionLink.created_at.desc())
     )
+    grantable = [
+        capability
+        for capability in GRANTABLE_CAPABILITIES
+        if not (capability == "memory.write.organization" and _workspace_bound(auth))
+    ]
     return {
-        "grantable_capabilities": GRANTABLE_CAPABILITIES,
-        "api_keys": [_key_row(key, auth) for key in keys],
-        "connection_links": [_link_row(link, now) for link in links],
+        "grantable_capabilities": grantable,
+        # The scope this console issues into: its own workspace, or the organization.
+        **_scope_fields(auth.workspace_id if _workspace_bound(auth) else None, names),
+        "api_keys": [_key_row(key, auth, names) for key in keys],
+        "connection_links": [_link_row(link, now, names) for link in links],
         "rest_url": get_settings().public_base_url,
         "mcp_url": get_settings().public_mcp_url,
     }
@@ -186,10 +273,11 @@ def create_key(
     auth: AuthContext = Depends(_manager),
     session: Session = Depends(get_session),
 ) -> dict:
+    workspace_id = _issue_scope(session, auth, payload.workspace_id, payload.capabilities)
     key, raw = _mint_key(
         session,
         organization_id=auth.organization_id,
-        workspace_id=auth.workspace_id,
+        workspace_id=workspace_id,
         name=payload.name,
         capabilities=payload.capabilities,
     )
@@ -199,11 +287,16 @@ def create_key(
         "api_key.create",
         resource_type="api_key",
         resource_id=str(key.id),
-        detail={"name": payload.name, "capabilities": payload.capabilities},
+        detail={
+            "name": payload.name,
+            "capabilities": payload.capabilities,
+            "workspace_id": str(workspace_id) if workspace_id else None,
+        },
     )
     session.commit()
     session.refresh(key)
-    return {**_key_row(key, auth), "credential": raw}
+    names = _workspace_names(session, auth.organization_id)
+    return {**_key_row(key, auth, names), "credential": raw}
 
 
 @settings_router.delete("/api-keys/{key_id}", status_code=204)
@@ -211,7 +304,7 @@ def revoke_key(
     key_id: UUID, auth: AuthContext = Depends(_manager), session: Session = Depends(get_session)
 ) -> None:
     key = session.get(APIKey, key_id)
-    if key is None or key.principal.organization_id != auth.organization_id:
+    if key is None or not _manages(auth, key.principal.organization_id, key.principal.workspace_id):
         raise HTTPException(status_code=404, detail="API key not found")
     if key.principal_id == auth.principal_id:
         # Revoking the key that is making the request would lock the console out.
@@ -227,11 +320,12 @@ def create_link(
     auth: AuthContext = Depends(_manager),
     session: Session = Depends(get_session),
 ) -> dict:
+    workspace_id = _issue_scope(session, auth, payload.workspace_id, payload.capabilities)
     token = secrets.token_urlsafe(32)
     now = datetime.now(UTC)
     link = ConnectionLink(
         organization_id=auth.organization_id,
-        workspace_id=auth.workspace_id,
+        workspace_id=workspace_id,
         created_by_principal_id=auth.principal_id,
         token_hash=_hash_link_token(token),
         name=payload.name,
@@ -246,12 +340,17 @@ def create_link(
         "connection_link.create",
         resource_type="connection_link",
         resource_id=str(link.id),
-        detail={"name": payload.name, "capabilities": payload.capabilities},
+        detail={
+            "name": payload.name,
+            "capabilities": payload.capabilities,
+            "workspace_id": str(workspace_id) if workspace_id else None,
+        },
     )
     session.commit()
     session.refresh(link)
     base = get_settings().public_base_url.rstrip("/")
-    return {**_link_row(link, now), "url": f"{base}/onboard/{token}"}
+    names = _workspace_names(session, auth.organization_id)
+    return {**_link_row(link, now, names), "url": f"{base}/onboard/{token}"}
 
 
 @settings_router.delete("/connection-links/{link_id}", status_code=204)
@@ -259,7 +358,7 @@ def revoke_link(
     link_id: UUID, auth: AuthContext = Depends(_manager), session: Session = Depends(get_session)
 ) -> None:
     link = session.get(ConnectionLink, link_id)
-    if link is None or link.organization_id != auth.organization_id:
+    if link is None or not _manages(auth, link.organization_id, link.workspace_id):
         raise HTTPException(status_code=404, detail="Connection link not found")
     if link.revoked_at is None and link.used_at is None:
         link.revoked_at = datetime.now(UTC)
@@ -271,6 +370,111 @@ def revoke_link(
             resource_id=str(link.id),
         )
         session.commit()
+
+
+def _workspace_row(workspace: Workspace, memories: dict[UUID, int]) -> dict:
+    return {
+        "id": str(workspace.id),
+        "name": workspace.name,
+        "memories": memories.get(workspace.id, 0),
+        "created_at": _iso(workspace.created_at),
+    }
+
+
+def _organization_manager(auth: AuthContext) -> None:
+    if _workspace_bound(auth):
+        raise HTTPException(
+            status_code=403, detail="Only an organization-wide key can manage workspaces"
+        )
+
+
+def _memory_counts(session: Session, organization_id: UUID) -> dict[UUID | None, int]:
+    return dict(
+        session.execute(
+            select(Memory.workspace_id, func.count(Memory.id))
+            .where(Memory.organization_id == organization_id, Memory.status == "active")
+            .group_by(Memory.workspace_id)
+        ).all()
+    )
+
+
+@settings_router.get("/workspaces")
+def list_workspaces(
+    auth: AuthContext = Depends(_manager), session: Session = Depends(get_session)
+) -> dict:
+    """The workspaces this key can issue into, with the shared memories they all read."""
+    statement = select(Workspace).where(Workspace.organization_id == auth.organization_id)
+    if _workspace_bound(auth):
+        statement = statement.where(Workspace.id == auth.workspace_id)
+    counts = _memory_counts(session, auth.organization_id)
+    return {
+        "items": [
+            _workspace_row(workspace, counts)  # type: ignore[arg-type]
+            for workspace in session.scalars(statement.order_by(Workspace.name))
+        ],
+        "shared_memories": counts.get(None, 0),
+        "can_manage": not _workspace_bound(auth),
+    }
+
+
+def _save_workspace(session: Session, workspace: Workspace) -> None:
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=409, detail="A workspace with that name already exists"
+        ) from exc
+
+
+@settings_router.post("/workspaces", status_code=201)
+def create_workspace(
+    payload: WorkspaceWrite,
+    auth: AuthContext = Depends(_manager),
+    session: Session = Depends(get_session),
+) -> dict:
+    _organization_manager(auth)
+    workspace = Workspace(organization_id=auth.organization_id, name=payload.name)
+    session.add(workspace)
+    _save_workspace(session, workspace)
+    audit(
+        session,
+        auth,
+        "workspace.create",
+        resource_type="workspace",
+        resource_id=str(workspace.id),
+        detail={"name": payload.name},
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_row(workspace, {})
+
+
+@settings_router.patch("/workspaces/{workspace_id}")
+def rename_workspace(
+    workspace_id: UUID,
+    payload: WorkspaceWrite,
+    auth: AuthContext = Depends(_manager),
+    session: Session = Depends(get_session),
+) -> dict:
+    _organization_manager(auth)
+    workspace = _workspace(session, auth, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    previous = workspace.name
+    workspace.name = payload.name
+    _save_workspace(session, workspace)
+    audit(
+        session,
+        auth,
+        "workspace.rename",
+        resource_type="workspace",
+        resource_id=str(workspace.id),
+        detail={"from": previous, "to": payload.name},
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_row(workspace, _memory_counts(session, auth.organization_id))  # type: ignore[arg-type]
 
 
 def _open_link(session: Session, token: str) -> ConnectionLink:

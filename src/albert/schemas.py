@@ -34,7 +34,24 @@ class ScopeFields(BaseModel):
     run_ref: str | None = Field(default=None, max_length=300)
 
 
-class EpisodeCreate(ScopeFields):
+class SharedWrite(BaseModel):
+    """`scope: "organization"` stores a record every workspace in the organization shares.
+
+    Without it a write lands in the requested workspace, else the key's own; a
+    workspace-scoped key needs memory.write.organization to share.
+    """
+
+    workspace_id: UUID | None = None
+    scope: Literal["organization"] | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self):  # type: ignore[no-untyped-def]
+        if self.scope == "organization" and self.workspace_id is not None:
+            raise ValueError('Choose either workspace_id or scope="organization", not both')
+        return self
+
+
+class EpisodeCreate(SharedWrite, ScopeFields):
     content: str = Field(min_length=1, max_length=2_000_000)
     source_type: str = Field(default="explicit", max_length=64)
     source_uri: str = Field(default="", max_length=1000)
@@ -255,7 +272,7 @@ class CaptureCheckpointRead(BaseModel):
     derived_memory_id: UUID | None = None
 
 
-class MemoryCreate(ScopeFields):
+class MemoryCreate(SharedWrite, ScopeFields):
     subject: str = Field(default="", max_length=500)
     content: str = Field(min_length=1, max_length=200_000)
     memory_type: str = Field(default="fact", max_length=64)
@@ -356,8 +373,7 @@ class EntityInput(BaseModel):
     confidence: float = Field(default=1.0, ge=0, le=1)
 
 
-class RelationshipCreate(BaseModel):
-    workspace_id: UUID | None = None
+class RelationshipCreate(SharedWrite):
     source: EntityInput
     relation_type: str = Field(min_length=1, max_length=100)
     target: EntityInput

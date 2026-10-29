@@ -74,6 +74,10 @@ class GraphStore(Protocol):
     transaction: it must make each write idempotent (the worker retries failed
     jobs) and must enforce `organization_id`, `workspace_id`, sensitivity and
     validity filters itself.
+
+    On reads (query, subgraph, export_relationships, snapshot) a `workspace_id`
+    covers that workspace plus the organization-wide edges and entities every
+    workspace shares, and None covers the whole organization (see albert.scope).
     """
 
     name: str

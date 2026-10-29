@@ -52,6 +52,7 @@ from albert.schemas import (
     WorkingMemoryRead,
     WorkingMemoryUpdate,
 )
+from albert.scope import covers
 from albert.search import hybrid_search
 from albert.security import AuthContext, authenticate
 from albert.services import (
@@ -436,14 +437,12 @@ def get_subgraph(
     auth.require("graph.query")
     graph = get_graph_store()
     entity = graph.get_entity(session, entity_id=entity_id, organization_id=auth.organization_id)
-    if entity is None or (
-        auth.workspace_id is not None and entity.workspace_id != auth.workspace_id
-    ):
+    if entity is None or not covers(auth.workspace_id, entity.workspace_id):
         raise HTTPException(status_code=404, detail="Entity not found")
     return graph.subgraph(
         session,
         organization_id=auth.organization_id,
-        workspace_id=entity.workspace_id,
+        workspace_id=auth.workspace_id,
         entity_id=entity.id,
         hops=query.hops,
         temporal_as_of=query.temporal_as_of,

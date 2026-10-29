@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from albert.config import get_settings
 from albert.console import _iso, _operator, _opt, tenant, tenant_workspace
-from albert.console_map import clean_title
+from albert.console_map import clean_title, shared_scope
 from albert.db import get_session
 from albert.graph_store import get_graph_store
 from albert.links import COUNTED_TRACE_NAMES
@@ -33,6 +33,7 @@ from albert.models import (
     Trace,
     Workspace,
 )
+from albert.scope import in_workspace
 from albert.security import AuthContext
 from albert.services import audit
 from albert.trace_writer import get_trace_writer
@@ -199,15 +200,18 @@ def agent_activity(
 def memory_health(
     organization_id: UUID,
     workspace_id: UUID | None = None,
+    shared_only: bool = False,
     auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """What a tenant's memory holds and where it needs attention."""
     tenant(auth, organization_id)
     workspace_id = tenant_workspace(auth, workspace_id)
-    scope = [Memory.organization_id == organization_id, Memory.status == "active"]
-    if workspace_id is not None:
-        scope.append(Memory.workspace_id == workspace_id)
+    scope = [
+        Memory.organization_id == organization_id,
+        Memory.status == "active",
+        shared_scope(workspace_id, shared_only),
+    ]
 
     def grouped(column: Any) -> list[dict[str, Any]]:
         rows = session.execute(
@@ -226,7 +230,11 @@ def memory_health(
     )
     by_workspace = sorted(
         (
-            {"id": _opt(ws), "name": workspace_names.get(ws, "no workspace"), "count": int(count)}
+            {
+                "id": _opt(ws),
+                "name": workspace_names.get(ws, "Organization-wide (shared)"),
+                "count": int(count),
+            }
             for ws, count in session.execute(
                 select(Memory.workspace_id, func.count(Memory.id))
                 .where(*scope)
@@ -287,8 +295,11 @@ def memory_health(
         MemoryLink.kind == "similar",
         MemoryLink.weight >= NEAR_DUPLICATE,
     ]
-    if workspace_id is not None:
-        link_scope.append(MemoryLink.workspace_id == workspace_id)
+    link_scope.append(
+        MemoryLink.workspace_id.is_(None)
+        if shared_only
+        else in_workspace(MemoryLink.workspace_id, workspace_id)
+    )
     pairs = session.execute(
         select(MemoryLink.source_memory_id, MemoryLink.target_memory_id, MemoryLink.weight)
         .where(*link_scope)
@@ -327,7 +338,7 @@ def memory_health(
         "console.ops.memory.read",
         resource_type="organization",
         resource_id=str(organization_id),
-        detail={"console": True, "workspace_id": _opt(workspace_id)},
+        detail={"console": True, "workspace_id": _opt(workspace_id), "shared_only": shared_only},
     )
     session.commit()
     return {

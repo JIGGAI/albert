@@ -106,7 +106,7 @@ async def test_workspace_scoped_console_key_stays_in_its_workspace() -> None:
         sibling_id = str(sibling.id)
     own = await _remember(key, "Own workspace plan", workspace_id=str(workspace.id))
     hidden = await _remember(key, "Sibling workspace payroll", workspace_id=sibling_id)
-    unscoped = await _remember(key, "Organization-wide memory")
+    shared = await _remember(key, "Organization-wide memory")
     # Albert Cloud's console key has this shape: console.read on a workspace principal.
     console_key = create_principal_key(organization, workspace, "Control Plane", ["console.read"])
     org = {"organization_id": str(organization.id)}
@@ -114,16 +114,17 @@ async def test_workspace_scoped_console_key_stays_in_its_workspace() -> None:
     async with _client(console_key) as console:
         assert (await console.get(f"/v1/console/memories/{own}")).status_code == 200
         assert (await console.get(f"/v1/console/memories/{hidden}")).status_code == 404
-        assert (await console.get(f"/v1/console/memories/{unscoped}")).status_code == 404
+        # Organization-wide memories are shared with every workspace.
+        assert (await console.get(f"/v1/console/memories/{shared}")).status_code == 200
         sibling_map = await console.get(
             "/v1/console/map", params={**org, "workspace_id": sibling_id}
         )
         assert sibling_map.status_code == 404
         nodes = (await console.get("/v1/console/map", params=org)).json()["nodes"]
-        assert {node["id"] for node in nodes} == {own}
+        assert {node["id"] for node in nodes} == {own, shared}
         workspaces = (await console.get("/v1/console/workspaces", params=org)).json()
         assert [row["id"] for row in workspaces["items"]] == [str(workspace.id)]
-        assert workspaces["unscoped_memories"] == 0
+        assert workspaces["unscoped_memories"] == 1
 
 
 async def test_admin_console_key_still_crosses_tenants() -> None:

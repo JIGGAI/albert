@@ -11,6 +11,27 @@ Authorization: Bearer alb_<prefix>_<secret>
 Keys are independently revocable and capability-scoped. The server stores a
 peppered HMAC digest, never the plaintext key.
 
+## Organizations, workspaces and shared memories
+
+An **organization** is a tenant: nothing is ever read or written across one.
+A **workspace** partitions an organization. Every key belongs to a principal
+that is either organization-wide or scoped to one workspace.
+
+A record with no workspace is **organization-wide**: it is shared by every
+workspace in the organization.
+
+| Key | Reads | Writes by default | Writes organization-wide |
+| --- | --- | --- | --- |
+| organization-wide | every workspace and the shared records; `workspace_id` narrows a read to that workspace plus the shared records | organization-wide, or the `workspace_id` it names | yes |
+| workspace-scoped | its workspace plus the shared records | its workspace | only with `memory.write.organization`, by sending `"scope": "organization"` |
+
+The same rule covers memories, episodes, graph entities and relationships,
+search, context assembly and export. Changing or deleting a shared record from
+a workspace-scoped key also needs `memory.write.organization`; without it the
+key can read shared records but not alter them. `POST /v1/memories`,
+`POST /v1/episodes` and `POST /v1/relationships` accept
+`"scope": "organization"`; sending it together with `workspace_id` is a 422.
+
 ## REST example
 
 ```bash
@@ -95,13 +116,15 @@ the same for the episode and every memory derived from it. Both need
 
 Operator endpoints under `/v1/console`, gated by `console.read` (implied by
 `admin`). A `console.read` key sees only its own organization, and only its own
-workspace when its principal is workspace-scoped; a request naming another
-organization or workspace gets 404. Traces and job statistics are recorded per
+workspace plus the shared organization-wide memories when its principal is
+workspace-scoped; a request naming another organization or workspace gets 404. Traces and job statistics are recorded per
 organization, so a workspace-scoped key sees its whole organization's traffic
 (ids, timings and search queries, never memory content). Only an `admin` key
 crosses tenants. `console.read` can be issued from Settings and by connection
 links, which is why it never reaches further than the key that issued it.
 
+- `GET /v1/console/scope`: what this key can see: `admin`, `organization`
+  `{id, name}`, `workspace` (`{id, name}` or null) and `capabilities`
 - `GET /v1/console/traces` with filters `kind`, `status`, `organization_id`,
   `principal_id`, `name`, `since`, `until`, `q`, keyset `cursor`, `limit`
 - `GET /v1/console/traces/{id}` including `spans`
@@ -112,8 +135,9 @@ links, which is why it never reaches further than the key that issued it.
 - `GET /v1/console/overview`: traces per minute, job counts, writer drops
 - `GET /v1/console/workspaces?organization_id=…`: a tenant's workspaces with
   active-memory counts
-- `GET /v1/console/map?organization_id=…&workspace_id=…&limit=…`: the memory
-  map. `nodes` (id, title, type, team, role, sensitivity, recalls,
+- `GET /v1/console/map?organization_id=…&workspace_id=…&shared_only=…&limit=…`:
+  the memory map. A workspace's map includes the shared memories;
+  `shared_only=true` draws just those. `nodes` (id, title, type, team, role, sensitivity, recalls,
   last_recalled_at, created_at, cluster), `links` (source, target, kind,
   weight), `clusters` (id, label, size) and `truncated`. Newest memories first;
   default `ALBERT_MAP_NODE_LIMIT`, maximum 3,000. One audit event per load.
@@ -151,8 +175,9 @@ cap was hit.
 - `GET /v1/console/ops/agents?organization_id=…&hours=…`: per principal,
   searches, searches that found nothing, average hits, stores, failures and
   last seen; plus recalls and stores per hour (per day past 48 hours)
-- `GET /v1/console/ops/memory?organization_id=…&workspace_id=…`: totals by
-  type, sensitivity and workspace; never recalled, unlinked, unindexed and
+- `GET /v1/console/ops/memory?organization_id=…&workspace_id=…&shared_only=…`:
+  totals by type, sensitivity and workspace (shared memories are listed as
+  "Organization-wide (shared)"); never recalled, unlinked, unindexed and
   near-duplicate counts; memories added per day; most recalled and
   near-duplicate pairs with titles (audited)
 - `GET /v1/console/ops/retrieval?organization_id=…&hours=…`: zero-hit and
@@ -191,11 +216,36 @@ per-backend reciprocal-rank contribution.
 
 ## Capabilities
 
-`memory.read`, `memory.write`, `memory.delete`, `memory.export`,
-`memory.import`, `graph.query`, `graph.write`, `working_memory.read`,
-`working_memory.write`, `locks.acquire`, `console.read`, `memory.confidential`,
-`memory.restricted`, and `admin`. Reading working memory needs
-`working_memory.read` or `working_memory.write`.
+`memory.read`, `memory.write`, `memory.write.organization`, `memory.delete`,
+`memory.export`, `memory.import`, `graph.query`, `graph.write`,
+`working_memory.read`, `working_memory.write`, `locks.acquire`,
+`capture.write`, `capture.system`, `console.read`, `keys.manage`,
+`memory.confidential`, `memory.restricted`, and `admin`. Reading working memory
+needs `working_memory.read` or `working_memory.write`.
+`memory.write.organization` matters only on a workspace-scoped key: it lets the
+key write, change and delete the shared organization-wide records.
+
+## Credentials and workspaces
+
+Routes under `/v1/settings` need `keys.manage`, which `console.read` never
+implies. A credential is never issued wider than its issuer: a
+workspace-scoped manager sees, issues and revokes only its own workspace's
+credentials, cannot grant
+`memory.write.organization`, and cannot create or rename workspaces. Neither
+`admin` nor `keys.manage` can be granted.
+
+- `GET /v1/settings/credentials`: keys and connection links, each with its
+  `workspace_id` and `workspace_name` (null for organization-wide), the
+  `grantable_capabilities`, and the scope this key issues into
+- `POST /v1/settings/api-keys` `{name, capabilities, workspace_id?}` and
+  `POST /v1/settings/connection-links` `{name, capabilities,
+  expires_in_seconds, workspace_id?}`: omit `workspace_id` to issue into the
+  manager's own scope; a redeemed link's key keeps the link's workspace
+- `DELETE /v1/settings/api-keys/{id}`, `DELETE /v1/settings/connection-links/{id}`
+- `GET /v1/settings/workspaces`: workspaces with active-memory counts,
+  `shared_memories`, and `can_manage`
+- `POST /v1/settings/workspaces` `{name}` and `PATCH /v1/settings/workspaces/{id}`
+  `{name}`: organization-wide managers only; a duplicate name is a 409
 
 ## Portability
 
@@ -229,8 +279,9 @@ albert-mcp --transport stdio
 
 Tools include:
 
-- `memory_remember`
-- `memory_ingest` (`wait_seconds` returns once the episode is searchable)
+- `memory_remember` (`shared=True` stores it organization-wide)
+- `memory_ingest` (`wait_seconds` returns once the episode is searchable;
+  `shared=True` as above)
 - `memory_get`
 - `memory_update`
 - `memory_get_episode` (includes `indexing`; also takes `wait_seconds`)
@@ -240,7 +291,7 @@ Tools include:
 - `memory_forget`
 - `memory_query_graph`
 - `memory_get_subgraph`
-- `memory_add_relationship`
+- `memory_add_relationship` (`shared=True` as above)
 - `working_memory_start`
 - `working_memory_update`
 - `working_memory_get`
