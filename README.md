@@ -17,9 +17,11 @@ search returned what it did.
 - **Nothing is a black box.** Every request and every background job is
   recorded step by step. Replay any search and see which backend found each
   hit and what it scored.
-- **Yours.** PostgreSQL holds everything. Multi-tenant, capability-scoped API
-  keys, sensitivity levels enforced on every path, audit trail, export and
-  import. No vendor in the loop unless you choose a hosted model.
+- **Yours.** PostgreSQL holds everything. Multi-tenant, with workspaces that
+  each keep their own memories and share the organization-wide ones;
+  capability-scoped API keys, sensitivity levels enforced on every path, audit
+  trail, export and import. No vendor in the loop unless you choose a hosted
+  model.
 
 ---
 
@@ -59,9 +61,12 @@ flowchart LR
 ### 1. Store
 
 An agent calls `memory_remember` (a fact it wants kept) or `memory_ingest` (a
-whole document or transcript, kept as an *episode*). Albert checks the key's
-capabilities, refuses anything that looks like a credential, writes the record
-and queues it for indexing. The call returns immediately.
+whole document or transcript, kept as an *episode*), or a client records a
+whole working session through [automatic capture](docs/API_AND_MCP.md#automatic-capture).
+Albert checks the key's capabilities, refuses anything that looks like a
+credential, writes the record into the key's workspace (or, when asked and
+allowed, organization-wide for every workspace to share) and queues it for
+indexing. The call returns immediately.
 
 ### 2. Index
 
@@ -78,8 +83,8 @@ The worker picks the job up and runs five steps:
 ### 3. Recall
 
 An agent calls `memory_search` or `memory_assemble_context`. After `auth` and
-`resolve_scope` (which tenant, which workspace, which sensitivities this key may
-see), three backends run:
+`resolve_scope` (which tenant, which workspace plus the organization-wide
+memories it shares, which sensitivities this key may see), three backends run:
 
 | Backend | Finds memories by | Good at |
 |---|---|---|
@@ -116,7 +121,7 @@ flowchart TB
     end
     MCP["MCP gateway :8081<br/>22 tools, forwards the caller's key"]
     API["REST API :8080<br/>FastAPI · auth · scopes · audit"]
-    CON["Console :8082<br/>Next.js · read-only"]
+    CON["Console :8082<br/>Next.js · operator UI"]
     W["Worker<br/>indexing jobs · housekeeping"]
     REC["Flight recorder<br/>spans for every request and job"]
     subgraph PG["PostgreSQL + pgvector"]
@@ -162,11 +167,15 @@ src/albert/
   console*.py         operator API: traces, map, operations, backends
   worker.py           job worker and housekeeping
   security.py         API keys, capabilities, sensitivity
+  scope.py            which workspaces a read covers (its own plus the shared ones)
+  credentials.py      Settings API: scoped keys, connection links, workspaces
+  capture*.py         automatic capture: sessions, events, profiles, screening, retention
+  provenance.py       where captured work came from, normalized before storage
   portability.py      export and import
   admin.py            albert-admin command line
 console/              the operator console (Next.js)
-migrations/           Alembic migrations 0001-0005
-tests/                166 tests, including one contract run against every graph store
+migrations/           Alembic migrations 0001-0013
+tests/                pytest suite, including one contract run against every graph store
 docs/                 guides (see below)
 ```
 
@@ -174,7 +183,10 @@ docs/                 guides (see below)
 
 ## The console
 
-Five screens, all read-only, all fed by the flight recorder.
+Six screens. Five are read-only views fed by the flight recorder; Settings
+issues credentials and manages workspaces. The side menu shows what the
+console's key can see, and every view can be narrowed to one workspace (plus
+the organization-wide memories it shares) or to the shared memories alone.
 
 **Live** streams every request and job as it happens. **Replay** opens any one
 of them as a waterfall of its steps, with the candidates each backend returned
@@ -192,6 +204,10 @@ service healthy.
 
 **Backends** shows which graph store and graph builder are in use, proves the
 store is reachable, and gives the exact steps to switch.
+
+**Settings** creates, renames and deletes workspaces and issues least-privilege API keys
+and one-time connection links, each held to a workspace or the whole
+organization and never wider than the console's own key.
 
 ![Backends: stores and builders with live status and how to turn each on](docs/images/console-backends.png)
 

@@ -69,6 +69,22 @@ curl --fail-with-body -sS -X POST \
   "$ALBERT_API_URL/v1/search"
 ```
 
+Publish a memory every workspace in the organization shares (a
+workspace-scoped key needs `memory.write.organization`; omit `scope` to store
+it in the key's own workspace):
+
+```bash
+curl --fail-with-body -sS -X POST \
+  -H "Authorization: Bearer $ALBERT_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "subject": "Glossary: Albatross",
+    "content": "Albatross is the internal name of the billing service.",
+    "scope": "organization"
+  }' \
+  "$ALBERT_API_URL/v1/memories"
+```
+
 Build a bounded context block with citations:
 
 ```bash

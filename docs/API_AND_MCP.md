@@ -115,6 +115,62 @@ removes Graphiti's own copy: the episode, the facts it created, entities only
 it mentioned, and the summaries of entities it shared with other episodes.
 The job retries until Graphiti's store is reachable.
 
+## Automatic capture
+
+`/v1/capture` lets an agent client record a working session as it happens,
+instead of deciding memory by memory what to keep. Each accepted event becomes
+an episode and is indexed like any other. Every route needs `capture.write`;
+the `system` and `instruction` event classes also need `capture.system`. The
+contract is versioned: every body carries `"version": "1"`, and any other
+version is refused with 426.
+
+| Route | Does |
+|---|---|
+| `POST /v1/capture/sessions` | Start a session: `client_session_id`, `idempotency_key`, optional `workspace_id`, `profile_key` (default `safe-default`), optional `provenance` and a local narrowing of event classes and metadata fields |
+| `POST /v1/capture/sessions/{id}/events` | One event: `sequence`, `idempotency_key`, `event_class`, `content`, optional `sensitivity`, `body_kind` (`summary` or `raw`), `occurred_at`, `metadata`, `provenance` |
+| `POST /v1/capture/sessions/{id}/events/batch` | Up to 100 events, written all or nothing (512,000 serialized characters at most) |
+| `POST /v1/capture/sessions/{id}/checkpoints` | Mark everything through `through_sequence` as consolidated |
+| `POST /v1/capture/sessions/{id}/end` | End the session at `final_sequence` |
+| `POST /v1/capture/profiles` | Publish a new version of a capture profile (`capture.system`) |
+| `GET /v1/capture/profiles/{profile_key}` | The latest version of a profile |
+
+**Ordering and retries.** Events must arrive in order: the next `sequence` is
+always the last stored one plus one, otherwise the answer is 409
+`out_of_order_event` with the `expected_sequence`. Retrying any write with the
+same `idempotency_key` and the same body returns the stored result with 200; the
+same key with a different body is a 409. Sessions belong to the principal that
+started them; another principal gets 404. Once ended, a session accepts no more
+events.
+
+**Profiles decide what is kept.** A profile lists the event classes it accepts,
+which metadata fields each class may keep (everything else is dropped before
+storage), size bounds, a sensitivity floor, how long raw capture is retained
+(`retention_days`), whether `raw` bodies are allowed (`raw_body_policy`,
+default `deny`), what to do with a credential-shaped value (`secret_policy`:
+`reject` the event, or `redact` it), and whether memories derived from expired
+capture are marked deleted or `invalidated` (`derivative_policy`; their text is
+scrubbed either way). Profiles are versioned per
+organization or workspace: each new version must be exactly the previous one
+plus one, and a session uses the latest version on every event. A client may
+narrow a profile for its own session but never widen it. With no profile of
+its own, a session uses `safe-default`: the classes `session_started`,
+`user_goal`, `assistant_outcome`, `selected_tool_outcome`, `decision`,
+`correction`, `vcs_checkpoint`, `pre_compaction_checkpoint`, `session_ended`
+and `failure_summary`, no metadata fields, 64,000-character bounds,
+`internal` floor, 30-day retention, raw bodies denied, secrets rejected.
+
+**Provenance.** A session and its events can carry where they came from
+(client, agent, project, repository remote, branch, ref, commit, task, run).
+Albert normalizes it before storage: the repository remote is kept only as a
+hash of its credential-free form, so the same project matches however it was
+cloned, and a worktree path is cut to its last folder unless an `admin` key
+sends `include_absolute_path`. Searches
+that pass `branch_ref` rank memories from that branch first.
+
+A denied or rejected event is audited with its reason and never stored.
+Capture older than its profile's `retention_days` is scrubbed by the worker's
+housekeeping pass, together with its episode and the memories derived from it.
+
 ## Console API
 
 Operator endpoints under `/v1/console`, gated by `console.read` (implied by

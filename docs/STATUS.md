@@ -11,6 +11,8 @@ Implemented and tested:
 - Versioned FastAPI REST service and generated OpenAPI schema
 - Official MCP Python SDK with stdio, SSE, and streamable HTTP transports
 - Multi-tenant organizations, workspaces, principals, API keys, and capabilities
+- Organization-wide memories shared by every workspace, with
+  `memory.write.organization` guarding who may write or change them
 - Peppered one-way API-key and lock-token storage
 - Canonical episodes and explicit durable memories
 - Asynchronous job worker with retry and stale-job recovery
@@ -36,7 +38,8 @@ Implemented and tested:
 - Audit events without raw memory bodies
 - Credential-pattern screening on every stored surface, including metadata,
   working memory, graph descriptions, and import bundles
-- Scrubbing deletion for memories and episodes, including derived records
+- Scrubbing deletion for memories and episodes, including derived records and
+  Graphiti's own copy (its episode, facts and entity summaries)
 - Per-principal episode idempotency
 - Alembic migration and drift check
 - Docker image and Docker Compose deployment
@@ -61,9 +64,21 @@ Implemented and tested:
 - Derived memory links and recall statistics, rebuildable with
   `albert-admin rebuild-links`
 - Workspace, principal, API-key listing, issuance, and revocation commands
-- 166 unit and integration tests for retrieval, graph behavior, isolation,
-  sensitivity, ingestion, deletion, locks, links, recall statistics, the
-  recorder and the console API; Playwright coverage of every console screen
+- Console Settings: workspaces (create, rename, and delete, sharing, moving or
+  forgetting the memories they held), least-privilege API keys and
+  one-time connection links, each scoped to a workspace or the organization
+  and never wider than the issuing key
+- Console scoped to its key: its own organization, and its own workspace plus
+  the shared memories for a workspace-scoped key; workspace pickers across the
+  map, operations and live views; every trace records its workspace
+- Automatic capture API: versioned sessions, ordered idempotent events and
+  batches, checkpoints, server-side capture profiles with metadata
+  minimization, secret rejection or redaction, normalized provenance, and
+  retention with derivative cleanup
+- Unit and integration tests for retrieval, graph behavior, tenant and
+  workspace isolation, shared memories, sensitivity, ingestion, capture,
+  credentials, deletion, locks, links, recall statistics, the recorder and the
+  console API; Playwright coverage of every console screen
 - Integration handbook covering Codex, Claude Desktop/Code, Cursor, OpenClaw,
   direct REST clients, agent instructions, workflows, handoffs, and diagnostics
 
@@ -102,8 +117,10 @@ a compliance-certified public SaaS platform.
   re-indexed.
 - FalkorDB and Neo4j writes are not transactional with the memory they came
   from.
-- The console has no login of its own; access is controlled by the network it
-  is published on.
+- The console has no login of its own. Its proxy answers only to the allowed
+  host names and refuses cross-origin writes, but anyone who can reach it is an
+  operator; access is controlled by the network it is published on.
+- Job-queue counts in the console are per organization, not per workspace.
 - Neo4j is exercised in CI, not yet in a long-running deployment.
 
 ## Work required before untrusted public SaaS operation

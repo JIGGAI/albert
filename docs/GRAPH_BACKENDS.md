@@ -18,7 +18,8 @@ the baseline every install has; the rest are options on top.
 `GET /v1/health/live` reports the active `graph_store` and `graph_builder`. The
 console's **Backends** page shows every option, which is in use, whether it is
 reachable, how much it holds, how it has been performing, and the steps to
-switch. The console is read-only, so switching is always a settings change.
+switch. The console never changes configuration, so switching is always a
+settings change.
 
 ## Choosing a store
 
@@ -223,7 +224,10 @@ Rules for a store that is not PostgreSQL:
 - It cannot join the request's database transaction. Each write must be
   idempotent, because the worker retries a failed indexing job.
 - It must enforce organization, workspace, sensitivity and validity filters
-  itself on every read. Tenant isolation is the store's responsibility.
+  itself on every read. Tenant isolation is the store's responsibility. On
+  reads, a workspace covers its own edges and entities plus the
+  organization-wide ones (no workspace) that every workspace shares; no
+  workspace covers the whole organization.
 - It returns the store-neutral types (`GraphEntity`, `StoredRelationship`,
   `RelationshipRead`), so REST and MCP contracts do not change.
 - It is registered in `GRAPH_STORES` with `available=True`, added to the

@@ -33,14 +33,22 @@ server is a thin REST client and has no separate database.
 ## Organizations and workspaces
 
 An organization is the hard tenant boundary. A workspace is an optional team,
-client, or project partition inside that organization. Workspace-scoped keys
-are confined automatically; organization-scoped keys can select one workspace
-per request or omit it for cross-workspace operations. Records whose
-`workspace_id` is `null` are organization-wide. Prefer workspace-scoped keys
-for ordinary agents and reserve organization-wide identities for trusted
-administration and portability operations.
-Workspace-filtered retrieval returns only that workspace; organization-wide
-records are returned when an organization-scoped caller omits the workspace.
+client, or project partition inside that organization. Records whose
+`workspace_id` is `null` are organization-wide and shared by every workspace.
+
+- A workspace-scoped key is confined automatically. It reads its own workspace
+  plus the shared organization-wide records, never another workspace, and its
+  writes land in its workspace.
+- To publish something every workspace should see, a workspace-scoped key
+  needs `memory.write.organization` and sends `"scope": "organization"` (MCP:
+  `shared=True`). The same capability is needed to change or delete a shared
+  record.
+- An organization-scoped key can select one workspace per request (that
+  workspace plus the shared records) or omit it to cover every workspace.
+
+Prefer workspace-scoped keys for ordinary agents and reserve
+organization-wide identities for trusted administration and portability
+operations. Keys for each agent can be issued from the console's Settings page.
 
 ## Important deployment boundary
 

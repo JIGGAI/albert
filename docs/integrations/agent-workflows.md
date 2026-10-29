@@ -66,6 +66,10 @@ Choose a stable vocabulary and reuse it:
 - `task_ref`: issue, ticket, or bounded task
 - `run_ref`: one execution or automation run (REST only in the current MCP tool
   signatures)
-- `workspace_id`: hard tenant partition selected by the credential or REST body
+- `workspace_id`: hard tenant partition selected by the credential or REST body;
+  every workspace also reads the organization-wide memories
+- shared (`"scope": "organization"`, MCP `shared=True`): knowledge every
+  workspace should see, such as a glossary or an organization-wide decision.
+  Needs `memory.write.organization` from a workspace-scoped key; use it rarely
 
 Narrow scope improves relevance and reduces accidental cross-project recall.
