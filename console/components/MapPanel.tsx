@@ -16,6 +16,7 @@ import {
   type MapEvent,
   type Pulse,
 } from "@/lib/map";
+import { SHARED, useConsoleScope, workspaceParams } from "@/lib/scope";
 import type {
   MapSearchHit,
   MapSnapshot,
@@ -39,10 +40,15 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  const scope = useConsoleScope();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [organization, setOrganization] = useState<string>(trace?.organization_id ?? "");
+  // On the map page the tenant and workspace live in the address too, so a view can be linked to.
+  const [organization, setOrganization] = useState<string>(
+    trace?.organization_id ?? (trace ? "" : (params.get("tenant") ?? "")),
+  );
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspace, setWorkspace] = useState("");
+  const [shared, setShared] = useState(0);
+  const [workspace, setWorkspace] = useState(trace ? "" : (params.get("workspace") ?? ""));
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,12 +71,25 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
 
   // On the map page the selection lives in the address, so a memory can be linked to.
   const selected = trace ? localSelected : params.get("memory");
+  const address = useCallback(
+    (changes: Record<string, string | null>) => {
+      if (trace) return;
+      const next = new URLSearchParams(window.location.search);
+      for (const [name, value] of Object.entries(changes)) {
+        if (value) next.set(name, value);
+        else next.delete(name);
+      }
+      const query = next.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [trace, router, pathname],
+  );
   const select = useCallback(
     (id: string | null) => {
       if (trace) setLocalSelected(id);
-      else router.replace(id ? `${pathname}?memory=${id}` : pathname, { scroll: false });
+      else address({ memory: id });
     },
-    [trace, router, pathname],
+    [trace, address],
   );
 
   useEffect(() => {
@@ -89,8 +108,10 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
     if (!organization) return;
     let cancelled = false;
     listWorkspaces(organization)
-      .then(({ items }) => {
-        if (!cancelled) setWorkspaces(items);
+      .then(({ items, unscoped_memories }) => {
+        if (cancelled) return;
+        setWorkspaces(items);
+        setShared(unscoped_memories);
       })
       .catch(() => {
         if (!cancelled) setWorkspaces([]);
@@ -103,7 +124,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
   useEffect(() => {
     if (!organization) return;
     let cancelled = false;
-    getMap({ organization_id: organization, workspace_id: workspace || undefined })
+    getMap({ organization_id: organization, ...workspaceParams(workspace) })
       .then((data) => {
         if (cancelled) return;
         setSnapshot(data);
@@ -185,7 +206,14 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
   const recallsNow = liveRecalls.on === snapshot ? liveRecalls.counts : NO_RECALLS;
 
   const visible = useMemo(() => applyFilters(snapshot, filters), [snapshot, filters]);
-  const scale = useMemo(() => colorScale(visible.nodes, colorBy), [visible.nodes, colorBy]);
+  const workspaceNames = useMemo(
+    () => new Map(workspaces.map((w) => [w.id, w.name])),
+    [workspaces],
+  );
+  const scale = useMemo(
+    () => colorScale(visible.nodes, colorBy, workspaceNames),
+    [visible.nodes, colorBy, workspaceNames],
+  );
   const highlight = useMemo(() => (trace ? highlightFromTrace(trace) : null), [trace]);
   const current = organizations.find((o) => o.id === organization);
   const isEmpty = loaded && snapshot.nodes.length === 0;
@@ -206,27 +234,35 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
         setOrganization(memory.organization_id);
         setWorkspace("");
         setFilters(NO_FILTERS);
-      } else if (workspace && memory.workspace_id !== workspace) {
+        address({ tenant: memory.organization_id, workspace: null });
+      } else if (
+        (workspace === SHARED && memory.workspace_id !== null) ||
+        (workspace && workspace !== SHARED && ![null, workspace].includes(memory.workspace_id))
+      ) {
         setWorkspace("");
+        address({ workspace: null });
       }
     },
-    [organization, workspace],
+    [organization, workspace, address],
   );
 
   const changeOrganization = (id: string) => {
     setOrganization(id);
     setWorkspace("");
     setWorkspaces([]);
+    setShared(0);
+    address({ tenant: id, workspace: null, memory: null });
     setFilters(NO_FILTERS);
     setLoaded(false);
     setSnapshot(EMPTY);
     setHits(null);
     setTicker([]);
     setPulseCount(0);
-    select(null);
+    if (trace) setLocalSelected(null);
   };
   const changeWorkspace = (id: string) => {
     setWorkspace(id);
+    address({ workspace: id || null });
     setFilters(NO_FILTERS);
     setHits(null);
     setLoaded(false);
@@ -238,7 +274,9 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
         organizations={organizations}
         organization={organization}
         onOrganization={changeOrganization}
+        scope={scope}
         workspaces={workspaces}
+        shared={shared}
         workspace={workspace}
         onWorkspace={changeWorkspace}
         nodes={snapshot.nodes}
@@ -348,6 +386,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
               pulses={pulses}
               searchHits={searchRanks}
               liveRecalls={recallsNow}
+              workspaceNames={workspaceNames}
               onSelect={select}
             />
             {trace ? null : (
@@ -369,6 +408,7 @@ export function MapPanel({ trace }: { trace?: TraceDetail }) {
             onNavigate={navigate}
             onClose={() => select(null)}
             onLoaded={follow}
+            workspaceNames={workspaceNames}
           />
         ) : null}
       </div>

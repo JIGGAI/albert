@@ -99,6 +99,7 @@ async def test_workspace_console_key_sees_only_its_workspace_traces() -> None:
         assert named.status_code == 404
         agents = (await console.get("/v1/console/ops/agents", params={"hours": 1})).json()
         assert {row["name"] for row in agents["principals"]} <= {"Home agent", "Home console"}
+        assert {row["workspace_id"] for row in agents["principals"]} == {str(home.id)}
 
     org_console = create_principal_key(organization, None, "Org console", ["console.read"])
     async with _client(org_console) as console:

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { searchMap } from "@/lib/api";
+import { traceWorkspace } from "@/lib/scope";
 import type { MapSearchHit } from "@/lib/types";
 
 export function MapSearch({
@@ -31,7 +32,8 @@ export function MapSearch({
     try {
       const result = await searchMap({
         organization_id: organization,
-        workspace_id: workspace || undefined,
+        // "Shared only" is a map view, not a search scope; search the tenant then.
+        workspace_id: traceWorkspace(workspace),
         query: text,
         limit: 20,
       });

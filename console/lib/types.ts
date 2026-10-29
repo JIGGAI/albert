@@ -6,6 +6,8 @@ export interface TraceSummary {
   name: string;
   organization_id: string | null;
   principal_id: string | null;
+  /** The workspace the traced work ran in; null for organization-wide work. */
+  workspace_id: string | null;
   status: TraceStatus;
   http_status: number | null;
   started_at: string;
@@ -87,6 +89,30 @@ export interface Workspace {
   id: string;
   name: string;
   memories: number;
+}
+
+/** What the console's own key can see (GET /v1/console/scope). */
+export interface ConsoleScope {
+  admin: boolean;
+  organization: { id: string; name: string | null };
+  workspace: { id: string; name: string } | null;
+  capabilities: string[];
+}
+
+export interface SettingsWorkspace extends Workspace {
+  created_at: string | null;
+}
+
+export interface SettingsWorkspaces {
+  items: SettingsWorkspace[];
+  shared_memories: number;
+  can_manage: boolean;
+}
+
+/** A credential's workspace; null means organization-wide. */
+export interface ScopeFields {
+  workspace_id: string | null;
+  workspace_name: string | null;
 }
 
 export interface RelatedMemory {
@@ -183,6 +209,7 @@ export interface AgentActivity {
     name: string;
     type: string | null;
     organization_id: string | null;
+    workspace_id: string | null;
     requests: number;
     searches: number;
     stores: number;
@@ -333,7 +360,7 @@ export interface Backends {
   };
 }
 
-export interface ApiKeyRow {
+export interface ApiKeyRow extends ScopeFields {
   id: string;
   name: string;
   principal_name: string;
@@ -346,7 +373,7 @@ export interface ApiKeyRow {
   current: boolean;
 }
 
-export interface ConnectionLinkRow {
+export interface ConnectionLinkRow extends ScopeFields {
   id: string;
   name: string;
   capabilities: string[];
@@ -357,7 +384,7 @@ export interface ConnectionLinkRow {
   api_key_id: string | null;
 }
 
-export interface Credentials {
+export interface Credentials extends ScopeFields {
   grantable_capabilities: string[];
   api_keys: ApiKeyRow[];
   connection_links: ConnectionLinkRow[];

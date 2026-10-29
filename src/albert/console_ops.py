@@ -176,6 +176,7 @@ def agent_activity(
                 "name": principal.name if principal is not None else "removed principal",
                 "type": principal.principal_type if principal is not None else None,
                 "organization_id": _opt(principal.organization_id) if principal else None,
+                "workspace_id": _opt(principal.workspace_id) if principal else None,
                 "requests": entry["requests"],
                 "searches": entry["searches"],
                 "stores": entry["stores"],

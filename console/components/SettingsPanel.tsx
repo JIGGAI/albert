@@ -4,16 +4,22 @@ import { useCallback, useEffect, useState } from "react";
 import {
   createApiKey,
   createConnectionLink,
+  createWorkspace,
   getCredentials,
+  listSettingsWorkspaces,
+  renameWorkspace,
   revokeApiKey,
   revokeConnectionLink,
 } from "@/lib/api";
-import type { Credentials } from "@/lib/types";
+import { SHARED_LABEL } from "@/lib/scope";
+import type { Credentials, ScopeFields, SettingsWorkspaces } from "@/lib/types";
 
 const CAPABILITY_HELP: Record<string, string> = {
   "console.read": "Read-only console view. All Albert Cloud needs.",
   "memory.read": "Search and read memories",
   "memory.write": "Store memories",
+  "memory.write.organization":
+    "Also write and change the organization-wide memories every workspace shares",
   "memory.delete": "Delete memories",
   "memory.export": "Export everything in scope",
   "memory.import": "Import a bundle",
@@ -24,6 +30,8 @@ const CAPABILITY_HELP: Record<string, string> = {
   "working_memory.read": "Read working memory",
   "working_memory.write": "Write working memory",
   "locks.acquire": "Take coordination locks",
+  "capture.write": "Record automatic-capture sessions and events",
+  "capture.system": "Also record privileged system and tool events, and edit capture profiles",
 };
 
 const EXPIRY_OPTIONS = [
@@ -76,6 +84,52 @@ function CapabilityPicker({
   );
 }
 
+/** Where a credential is held: one workspace (plus the shared memories), or the whole organization. */
+function scopeName(row: ScopeFields): string {
+  return row.workspace_name ?? (row.workspace_id ? "workspace" : "Organization-wide");
+}
+
+/**
+ * Which workspace a new credential is held to. An organization-wide console
+ * can issue into any workspace or the whole organization; a workspace-scoped
+ * one only into its own, so there is nothing to pick.
+ */
+function ScopePicker({
+  issuer,
+  workspaces,
+  value,
+  onChange,
+}: {
+  issuer: ScopeFields;
+  workspaces: SettingsWorkspaces | null;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  if (issuer.workspace_id) {
+    return (
+      <p className="field">
+        <span>Scope</span>
+        <strong data-testid="issue-scope">
+          {issuer.workspace_name ?? "This workspace"}, plus the shared memories
+        </strong>
+      </p>
+    );
+  }
+  return (
+    <label className="field">
+      <span>Scope</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Scope">
+        <option value="">Organization-wide: every workspace</option>
+        {(workspaces?.items ?? []).map((w) => (
+          <option key={w.id} value={w.id}>
+            {`${w.name} + shared`}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function Secret({ label, value, note }: { label: string; value: string; note: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -97,8 +151,19 @@ function Secret({ label, value, note }: { label: string; value: string; note: st
   );
 }
 
-function LinkForm({ options, onCreated }: { options: string[]; onCreated: () => void }) {
+function LinkForm({
+  options,
+  issuer,
+  workspaces,
+  onCreated,
+}: {
+  options: string[];
+  issuer: ScopeFields;
+  workspaces: SettingsWorkspaces | null;
+  onCreated: () => void;
+}) {
   const [name, setName] = useState("Albert Cloud");
+  const [workspace, setWorkspace] = useState("");
   const [capabilities, setCapabilities] = useState<string[]>(["console.read"]);
   const [expires, setExpires] = useState(3600);
   const [url, setUrl] = useState<string | null>(null);
@@ -110,7 +175,12 @@ function LinkForm({ options, onCreated }: { options: string[]; onCreated: () => 
     setBusy(true);
     setError(null);
     try {
-      const created = await createConnectionLink({ name, capabilities, expires_in_seconds: expires });
+      const created = await createConnectionLink({
+        name,
+        capabilities,
+        expires_in_seconds: expires,
+        workspace_id: workspace || undefined,
+      });
       setUrl(created.url);
       onCreated();
     } catch (cause) {
@@ -132,6 +202,7 @@ function LinkForm({ options, onCreated }: { options: string[]; onCreated: () => 
           <span>Name</span>
           <input value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
         </label>
+        <ScopePicker issuer={issuer} workspaces={workspaces} value={workspace} onChange={setWorkspace} />
         <CapabilityPicker options={options} value={capabilities} onChange={setCapabilities} />
         <label className="field">
           <span>Expires after</span>
@@ -161,16 +232,21 @@ function LinkForm({ options, onCreated }: { options: string[]; onCreated: () => 
 
 function KeyForm({
   options,
+  issuer,
+  workspaces,
   restUrl,
   mcpUrl,
   onCreated,
 }: {
   options: string[];
+  issuer: ScopeFields;
+  workspaces: SettingsWorkspaces | null;
   restUrl: string;
   mcpUrl: string;
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
+  const [workspace, setWorkspace] = useState("");
   const [capabilities, setCapabilities] = useState<string[]>(["memory.read"]);
   const [key, setKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -181,7 +257,11 @@ function KeyForm({
     setBusy(true);
     setError(null);
     try {
-      const created = await createApiKey({ name, capabilities });
+      const created = await createApiKey({
+        name,
+        capabilities,
+        workspace_id: workspace || undefined,
+      });
       setKey(created.credential);
       onCreated();
     } catch (cause) {
@@ -209,6 +289,7 @@ function KeyForm({
             onChange={(e) => setName(e.target.value)}
           />
         </label>
+        <ScopePicker issuer={issuer} workspaces={workspaces} value={workspace} onChange={setWorkspace} />
         <CapabilityPicker options={options} value={capabilities} onChange={setCapabilities} />
         <button type="submit" disabled={busy || !capabilities.length || !name.trim()}>
           Create key
@@ -238,8 +319,129 @@ function KeyForm({
   );
 }
 
+function WorkspacesCard({
+  data,
+  onChanged,
+}: {
+  data: SettingsWorkspaces;
+  onChanged: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await createWorkspace(name.trim());
+      setName("");
+      onChanged();
+    } catch (cause) {
+      setError(message(cause));
+    }
+  }
+
+  async function rename(event: React.FormEvent) {
+    event.preventDefault();
+    if (!editing) return;
+    setError(null);
+    try {
+      await renameWorkspace(editing.id, editing.name.trim());
+      setEditing(null);
+      onChanged();
+    } catch (cause) {
+      setError(message(cause));
+    }
+  }
+
+  return (
+    <section className="card" aria-labelledby="workspaces-title">
+      <h2 id="workspaces-title">Workspaces</h2>
+      <p className="muted">
+        A workspace keeps one team&apos;s or agent group&apos;s memories apart. Every workspace also
+        reads the organization-wide memories (<b>{data.shared_memories}</b> now); a workspace key
+        changes those only with <code>memory.write.organization</code>.
+      </p>
+      <table className="data" data-testid="workspaces">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th className="right">Memories</th>
+            <th>Created</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {data.items.map((workspace) => (
+            <tr key={workspace.id}>
+              <td>
+                {editing?.id === workspace.id ? (
+                  <form onSubmit={rename} className="inline-form">
+                    <input
+                      aria-label="Workspace name"
+                      value={editing.name}
+                      maxLength={200}
+                      required
+                      onChange={(e) => setEditing({ id: workspace.id, name: e.target.value })}
+                    />
+                    <button type="submit" disabled={!editing.name.trim()}>
+                      Save
+                    </button>
+                    <button type="button" onClick={() => setEditing(null)}>
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  workspace.name
+                )}
+              </td>
+              <td className="right mono">{workspace.memories}</td>
+              <td>{at(workspace.created_at)}</td>
+              <td className="right">
+                {data.can_manage && editing?.id !== workspace.id ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ id: workspace.id, name: workspace.name })}
+                  >
+                    Rename
+                  </button>
+                ) : null}
+              </td>
+            </tr>
+          ))}
+          <tr>
+            <td className="muted">{SHARED_LABEL}</td>
+            <td className="right mono">{data.shared_memories}</td>
+            <td className="muted">read by every workspace</td>
+            <td />
+          </tr>
+        </tbody>
+      </table>
+      {data.can_manage ? (
+        <form onSubmit={create} className="inline-form">
+          <input
+            aria-label="New workspace name"
+            placeholder="New workspace name"
+            value={name}
+            maxLength={200}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button type="submit" disabled={!name.trim()}>
+            Create workspace
+          </button>
+        </form>
+      ) : (
+        <p className="muted">Only an organization-wide key can create or rename workspaces.</p>
+      )}
+      {error ? <p className="search-error" role="alert">{error}</p> : null}
+    </section>
+  );
+}
+
 export function SettingsPanel() {
   const [data, setData] = useState<Credentials | null>(null);
+  const [workspaces, setWorkspaces] = useState<SettingsWorkspaces | null>(null);
   const [error, setError] = useState<{ status?: number; text: string } | null>(null);
 
   const load = useCallback(() => {
@@ -249,6 +451,9 @@ export function SettingsPanel() {
         setError(null);
       })
       .catch((cause) => setError({ status: cause?.status, text: message(cause) }));
+    listSettingsWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces(null));
   }, []);
 
   useEffect(load, [load]);
@@ -270,7 +475,8 @@ export function SettingsPanel() {
       <div className="error-box" role="alert">
         <p>
           The console&apos;s API key can&apos;t manage credentials. Issue it a key with{" "}
-          <code>keys.manage</code> and restart the console:
+          <code>keys.manage</code> and restart the console. Settings issues credentials no wider
+          than the console principal: give it no workspace to manage the whole organization.
         </p>
         <pre className="mono">
           albert-admin create-key --principal-id &lt;console principal id&gt; --name console
@@ -286,9 +492,18 @@ export function SettingsPanel() {
   return (
     <div className="ops settings">
       <div className="grid-2">
-        <LinkForm options={options} onCreated={load} />
-        <KeyForm options={options} restUrl={data.rest_url} mcpUrl={data.mcp_url} onCreated={load} />
+        <LinkForm options={options} issuer={data} workspaces={workspaces} onCreated={load} />
+        <KeyForm
+          options={options}
+          issuer={data}
+          workspaces={workspaces}
+          restUrl={data.rest_url}
+          mcpUrl={data.mcp_url}
+          onCreated={load}
+        />
       </div>
+
+      {workspaces ? <WorkspacesCard data={workspaces} onChanged={load} /> : null}
 
       <section className="card" aria-labelledby="links-title">
         <h2 id="links-title">Connection links</h2>
@@ -297,6 +512,7 @@ export function SettingsPanel() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Scope</th>
                 <th>Capabilities</th>
                 <th>State</th>
                 <th>Expires</th>
@@ -308,6 +524,7 @@ export function SettingsPanel() {
               {data.connection_links.map((link) => (
                 <tr key={link.id}>
                   <td>{link.name}</td>
+                  <td>{scopeName(link)}</td>
                   <td className="mono">{link.capabilities.join(", ")}</td>
                   <td>
                     <span className={`badge ${link.state === "open" ? "on" : ""}`}>{link.state}</span>
@@ -336,6 +553,7 @@ export function SettingsPanel() {
           <thead>
             <tr>
               <th>Name</th>
+              <th>Scope</th>
               <th>Prefix</th>
               <th>Capabilities</th>
               <th>Created</th>
@@ -351,6 +569,7 @@ export function SettingsPanel() {
                   {key.name}
                   {key.current ? <span className="muted"> (this console)</span> : null}
                 </td>
+                <td>{scopeName(key)}</td>
                 <td className="mono">{key.prefix}</td>
                 <td className="mono">{key.capabilities.join(", ")}</td>
                 <td>{at(key.created_at)}</td>

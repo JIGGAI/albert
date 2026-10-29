@@ -95,6 +95,7 @@ export function MapView({
   pulses,
   searchHits,
   liveRecalls,
+  workspaceNames,
   onSelect,
 }: {
   snapshot: MapSnapshot;
@@ -107,6 +108,8 @@ export function MapView({
   searchHits: Map<string, number>;
   /** Recalls seen live since the snapshot loaded, so nodes grow as agents use them. */
   liveRecalls: Map<string, number>;
+  /** Workspace id to name, for coloring and the tooltip; absent ids are organization-wide. */
+  workspaceNames: Map<string, string>;
   onSelect: (id: string | null) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -137,7 +140,10 @@ export function MapView({
     [snapshot],
   );
 
-  const scale = useMemo(() => colorScale(snapshot.nodes, colorBy), [snapshot.nodes, colorBy]);
+  const scale = useMemo(
+    () => colorScale(snapshot.nodes, colorBy, workspaceNames),
+    [snapshot.nodes, colorBy, workspaceNames],
+  );
   const neighbours = useMemo(() => {
     const set = new Set<string>();
     if (!selectedId) return set;
@@ -532,6 +538,11 @@ export function MapView({
           <strong>{hover.node.title}</strong>
           <span>
             {[hover.node.type, hover.node.team, hover.node.role].filter(Boolean).join(" · ")}
+          </span>
+          <span>
+            {hover.node.workspace_id
+              ? (workspaceNames.get(hover.node.workspace_id) ?? "workspace")
+              : "shared with every workspace"}
           </span>
           <span>
             {hover.node.recalls > 0
