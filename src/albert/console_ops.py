@@ -15,11 +15,11 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, true
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.console import _iso, _operator, _opt
+from albert.console import _iso, _operator, _opt, tenant, tenant_workspace
 from albert.console_map import clean_title
 from albert.db import get_session
 from albert.graph_store import get_graph_store
@@ -95,10 +95,11 @@ def _traces(
 def agent_activity(
     organization_id: UUID | None = None,
     hours: int = Hours,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Who is using memory: searches, stores and errors per principal, and over time."""
+    organization_id = tenant(auth, organization_id)
     now = datetime.now(UTC)
     since = now - timedelta(hours=hours)
     rows, truncated = _traces(
@@ -202,6 +203,8 @@ def memory_health(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """What a tenant's memory holds and where it needs attention."""
+    tenant(auth, organization_id)
+    workspace_id = tenant_workspace(auth, workspace_id)
     scope = [Memory.organization_id == organization_id, Memory.status == "active"]
     if workspace_id is not None:
         scope.append(Memory.workspace_id == workspace_id)
@@ -345,10 +348,16 @@ def memory_health(
 @router.get("/service")
 def service_health(
     hours: int = Hours,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    """How the service itself is doing: endpoints, the job queue, the recorder."""
+    """How the service itself is doing: endpoints, the job queue, the recorder.
+
+    A non-admin key sees its own tenant's traffic and jobs; worker liveness and
+    database size describe the instance and are shown to every operator.
+    """
+    own = tenant(auth, None)
+    job_scope = [Job.organization_id == own] if own is not None else []
     now = datetime.now(UTC)
     rows, truncated = _traces(
         session,
@@ -357,7 +366,7 @@ def service_health(
         Trace.status,
         Trace.duration_ms,
         since=now - timedelta(hours=hours),
-        organization_id=None,
+        organization_id=own,
     )
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {"durations": [], "errors": 0, "degraded": 0}
@@ -392,13 +401,15 @@ def service_health(
     by_status = {
         status: int(count)
         for status, count in session.execute(
-            select(Job.status, func.count(Job.id)).group_by(Job.status)
+            select(Job.status, func.count(Job.id)).where(*job_scope).group_by(Job.status)
         )
     }
-    oldest = session.scalar(select(func.min(Job.available_at)).where(Job.status == "pending"))
+    oldest = session.scalar(
+        select(func.min(Job.available_at)).where(Job.status == "pending", *job_scope)
+    )
     failures = session.scalars(
         select(Job)
-        .where(or_(Job.status == "failed", Job.last_error.is_not(None)))
+        .where(or_(Job.status == "failed", Job.last_error.is_not(None)), *job_scope)
         .order_by(Job.updated_at.desc())
         .limit(LIST_LIMIT)
     ).all()
@@ -437,7 +448,14 @@ def service_health(
             ],
         },
         "traces": {
-            "stored": int(session.scalar(select(func.count(Trace.id))) or 0),
+            "stored": int(
+                session.scalar(
+                    select(func.count(Trace.id)).where(
+                        Trace.organization_id == own if own is not None else true()
+                    )
+                )
+                or 0
+            ),
             "dropped": get_trace_writer().dropped,
             "retention_days": settings.trace_retention_days,
             "sample_rate": settings.trace_sample_rate,
@@ -459,10 +477,11 @@ def service_health(
 def retrieval_quality(
     organization_id: UUID | None = None,
     hours: int = Hours,
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Whether searches find things, how fast, and which backend earns the hits."""
+    organization_id = tenant(auth, organization_id)
     since = datetime.now(UTC) - timedelta(hours=hours)
     rows, truncated = _traces(
         session,

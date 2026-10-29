@@ -12,13 +12,14 @@ import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.console import _operator
+from albert.console import _operator, tenant
 from albert.console_ops import _aware, _traces, percentile
 from albert.db import get_session
 from albert.graph_builders import probe_graph_builder
@@ -61,13 +62,20 @@ def _builder_probe(ttl_seconds: int) -> dict[str, Any]:
     return probe
 
 
-def _probe(session: Session) -> tuple[dict[str, Any], dict[str, int] | None]:
-    """Reach the active store once: version, round-trip time and how much it holds."""
+def _probe(
+    session: Session, organization_id: UUID | None
+) -> tuple[dict[str, Any], dict[str, int] | None]:
+    """Reach the active store once: version, round-trip time and how much it holds.
+
+    Counts cover one tenant, or every tenant when organization_id is None.
+    """
     store = get_graph_store()
     started = time.perf_counter()
     try:
         version = store.ping(session)
         totals = store.counts(session, when=datetime.now(UTC))
+        if organization_id is not None:
+            totals = {organization_id: totals.get(organization_id, (0, 0))}
     except Exception as exc:
         # The message can carry a connection string; the type is enough to act on.
         return (
@@ -87,12 +95,18 @@ def _probe(session: Session) -> tuple[dict[str, Any], dict[str, int] | None]:
 @router.get("/backends")
 def backends(
     hours: int = Query(default=24, ge=1, le=24 * 30),
-    _auth: AuthContext = Depends(_operator),
+    auth: AuthContext = Depends(_operator),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     settings = get_settings()
+    own = tenant(auth, None)
+    memory_scope = [Memory.status == "active"]
+    chunk_scope = []
+    if own is not None:
+        memory_scope.append(Memory.organization_id == own)
+        chunk_scope.append(MemoryChunk.organization_id == own)
     active_store = get_graph_store().name
-    status, counts = _probe(session)
+    status, counts = _probe(session, own)
     stores = []
     for identifier, option in GRAPH_STORES.items():
         entry = _option(identifier, option, active=identifier == active_store)
@@ -122,12 +136,10 @@ def backends(
         )
         builders.append(entry)
 
-    total = int(session.scalar(select(func.count(Memory.id)).where(Memory.status == "active")) or 0)
+    total = int(session.scalar(select(func.count(Memory.id)).where(*memory_scope)) or 0)
     embedded = int(
         session.scalar(
-            select(func.count(Memory.id)).where(
-                Memory.status == "active", Memory.embedding_model.is_not(None)
-            )
+            select(func.count(Memory.id)).where(*memory_scope, Memory.embedding_model.is_not(None))
         )
         or 0
     )
@@ -135,7 +147,7 @@ def backends(
         "provider": settings.embedding_provider,
         "model": settings.embedding_model,
         "dimensions": settings.embedding_dimensions,
-        "chunks": int(session.scalar(select(func.count(MemoryChunk.id))) or 0),
+        "chunks": int(session.scalar(select(func.count(MemoryChunk.id)).where(*chunk_scope)) or 0),
         "memories_embedded": embedded,
         "memories_total": total,
     }
@@ -155,7 +167,7 @@ def backends(
         Trace.started_at,
         Trace.spans,
         since=since,
-        organization_id=None,
+        organization_id=own,
         names=INDEXING_JOBS,
         cap=5000,
     )
@@ -183,7 +195,7 @@ def backends(
         session,
         Trace.spans,
         since=since,
-        organization_id=None,
+        organization_id=own,
         names=(*COUNTED_TRACE_NAMES, "POST /v1/graph/query"),
         cap=3000,
     )

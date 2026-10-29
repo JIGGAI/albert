@@ -94,7 +94,13 @@ the same for the episode and every memory derived from it. Both need
 ## Console API
 
 Operator endpoints under `/v1/console`, gated by `console.read` (implied by
-`admin`). They cross tenants on purpose.
+`admin`). A `console.read` key sees only its own organization, and only its own
+workspace when its principal is workspace-scoped; a request naming another
+organization or workspace gets 404. Traces and job statistics are recorded per
+organization, so a workspace-scoped key sees its whole organization's traffic
+(ids, timings and search queries, never memory content). Only an `admin` key
+crosses tenants. `console.read` can be issued from Settings and by connection
+links, which is why it never reaches further than the key that issued it.
 
 - `GET /v1/console/traces` with filters `kind`, `status`, `organization_id`,
   `principal_id`, `name`, `since`, `until`, `q`, keyset `cursor`, `limit`

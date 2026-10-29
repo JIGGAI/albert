@@ -258,11 +258,12 @@ async def test_organizations_requires_console_capability(client: httpx.AsyncClie
     assert (await client.get("/v1/console/organizations")).status_code == 403
 
 
-async def test_graph_snapshot_is_not_served_stale_after_new_data(console_key: str) -> None:
+async def test_graph_snapshot_is_not_served_stale_after_new_data() -> None:
     """A tenant viewed while empty must show its first memory at once, not after the cache TTL."""
     from .conftest import create_identity
 
     key, organization, _workspace = create_identity("Fresh Tenant")
+    console_key = create_principal_key(organization, None, "Console", ["console.read"])
     org = str(organization.id)
     async with _console_client(console_key) as console, _console_client(key) as tenant:
         empty = await console.get("/v1/console/graph", params={"organization_id": org})
