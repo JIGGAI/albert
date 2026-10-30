@@ -109,6 +109,46 @@ async def test_checkpoint_filters_deduplicates_types_and_supersedes(
         assert checkpoint.promotion_status == "complete"
 
 
+async def test_correction_supersedes_matching_claim_not_intervening_memory(
+    client: httpx.AsyncClient,
+) -> None:
+    checkpoint_id = await _capture(
+        client,
+        [
+            ("decision", "Decision: the deployment region is us-east-1."),
+            (
+                "assistant_outcome",
+                "Procedure: first rotate logs, then verify disk usage.",
+            ),
+            ("correction", "Correction: the deployment region is eu-west-1."),
+        ],
+    )
+    drain_jobs()
+
+    with SessionLocal() as session:
+        checkpoint = session.get(CaptureCheckpoint, checkpoint_id)
+        assert checkpoint is not None
+        events = list(
+            session.scalars(
+                select(CaptureEvent)
+                .where(CaptureEvent.session_id == checkpoint.session_id)
+                .order_by(CaptureEvent.sequence)
+            )
+        )
+        original = session.get(Memory, events[0].derived_memory_id)
+        intervening = session.get(Memory, events[1].derived_memory_id)
+        correction = session.get(Memory, events[2].derived_memory_id)
+        assert original is not None
+        assert intervening is not None
+        assert correction is not None
+        assert original.status == "superseded"
+        assert original.valid_until == events[2].occurred_at
+        assert intervening.status == "active"
+        assert intervening.valid_until is None
+        assert correction.metadata_["supersedes_memory_id"] == str(original.id)
+        assert intervening.metadata_.get("superseded_by_memory_id") is None
+
+
 async def test_same_content_isolated_by_tenant() -> None:
     identity_a = create_identity("promotion-a")
     identity_b = create_identity("promotion-b")

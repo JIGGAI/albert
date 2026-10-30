@@ -24,10 +24,20 @@ _CHATTER = re.compile(
 )
 _PROCEDURE = re.compile(r"\b(?:steps?|procedure|runbook|how to|first.+then)\b", re.I | re.S)
 _LESSON = re.compile(r"\b(?:lesson|learned|root cause|failed because|avoid)\b", re.I)
+_CLAIM_PREFIX = re.compile(r"^(?:correction|decision|fact)\s*:\s*", re.I)
+_CLAIM_SUBJECT = re.compile(
+    r"^(.+?)\s+(?:is|are|was|were|should be|must be)\s+\S+", re.I
+)
 
 
 def _normalized(content: str) -> str:
     return " ".join(content.casefold().split())
+
+
+def _claim_subject(content: str) -> str | None:
+    claim = _CLAIM_PREFIX.sub("", content.strip())
+    match = _CLAIM_SUBJECT.match(claim)
+    return _normalized(match.group(1)) if match else None
 
 
 def _memory_type(event: CaptureEvent) -> str:
@@ -119,8 +129,11 @@ def _discard_memory(session: Session, event: CaptureEvent, memory: Memory | None
 def _supersede_previous(session: Session, event: CaptureEvent, memory: Memory) -> None:
     if event.event_class != "correction":
         return
-    previous = session.scalar(
-        select(Memory)
+    subject = _claim_subject(event.content)
+    if subject is None:
+        return
+    candidates = session.execute(
+        select(Memory, CaptureEvent)
         .join(CaptureEvent, CaptureEvent.derived_memory_id == Memory.id)
         .where(
             CaptureEvent.session_id == event.session_id,
@@ -129,7 +142,14 @@ def _supersede_previous(session: Session, event: CaptureEvent, memory: Memory) -
             Memory.id != memory.id,
         )
         .order_by(CaptureEvent.sequence.desc())
-        .limit(1)
+    ).all()
+    previous = next(
+        (
+            candidate_memory
+            for candidate_memory, candidate_event in candidates
+            if _claim_subject(candidate_event.content) == subject
+        ),
+        None,
     )
     if previous is None:
         return
