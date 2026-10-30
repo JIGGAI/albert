@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from albert.capture_promotion import promote_capture_checkpoint
 from albert.capture_retention import expire_capture_events
 from albert.config import get_settings
 from albert.db import SessionLocal
@@ -75,6 +76,8 @@ def process_job(session: Session, job: Job) -> None:
                 )
             elif job.job_type == "enrich_episode":
                 enrich_episode(session, UUID(job.payload["episode_id"]))
+            elif job.job_type == "promote_capture_checkpoint":
+                promote_capture_checkpoint(session, UUID(job.payload["checkpoint_id"]))
             elif job.job_type == "graph_forget":
                 workspace = job.payload.get("workspace_id")
                 get_graph_builder().forget(
@@ -105,6 +108,13 @@ def process_job(session: Session, job: Job) -> None:
                 if episode is not None:
                     episode.enrichment_status = "failed"
                     episode.enrichment_error = job.last_error
+            elif job.job_type == "promote_capture_checkpoint":
+                from albert.models import CaptureCheckpoint
+
+                checkpoint = session.get(CaptureCheckpoint, UUID(job.payload["checkpoint_id"]))
+                if checkpoint is not None:
+                    checkpoint.promotion_status = "failed"
+                    checkpoint.promotion_error = job.last_error
         else:
             job.status = "pending"
             job.available_at = utcnow() + timedelta(seconds=min(300, 2**job.attempts))
