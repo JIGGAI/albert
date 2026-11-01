@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 authors = [{ name = "JIGGAI" }]
 dependencies = [
   "alembic>=1.16,<2",
-  "cryptography>=43,<47",
+  "cryptography>=43,<51",
   "falkordb>=1.7,<2",
   "fastapi>=0.116,<1",
   "graphiti-core==0.30.2",
