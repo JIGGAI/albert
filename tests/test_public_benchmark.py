@@ -50,7 +50,18 @@ def test_runner_emits_machine_and_human_reproducibility_receipts(tmp_path: Path)
     assert receipt["metrics"]["poisoning_safety"] == 1.0
     assert receipt["metrics"]["secret_leakage_safety"] == 1.0
     assert (tmp_path / "receipt.json").is_file()
-    assert "not a matched third-party comparison" in (tmp_path / "receipt.md").read_text()
+    human = (tmp_path / "receipt.md").read_text()
+    assert "not a matched third-party comparison" in human
+    assert f'**Dataset SHA-256:** `{receipt["reproducibility"]["dataset_sha256"]}`' in human
+    assert f'**Code SHA:** `{receipt["reproducibility"]["code_sha"]}`' in human
+    assert '**Provider:** `local`' in human
+    assert '**Model:** `deterministic-token-overlap-v1`' in human
+    assert '**Seed:** `4403`' in human
+    assert '**Started (Unix):**' in human
+    assert '**Duration (ms):**' in human
+    assert '"k": 3' in human
+    assert '"thresholds": {' in human
+    assert "## Failures\n\n- None" in human
 
 
 def test_reproducibility_fingerprint_is_stable(tmp_path: Path) -> None:

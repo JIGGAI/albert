@@ -239,13 +239,26 @@ def run_benchmark(
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     rows = "\n".join(f"| {name} | {value:.6f} |" for name, value in sorted(metrics.items()))
+    config = json.dumps(reproducibility["config"], indent=2, sort_keys=True)
+    timing = receipt["timing"]
     human = f"""# Albert public retrieval and safety benchmark
 
 **Result:** {"PASS" if not failures else "FAIL"}  
 **Comparison:** Internal Albert baseline only; this is not a matched third-party comparison.  
 **Dataset SHA-256:** `{reproducibility["dataset_sha256"]}`  
 **Code SHA:** `{reproducibility["code_sha"]}`  
+**Provider:** `{reproducibility["provider"]}`
+**Model:** `{reproducibility["model"]}`
+**Seed:** `{reproducibility["seed"]}`
+**Started (Unix):** `{timing["started_unix"]:.6f}`
+**Duration (ms):** `{timing["duration_ms"]:.6f}`
 **Deterministic fingerprint:** `{fingerprint}`
+
+## Configuration
+
+```json
+{config}
+```
 
 | Metric | Value |
 |---|---:|
