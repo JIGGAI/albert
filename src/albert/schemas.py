@@ -309,6 +309,12 @@ class MemoryUpdate(BaseModel):
     _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
+class MemorySafetyReview(BaseModel):
+    action: Literal["release", "reject"]
+    corroborating_memory_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
 class MemoryRead(ORMModel):
     id: UUID
     episode_id: UUID | None

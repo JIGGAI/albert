@@ -218,6 +218,15 @@ def _memory_hit(memory: Memory, request: SearchRequest, backend: str, score: flo
     )
 
 
+def _exclude_quarantined_relationships(session: Session, relationships: list[Any]) -> list[Any]:
+    source_ids = {item.source_memory_id for item in relationships if item.source_memory_id}
+    if not source_ids:
+        return relationships
+    memories = session.scalars(select(Memory).where(Memory.id.in_(source_ids)))
+    quarantined = {memory.id for memory in memories if (memory.metadata_ or {}).get("quarantined")}
+    return [item for item in relationships if item.source_memory_id not in quarantined]
+
+
 def hybrid_search(
     session: Session,
     *,
@@ -284,6 +293,7 @@ def hybrid_search(
                     limit=request.limit * 3,
                     sensitivities=allowed_sensitivities,
                 )
+                relationships = _exclude_quarantined_relationships(session, relationships)
                 handle.set(
                     candidates_total=len(relationships),
                     candidates=_candidates(
@@ -353,7 +363,10 @@ def hybrid_search(
                 ):
                     scores[key] += 1.0 / (RRF_K + 1)
                     contributions[key]["branch_preference"] = round(1.0 / (RRF_K + 1), 6)
-        ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
+        ordered = sorted(hits, key=lambda key: scores[key], reverse=True)
+        ordered = [key for key in ordered if not hits[key].metadata.get("quarantined")][
+            : request.limit
+        ]
         result = []
         for key in ordered:
             hit = hits[key]
