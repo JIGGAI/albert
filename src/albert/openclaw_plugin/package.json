@@ -1,0 +1,12 @@
+{
+  "name": "@jiggai/albert-openclaw-adapter",
+  "version": "0.1.0",
+  "description": "Native OpenClaw lifecycle adapter for Albert automatic memory",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "compat": {
+      "pluginApi": ">=2026.9.6 <2027"
+    }
+  }
+}

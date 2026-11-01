@@ -424,6 +424,27 @@ class CaptureClient:
             return DeliveryResult("dropped", f"server_rejected_{response.status_code}")
         return self._queue(f"end:{session_key}:{idempotency_key}", "end", session_key, payload)
 
+    def checkpoint(
+        self, session_key: str, through_sequence: int, idempotency_key: str
+    ) -> DeliveryResult:
+        """Persist an idempotent consolidation checkpoint through the durable queue."""
+        payload = {
+            "version": CONTRACT_VERSION,
+            "through_sequence": through_sequence,
+            "idempotency_key": idempotency_key[:200],
+        }
+        server = self.queue.server_session(session_key)
+        response = (
+            self._request(f"/v1/capture/sessions/{server}/checkpoints", payload) if server else None
+        )
+        if response is not None and response.status_code in {200, 201}:
+            return DeliveryResult("delivered", identifier=str(response.json()["id"]))
+        if response is not None and response.status_code not in TRANSIENT:
+            return DeliveryResult("dropped", f"server_rejected_{response.status_code}")
+        return self._queue(
+            f"checkpoint:{session_key}:{idempotency_key}", "checkpoint", session_key, payload
+        )
+
     def flush(self, limit: int = 100) -> int:
         if not self._flush_lock.acquire(blocking=False):
             return 0
@@ -441,9 +462,17 @@ class CaptureClient:
                 if row["kind"] == "start":
                     path = "/v1/capture/sessions"
                 elif server:
-                    path = f"/v1/capture/sessions/{server}/" + (
-                        "events" if row["kind"] == "event" else "end"
-                    )
+                    suffix = {
+                        "event": "events",
+                        "checkpoint": "checkpoints",
+                        "end": "end",
+                    }.get(row["kind"])
+                    if suffix is None:
+                        self.queue.acknowledge(row["id"])
+                        self.queue.dropped += 1
+                        self._degraded.add("queue_unknown_operation")
+                        continue
+                    path = f"/v1/capture/sessions/{server}/{suffix}"
                 else:
                     self.queue.retry(row["id"], row["attempts"] + 1)
                     continue
