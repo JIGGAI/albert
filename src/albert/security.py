@@ -24,6 +24,7 @@ LAST_USED_WRITE_INTERVAL = timedelta(seconds=60)
 ALL_CAPABILITIES = [
     "memory.read",
     "memory.write",
+    "memory.review",
     # Lets a workspace-scoped key write and change the organization-wide memories
     # every workspace shares. An organization-wide key always can.
     "memory.write.organization",

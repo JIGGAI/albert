@@ -46,6 +46,7 @@ def create_identity(
                 capabilities=[
                     "memory.read",
                     "memory.write",
+                    "memory.review",
                     "memory.delete",
                     "memory.export",
                     "memory.import",

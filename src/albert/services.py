@@ -31,6 +31,11 @@ from albert.graph_builders import (
 )
 from albert.graph_store import StoredRelationship, get_graph_store
 from albert.links import drop_links_for_memory, drop_similar_links, refresh_links_for_memory
+from albert.memory_safety import (
+    apply_memory_safety,
+    preserve_safety_metadata,
+    sanitize_client_metadata,
+)
 from albert.models import (
     AuditEvent,
     Episode,
@@ -51,6 +56,7 @@ from albert.schemas import (
     IndexingStatus,
     LockAcquire,
     MemoryCreate,
+    MemorySafetyReview,
     MemoryUpdate,
     RelationshipCreate,
     WorkingMemoryCreate,
@@ -213,6 +219,9 @@ def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Me
     auth.require("memory.write")
     reject_secrets(data.subject, data.content, data.metadata)
     workspace_id = write_workspace(session, auth, data.workspace_id, data.scope)
+    confidence, metadata = apply_memory_safety(
+        data.content, data.confidence, sanitize_client_metadata(data.metadata)
+    )
     memory = Memory(
         organization_id=auth.organization_id,
         workspace_id=workspace_id,
@@ -224,22 +233,23 @@ def create_memory(session: Session, auth: AuthContext, data: MemoryCreate) -> Me
         content=data.content,
         memory_type=data.memory_type,
         sensitivity=data.sensitivity,
-        confidence=data.confidence,
+        confidence=confidence,
         valid_from=data.valid_from or utcnow(),
         valid_until=data.valid_until,
-        metadata_=data.metadata,
+        metadata_=metadata,
     )
     session.add(memory)
     session.flush()
-    enqueue(
-        session,
-        auth.organization_id,
-        "enrich_memory",
-        {
-            "memory_id": str(memory.id),
-            "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
-        },
-    )
+    if not metadata.get("quarantined"):
+        enqueue(
+            session,
+            auth.organization_id,
+            "enrich_memory",
+            {
+                "memory_id": str(memory.id),
+                "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
+            },
+        )
     audit(session, auth, "memory.created", resource_type="memory", resource_id=str(memory.id))
     session.commit()
     session.refresh(memory)
@@ -279,8 +289,12 @@ def update_memory(
     for name, value in changes.items():
         setattr(memory, name, value)
     if metadata is not None:
-        memory.metadata_ = metadata
+        memory.metadata_ = preserve_safety_metadata(memory.metadata_, metadata)
     text_changed = data.content is not None or data.subject is not None
+    if text_changed or data.confidence is not None or metadata is not None:
+        memory.confidence, memory.metadata_ = apply_memory_safety(
+            memory.content, memory.confidence, memory.metadata_
+        )
     graph = get_graph_store()
     if text_changed:
         revision_at = utcnow()
@@ -298,16 +312,17 @@ def update_memory(
             at=revision_at,
             extracted_only=True,
         )
-        enqueue(
-            session,
-            auth.organization_id,
-            "enrich_memory",
-            {
-                "memory_id": str(memory.id),
-                "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
-                "revision_at": revision_at.isoformat(),
-            },
-        )
+        if not memory.metadata_.get("quarantined"):
+            enqueue(
+                session,
+                auth.organization_id,
+                "enrich_memory",
+                {
+                    "memory_id": str(memory.id),
+                    "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
+                    "revision_at": revision_at.isoformat(),
+                },
+            )
     elif {"sensitivity", "valid_until"}.intersection(changes):
         # The facts are unchanged; their visibility window follows the memory.
         graph.retarget_memory_edges(
@@ -318,6 +333,83 @@ def update_memory(
             valid_until=memory.valid_until,
         )
     audit(session, auth, "memory.updated", resource_type="memory", resource_id=str(memory.id))
+    session.commit()
+    session.refresh(memory)
+    return memory
+
+
+def review_memory_safety(
+    session: Session, auth: AuthContext, memory_id: UUID, data: MemorySafetyReview
+) -> Memory:
+    """Review quarantine state without placing restricted bodies in audit telemetry."""
+    auth.require("memory.review")
+    memory = get_memory(session, auth, memory_id)
+    corroborators: list[Memory] = []
+    if data.corroborating_memory_ids:
+        corroborators = list(
+            session.scalars(
+                select(Memory).where(
+                    Memory.id.in_(data.corroborating_memory_ids),
+                    Memory.organization_id == auth.organization_id,
+                    Memory.workspace_id == memory.workspace_id,
+                    Memory.status == "active",
+                )
+            )
+        )
+        usable = [
+            item
+            for item in corroborators
+            if not (item.metadata_ or {}).get("quarantined")
+            and (item.metadata_ or {}).get("capture_source_trust", "verified")
+            in {"verified", "trusted"}
+        ]
+        if len(usable) != len(set(data.corroborating_memory_ids)):
+            raise HTTPException(status_code=422, detail="Corroboration is not eligible")
+        corroborators = usable
+
+    metadata = dict(memory.metadata_ or {})
+    if data.action == "reject":
+        memory.status = "rejected"
+        metadata["quarantined"] = True
+    else:
+        requested = data.confidence if data.confidence is not None else memory.confidence
+        ceiling = float(metadata.get("confidence_ceiling", 0.8))
+        if requested > ceiling and not corroborators:
+            raise HTTPException(
+                status_code=422,
+                detail="Confidence above the trust ceiling requires corroboration",
+            )
+        memory.confidence = requested
+        metadata.update(
+            {
+                "quarantined": False,
+                "quarantine_reviewed": True,
+                "confidence_corroborated": bool(corroborators),
+                "corroborating_memory_ids": sorted(str(item.id) for item in corroborators),
+            }
+        )
+        if memory.embedding_model is None:
+            enqueue(
+                session,
+                auth.organization_id,
+                "enrich_memory",
+                {
+                    "memory_id": str(memory.id),
+                    "content_fingerprint": _content_fingerprint(memory.subject, memory.content),
+                },
+            )
+    memory.metadata_ = metadata
+    audit(
+        session,
+        auth,
+        f"memory.quarantine_{data.action}",
+        resource_type="memory",
+        resource_id=str(memory.id),
+        detail={
+            "reason_codes": list(metadata.get("quarantine_reason_codes", [])),
+            "corroboration_count": len(corroborators),
+        },
+    )
     session.commit()
     session.refresh(memory)
     return memory

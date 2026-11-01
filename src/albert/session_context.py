@@ -94,7 +94,10 @@ def assemble_session_context(
         trust = str(hit.metadata.get("capture_source_trust", "verified"))
         label = f" [{trust}]" if request.trust_policy == "label_untrusted" else ""
         index = len(sections) + 1
-        section = f"[{index}]{label} {hit.subject}\n{hit.content}".strip()
+        # U+27E6/U+27E7 are the adapter contract: all enclosed recall is
+        # untrusted reference data, never system/workspace policy. Content
+        # containing either sentinel is quarantined before it reaches here.
+        section = f"⟦[{index}]{label} {hit.subject}\n{hit.content}⟧".strip()
         separator = 2 if sections else 0
         section_tokens = count_tokens(section)
         if (
