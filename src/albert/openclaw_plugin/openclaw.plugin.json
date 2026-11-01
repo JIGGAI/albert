@@ -1,0 +1,25 @@
+{
+  "id": "albert-memory",
+  "name": "Albert Memory",
+  "description": "Bounded cited recall and minimized lifecycle capture for OpenClaw.",
+  "categories": ["memory"],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "default": "albert-openclaw-adapter"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "maximum": 5000,
+        "default": 1800
+      }
+    }
+  }
+}

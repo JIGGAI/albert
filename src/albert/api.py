@@ -40,6 +40,7 @@ from albert.schemas import (
     LockRenew,
     MemoryCreate,
     MemoryRead,
+    MemorySafetyReview,
     MemoryUpdate,
     RelationshipCreate,
     RelationshipRead,
@@ -74,6 +75,7 @@ from albert.services import (
     release_lock,
     renew_lock,
     resolve_workspace,
+    review_memory_safety,
     update_memory,
     update_working_memory,
     wait_for_indexing,
@@ -289,6 +291,20 @@ def patch_memory(
     session: Session = Depends(get_session),
 ):  # type: ignore[no-untyped-def]
     return update_memory(session, auth, memory_id, data)
+
+
+@app.post(
+    "/v1/memories/{memory_id}/quarantine/review",
+    response_model=MemoryRead,
+    tags=["memories"],
+)
+def review_memory_quarantine(
+    memory_id: UUID,
+    data: MemorySafetyReview,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+):  # type: ignore[no-untyped-def]
+    return review_memory_safety(session, auth, memory_id, data)
 
 
 @app.delete("/v1/memories/{memory_id}", status_code=204, tags=["memories"])

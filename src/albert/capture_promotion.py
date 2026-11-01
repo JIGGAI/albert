@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from albert.memory_safety import apply_memory_safety
 from albert.models import AuditEvent, CaptureCheckpoint, CaptureEvent, Episode, Memory, utcnow
 from albert.recorder import current_recorder
 
@@ -160,8 +161,15 @@ def _supersede_previous(session: Session, event: CaptureEvent, memory: Memory) -
         **(previous.metadata_ or {}),
         "superseded_by_memory_id": str(memory.id),
         "superseded_at": event.occurred_at.isoformat(),
+        "contradiction_flagged": True,
+        "contradiction_memory_ids": [str(memory.id)],
     }
-    memory.metadata_ = {**(memory.metadata_ or {}), "supersedes_memory_id": str(previous.id)}
+    memory.metadata_ = {
+        **(memory.metadata_ or {}),
+        "supersedes_memory_id": str(previous.id),
+        "contradiction_flagged": True,
+        "contradiction_memory_ids": [str(previous.id)],
+    }
 
 
 def promote_capture_checkpoint(session: Session, checkpoint_id: UUID) -> None:
@@ -230,6 +238,12 @@ def promote_capture_checkpoint(session: Session, checkpoint_id: UUID) -> None:
             **(memory.metadata_ or {}),
             **_promotion_metadata(checkpoint, event, fingerprint),
         }
+        memory.confidence, memory.metadata_ = apply_memory_safety(
+            memory.content,
+            memory.confidence,
+            memory.metadata_,
+            default_trust=event.source_trust,
+        )
         episode = session.get(Episode, event.episode_id) if event.episode_id else None
         if episode is not None:
             episode.extra = {**episode.extra, "capture_promotion_decision": "promote"}
