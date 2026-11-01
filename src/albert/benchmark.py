@@ -243,10 +243,10 @@ def run_benchmark(
     timing = receipt["timing"]
     human = f"""# Albert public retrieval and safety benchmark
 
-**Result:** {"PASS" if not failures else "FAIL"}  
-**Comparison:** Internal Albert baseline only; this is not a matched third-party comparison.  
-**Dataset SHA-256:** `{reproducibility["dataset_sha256"]}`  
-**Code SHA:** `{reproducibility["code_sha"]}`  
+**Result:** {"PASS" if not failures else "FAIL"}\\
+**Comparison:** Internal Albert baseline only; this is not a matched third-party comparison.\\
+**Dataset SHA-256:** `{reproducibility["dataset_sha256"]}`\\
+**Code SHA:** `{reproducibility["code_sha"]}`\\
 **Provider:** `{reproducibility["provider"]}`
 **Model:** `{reproducibility["model"]}`
 **Seed:** `{reproducibility["seed"]}`
