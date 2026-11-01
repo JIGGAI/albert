@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from albert.models import CaptureCheckpoint, CaptureEvent, Episode, Memory, utcnow
@@ -15,7 +15,10 @@ def _expire_event(session: Session, event: CaptureEvent, now: datetime) -> None:
 
     memories = list(
         session.scalars(
-            select(Memory).where(Memory.episode_id == event.episode_id, Memory.status != "deleted")
+            select(Memory).where(
+                or_(Memory.episode_id == event.episode_id, Memory.id == event.derived_memory_id),
+                Memory.status != "deleted",
+            )
         )
     )
     for memory in memories:

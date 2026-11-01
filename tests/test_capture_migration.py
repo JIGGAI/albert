@@ -54,6 +54,9 @@ def test_capture_migration_upgrade_rollback_and_reapply(tmp_path: Path) -> None:
     event_columns = _columns(database, "capture_events")
     assert {"secret_policy", "derivative_policy"} <= profile_columns
     assert {"screening_decision", "screening_reasons", "derivative_policy"} <= event_columns
+    assert {"promotion_status", "promotion_error", "promotion_job_id"} <= _columns(
+        database, "capture_checkpoints"
+    )
 
     provenance_columns = {"provenance", "project_identity", "source_commit", "branch_ref"}
     assert provenance_columns <= _columns(database, "capture_sessions")
@@ -69,6 +72,9 @@ def test_capture_migration_upgrade_rollback_and_reapply(tmp_path: Path) -> None:
     assert {"secret_policy", "derivative_policy"} <= _columns(database, "capture_profiles")
     assert {"screening_decision", "screening_reasons", "derivative_policy"} <= _columns(
         database, "capture_events"
+    )
+    assert {"promotion_status", "promotion_error", "promotion_job_id"} <= _columns(
+        database, "capture_checkpoints"
     )
 
     _alembic(project_root, database, "downgrade", "0008")

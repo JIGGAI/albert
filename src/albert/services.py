@@ -1107,6 +1107,11 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
     episode = session.get(Episode, episode_id)
     if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
         return
+    if episode.extra.get("capture_promotion_decision") == "discard":
+        episode.enrichment_status = "complete"
+        episode.enrichment_error = None
+        session.commit()
+        return
     set_workspace(episode.workspace_id)
     subject = episode.content.strip().splitlines()[0][:500]
     request = BuildRequest(

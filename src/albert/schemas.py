@@ -270,6 +270,8 @@ class CaptureCheckpointRead(BaseModel):
     through_sequence: int
     episode_id: UUID
     derived_memory_id: UUID | None = None
+    promotion_status: str
+    promotion_error: str | None = None
 
 
 class MemoryCreate(SharedWrite, ScopeFields):

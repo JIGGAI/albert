@@ -304,6 +304,11 @@ class CaptureCheckpoint(Base, TimestampMixin):
     derived_memory_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("memories.id", ondelete="SET NULL"), index=True
     )
+    promotion_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    promotion_error: Mapped[str | None] = mapped_column(Text)
+    promotion_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

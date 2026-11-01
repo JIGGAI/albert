@@ -382,6 +382,8 @@ def _checkpoint_read(value: CaptureCheckpoint) -> CaptureCheckpointRead:
         through_sequence=value.through_sequence,
         episode_id=value.episode_id,
         derived_memory_id=value.derived_memory_id,
+        promotion_status=value.promotion_status,
+        promotion_error=value.promotion_error,
     )
 
 
@@ -909,6 +911,15 @@ def write_checkpoint(
     )
     session.add(checkpoint)
     try:
+        session.flush()
+        job = enqueue(
+            session,
+            auth.organization_id,
+            "promote_capture_checkpoint",
+            {"checkpoint_id": str(checkpoint.id)},
+        )
+        session.flush()
+        checkpoint.promotion_job_id = job.id
         audit(
             session,
             auth,
@@ -930,6 +941,27 @@ def write_checkpoint(
             response.status_code = status.HTTP_200_OK
             return _checkpoint_read(concurrent)
         raise HTTPException(status_code=409, detail="Checkpoint was concurrently written") from exc
+    return _checkpoint_read(checkpoint)
+
+
+@router.get("/checkpoints/{checkpoint_id}", response_model=CaptureCheckpointRead)
+def get_checkpoint(
+    checkpoint_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> CaptureCheckpointRead:
+    auth.require("capture.write")
+    checkpoint = session.scalar(
+        select(CaptureCheckpoint).where(
+            CaptureCheckpoint.id == checkpoint_id,
+            CaptureCheckpoint.organization_id == auth.organization_id,
+            CaptureCheckpoint.owner_principal_id == auth.principal_id,
+            CaptureCheckpoint.workspace_id == auth.workspace_id,
+            CaptureCheckpoint.deleted_at.is_(None),
+        )
+    )
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="Capture checkpoint not found")
     return _checkpoint_read(checkpoint)
 
 
