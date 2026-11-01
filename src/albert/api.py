@@ -432,6 +432,13 @@ def session_start_context(
         allowed_sensitivities=allowed_sensitivities,
     )
     response = assemble_session_context(result, data)
+    _note(
+        capture_stage="injection",
+        injection_characters=response.characters,
+        injection_tokens=response.tokens,
+        injection_citations=len(response.citations),
+        injection_truncated=response.truncated,
+    )
     audit(
         session,
         auth,

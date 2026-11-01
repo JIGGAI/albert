@@ -18,6 +18,8 @@ from albert.db import SessionLocal
 from albert.graph_builders import get_graph_builder
 from albert.links import process_recall_traces
 from albert.models import (
+    AuditEvent,
+    CaptureCheckpoint,
     Episode,
     Job,
     MemoryRecall,
@@ -109,12 +111,26 @@ def process_job(session: Session, job: Job) -> None:
                     episode.enrichment_status = "failed"
                     episode.enrichment_error = job.last_error
             elif job.job_type == "promote_capture_checkpoint":
-                from albert.models import CaptureCheckpoint
-
                 checkpoint = session.get(CaptureCheckpoint, UUID(job.payload["checkpoint_id"]))
                 if checkpoint is not None:
                     checkpoint.promotion_status = "failed"
                     checkpoint.promotion_error = job.last_error
+                    session.add(
+                        AuditEvent(
+                            organization_id=checkpoint.organization_id,
+                            workspace_id=checkpoint.workspace_id,
+                            principal_id=checkpoint.owner_principal_id,
+                            event_type="capture.checkpoint.failed",
+                            resource_type="capture_checkpoint",
+                            resource_id=str(checkpoint.id),
+                            detail={
+                                "through_sequence": checkpoint.through_sequence,
+                                "failure_type": (job.last_error or "unknown").split(":", 1)[0][
+                                    :100
+                                ],
+                            },
+                        )
+                    )
         else:
             job.status = "pending"
             job.available_at = utcnow() + timedelta(seconds=min(300, 2**job.attempts))
