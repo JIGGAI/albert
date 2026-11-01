@@ -45,6 +45,8 @@ from albert.schemas import (
     RelationshipRead,
     SearchRequest,
     SearchResponse,
+    SessionContextRequest,
+    SessionContextResponse,
     SubgraphQuery,
     WorkingMemoryCreate,
     WorkingMemoryCreateRead,
@@ -76,6 +78,7 @@ from albert.services import (
     update_working_memory,
     wait_for_indexing,
 )
+from albert.session_context import assemble_session_context
 from albert.trace_writer import get_trace_writer
 from albert.tracing import RecordingMiddleware
 
@@ -378,6 +381,55 @@ def assemble_context(
     return ContextResponse(
         context="\n\n".join(sections), citations=citations, degraded=result.degraded
     )
+
+
+@app.post("/v1/context/session-start", response_model=SessionContextResponse, tags=["retrieval"])
+def session_start_context(
+    data: SessionContextRequest,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> SessionContextResponse:
+    auth.require("memory.read")
+    workspace_id = resolve_workspace(session, auth, data.workspace_id)
+    allowed_sensitivities = auth.allowed_sensitivities()
+    if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
+        raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
+    # Task and run are ranking signals here, not hard filters: durable project truth
+    # remains eligible alongside the most specific current-task evidence.
+    request = SearchRequest(
+        query=data.query,
+        limit=min(100, max(data.max_items * 4, 20)),
+        workspace_id=data.workspace_id,
+        project_ref=data.project_ref,
+        task_ref=None,
+        run_ref=None,
+        branch_ref=data.branch_ref,
+        memory_types=data.memory_types,
+        sensitivity=data.sensitivity or allowed_sensitivities,
+        include_graph=False,
+    )
+    result = hybrid_search(
+        session,
+        organization_id=auth.organization_id,
+        workspace_id=workspace_id,
+        request=request,
+        allowed_sensitivities=allowed_sensitivities,
+    )
+    response = assemble_session_context(result, data)
+    audit(
+        session,
+        auth,
+        "context.session_started",
+        detail={
+            "citations": len(response.citations),
+            "characters": response.characters,
+            "tokens": response.tokens,
+            "truncated": response.truncated,
+            "degraded": response.degraded,
+        },
+    )
+    session.commit()
+    return response
 
 
 @app.post("/v1/relationships", response_model=RelationshipRead, status_code=201, tags=["graph"])

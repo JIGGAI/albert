@@ -205,7 +205,14 @@ def _memory_hit(memory: Memory, request: SearchRequest, backend: str, score: flo
             "memory_type": memory.memory_type,
             "sensitivity": memory.sensitivity,
             "confidence": memory.confidence,
+            "project_ref": memory.project_ref,
+            "task_ref": memory.task_ref,
+            "run_ref": memory.run_ref,
+            "valid_from": memory.valid_from.isoformat(),
+            "updated_at": memory.updated_at.isoformat(),
             "provenance": provenance,
+            "capture_source_trust": memory.metadata_.get("capture_source_trust", "verified"),
+            "quarantined": bool(memory.metadata_.get("quarantined", False)),
             "backend_scores": {backend: score},
         },
     )
@@ -340,9 +347,10 @@ def hybrid_search(
         if request.branch_ref:
             for key, hit in hits.items():
                 provenance = hit.metadata.get("provenance", {})
-                if provenance.get("branch") == request.branch_ref or provenance.get(
-                    "ref"
-                ) == request.branch_ref:
+                if (
+                    provenance.get("branch") == request.branch_ref
+                    or provenance.get("ref") == request.branch_ref
+                ):
                     scores[key] += 1.0 / (RRF_K + 1)
                     contributions[key]["branch_preference"] = round(1.0 / (RRF_K + 1), 6)
         ordered = sorted(hits, key=lambda key: scores[key], reverse=True)[: request.limit]
