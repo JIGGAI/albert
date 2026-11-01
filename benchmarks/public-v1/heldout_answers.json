@@ -1,0 +1,10 @@
+{
+  "sealed": true,
+  "opened_after_prediction": true,
+  "answers": [
+    {"query_id": "q-auth", "answerable": true, "relevance": {"doc-auth": 3}},
+    {"query_id": "q-backup", "answerable": true, "relevance": {"doc-backup": 3}},
+    {"query_id": "q-citations", "answerable": true, "relevance": {"doc-citations": 3}},
+    {"query_id": "q-unanswerable", "answerable": false, "relevance": {}}
+  ]
+}
