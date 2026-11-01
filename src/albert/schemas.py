@@ -368,6 +368,27 @@ class ContextResponse(BaseModel):
     degraded: list[str] = Field(default_factory=list)
 
 
+class SessionContextRequest(ScopeFields):
+    query: str = Field(default="current task project context", min_length=1, max_length=10_000)
+    branch_ref: str | None = Field(default=None, max_length=300)
+    sensitivity: list[str] = Field(default_factory=list)
+    memory_types: list[str] = Field(default_factory=list)
+    max_characters: int = Field(default=12_000, ge=100, le=200_000)
+    max_tokens: int = Field(default=3_000, ge=16, le=50_000)
+    max_items: int = Field(default=20, ge=1, le=100)
+    trust_policy: Literal["exclude_untrusted", "label_untrusted", "include"] = "exclude_untrusted"
+
+
+class SessionContextResponse(BaseModel):
+    context: str
+    citations: list[dict[str, Any]]
+    characters: int
+    tokens: int
+    truncated: bool
+    complete: bool
+    degraded: list[str] = Field(default_factory=list)
+
+
 class EntityInput(BaseModel):
     name: str = Field(min_length=1, max_length=500)
     entity_type: str = Field(default="concept", max_length=100)
