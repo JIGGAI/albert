@@ -7,7 +7,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from albert.models import CaptureCheckpoint, CaptureEvent, Episode, Memory, utcnow
+from albert.models import AuditEvent, CaptureCheckpoint, CaptureEvent, Episode, Memory, utcnow
+from albert.recorder import current_recorder
 
 _SENSITIVITY = ("public", "internal", "confidential", "restricted")
 _DURABLE_CLASSES = {
@@ -246,4 +247,28 @@ def promote_capture_checkpoint(session: Session, checkpoint_id: UUID) -> None:
     }
     checkpoint.promotion_status = "complete"
     checkpoint.promotion_error = None
+    session.add(
+        AuditEvent(
+            organization_id=checkpoint.organization_id,
+            workspace_id=checkpoint.workspace_id,
+            principal_id=checkpoint.owner_principal_id,
+            event_type="capture.checkpoint.completed",
+            resource_type="capture_checkpoint",
+            resource_id=str(checkpoint.id),
+            detail={
+                "through_sequence": checkpoint.through_sequence,
+                "promoted_count": len(unique),
+                "discarded_count": len(events) - len(promoted),
+            },
+        )
+    )
     session.commit()
+    recorder = current_recorder()
+    if recorder is not None:
+        recorder.note(
+            capture_stage="consolidation",
+            checkpoint_id=str(checkpoint.id),
+            checkpoint_status="complete",
+            promoted_count=len(unique),
+            discarded_count=len(events) - len(promoted),
+        )

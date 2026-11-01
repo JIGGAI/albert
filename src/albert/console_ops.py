@@ -9,6 +9,7 @@ are returned.
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -25,6 +26,10 @@ from albert.db import get_session
 from albert.graph_store import get_graph_store
 from albert.links import COUNTED_TRACE_NAMES
 from albert.models import (
+    AuditEvent,
+    CaptureCheckpoint,
+    CaptureEvent,
+    CaptureSession,
     Job,
     Memory,
     MemoryLink,
@@ -46,6 +51,7 @@ SPAN_TRACE_CAP = 3_000
 NEAR_DUPLICATE = 0.97
 LIST_LIMIT = 10
 Hours = Query(default=24, ge=1, le=24 * 30)
+StalledSeconds = Query(default=300, ge=30, le=86_400)
 
 
 def percentile(values: list[float], percent: float) -> float | None:
@@ -72,6 +78,31 @@ def _bound(session: Session, value: datetime) -> datetime:
 
 def _rate(part: int, whole: int) -> float:
     return round(part / whole, 4) if whole else 0.0
+
+
+def _capture_scope(
+    auth: AuthContext,
+    model: Any,
+    organization_id: UUID | None,
+    workspace_id: UUID | None,
+) -> list[Any]:
+    organization = tenant(auth, organization_id)
+    workspace = tenant_workspace(auth, workspace_id)
+    scope: list[Any] = []
+    if organization is not None:
+        scope.append(model.organization_id == organization)
+    if workspace is not None:
+        scope.append(model.workspace_id == workspace)
+    return scope
+
+
+def _count(session: Session, model: Any, *conditions: Any) -> int:
+    return int(session.scalar(select(func.count(model.id)).where(*conditions)) or 0)
+
+
+def _safe_metric_label(value: object) -> str:
+    label = str(value)
+    return label if re.fullmatch(r"[A-Za-z0-9_.+-]{1,100}", label) else "unknown"
 
 
 def _traces(
@@ -356,6 +387,308 @@ def memory_health(
     }
 
 
+@router.get("/capture")
+def capture_health(
+    organization_id: UUID | None = None,
+    workspace_id: UUID | None = None,
+    hours: int = Hours,
+    stalled_seconds: int = StalledSeconds,
+    auth: AuthContext = Depends(_operator),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Body-free capture pipeline health derived from canonical rows and traces."""
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=hours)
+    stalled_before = now - timedelta(seconds=stalled_seconds)
+    session_scope = _capture_scope(auth, CaptureSession, organization_id, workspace_id)
+    event_scope = _capture_scope(auth, CaptureEvent, organization_id, workspace_id)
+    checkpoint_scope = _capture_scope(auth, CaptureCheckpoint, organization_id, workspace_id)
+    audit_scope = _capture_scope(auth, AuditEvent, organization_id, workspace_id)
+
+    recent_sessions = list(
+        session.execute(
+            select(
+                CaptureSession.updated_at,
+                CaptureSession.provenance,
+                CaptureSession.contract_version,
+                CaptureSession.status,
+            )
+            .where(*session_scope, CaptureSession.deleted_at.is_(None))
+            .order_by(CaptureSession.updated_at.desc())
+            .limit(TRACE_ROW_CAP + 1)
+        )
+    )
+    sessions_truncated = len(recent_sessions) > TRACE_ROW_CAP
+    recent_sessions = recent_sessions[:TRACE_ROW_CAP]
+    adapter_versions = sorted(
+        {
+            _safe_metric_label(item.provenance.get("adapter_version"))
+            for item in recent_sessions
+            if (item.provenance or {}).get("adapter_version")
+        }
+    )
+    versions_truncated = len(adapter_versions) > LIST_LIMIT
+    adapter_versions = adapter_versions[:LIST_LIMIT]
+
+    events_since = [*event_scope, CaptureEvent.created_at >= _bound(session, since)]
+    accepted = _count(session, CaptureEvent, *events_since, CaptureEvent.deleted_at.is_(None))
+    redacted = _count(
+        session,
+        CaptureEvent,
+        *events_since,
+        CaptureEvent.deleted_at.is_(None),
+        CaptureEvent.screening_decision == "redacted",
+    )
+    rejected_rows = session.execute(
+        select(AuditEvent.event_type, func.count(AuditEvent.id))
+        .where(
+            *audit_scope,
+            AuditEvent.created_at >= _bound(session, since),
+            AuditEvent.event_type.in_(("capture.policy.denied", "capture.secret.rejected")),
+        )
+        .group_by(AuditEvent.event_type)
+    ).all()
+    rejection_counts = {event_type: int(count) for event_type, count in rejected_rows}
+    rejected = sum(rejection_counts.values())
+
+    checkpoint_counts = {
+        status: int(count)
+        for status, count in session.execute(
+            select(CaptureCheckpoint.promotion_status, func.count(CaptureCheckpoint.id))
+            .where(*checkpoint_scope, CaptureCheckpoint.deleted_at.is_(None))
+            .group_by(CaptureCheckpoint.promotion_status)
+        )
+    }
+    stalled_checkpoints = _count(
+        session,
+        CaptureCheckpoint,
+        *checkpoint_scope,
+        CaptureCheckpoint.deleted_at.is_(None),
+        CaptureCheckpoint.promotion_status.in_(("pending", "running")),
+        CaptureCheckpoint.updated_at < _bound(session, stalled_before),
+    )
+    last_checkpoint = session.execute(
+        select(
+            CaptureCheckpoint.id,
+            CaptureCheckpoint.through_sequence,
+            CaptureCheckpoint.updated_at,
+        )
+        .where(
+            *checkpoint_scope,
+            CaptureCheckpoint.deleted_at.is_(None),
+            CaptureCheckpoint.promotion_status == "complete",
+        )
+        .order_by(CaptureCheckpoint.updated_at.desc())
+        .limit(1)
+    ).first()
+    failure_types: Counter[str] = Counter()
+    for (error,) in session.execute(
+        select(CaptureCheckpoint.promotion_error)
+        .where(
+            *checkpoint_scope,
+            CaptureCheckpoint.promotion_status == "failed",
+            CaptureCheckpoint.promotion_error.is_not(None),
+        )
+        .order_by(CaptureCheckpoint.updated_at.desc())
+        .limit(TRACE_ROW_CAP)
+    ):
+        failure_types[_safe_metric_label(str(error).split(":", 1)[0])] += 1
+
+    job_scope = [Job.organization_id == tenant(auth, organization_id)]
+    if "admin" in auth.capabilities and organization_id is None:
+        job_scope = []
+    job_rows = session.execute(
+        select(Job.status, func.count(Job.id))
+        .join(CaptureCheckpoint, CaptureCheckpoint.promotion_job_id == Job.id)
+        .where(*job_scope, *checkpoint_scope)
+        .group_by(Job.status)
+    ).all()
+    jobs_by_status = {status: int(count) for status, count in job_rows}
+    oldest_job = session.scalar(
+        select(func.min(Job.available_at))
+        .join(CaptureCheckpoint, CaptureCheckpoint.promotion_job_id == Job.id)
+        .where(*job_scope, *checkpoint_scope, Job.status == "pending")
+    )
+
+    promoted_scope = [
+        *event_scope,
+        CaptureEvent.deleted_at.is_(None),
+        CaptureEvent.derived_memory_id == Memory.id,
+    ]
+    indexed = int(
+        session.scalar(
+            select(func.count(func.distinct(Memory.id))).where(
+                *promoted_scope, Memory.embedding_model.is_not(None)
+            )
+        )
+        or 0
+    )
+    unindexed = int(
+        session.scalar(
+            select(func.count(func.distinct(Memory.id))).where(
+                *promoted_scope, Memory.embedding_model.is_(None)
+            )
+        )
+        or 0
+    )
+    oldest_unindexed = session.scalar(
+        select(func.min(Memory.created_at)).where(*promoted_scope, Memory.embedding_model.is_(None))
+    )
+
+    injection_rows = list(
+        session.scalars(
+            select(AuditEvent)
+            .where(
+                *audit_scope,
+                AuditEvent.event_type == "context.session_started",
+                AuditEvent.created_at >= _bound(session, since),
+            )
+            .order_by(AuditEvent.created_at.desc())
+            .limit(TRACE_ROW_CAP + 1)
+        )
+    )
+    injections_truncated = len(injection_rows) > TRACE_ROW_CAP
+    injection_rows = injection_rows[:TRACE_ROW_CAP]
+    characters = [int((item.detail or {}).get("characters") or 0) for item in injection_rows]
+    injection_traces, traces_truncated = _traces(
+        session,
+        Trace.duration_ms,
+        Trace.status,
+        since=since,
+        scope=trace_scope(auth, organization_id, workspace_id),
+        names=("POST /v1/context/session-start",),
+    )
+    injection_durations = [float(duration) for duration, _status in injection_traces]
+    injection_errors = sum(status == "error" for _duration, status in injection_traces)
+
+    stalled_sessions = sum(
+        item.status == "active" and _aware(item.updated_at) < stalled_before
+        for item in recent_sessions
+    )
+    queue_lag = (
+        round((now - _aware(oldest_job)).total_seconds(), 1) if oldest_job is not None else None
+    )
+    index_lag = (
+        round((now - _aware(oldest_unindexed)).total_seconds(), 1)
+        if oldest_unindexed is not None
+        else None
+    )
+    failing_stage = next(
+        (
+            stage
+            for stage, failed in (
+                ("adapter", stalled_sessions > 0),
+                ("queue", queue_lag is not None and queue_lag >= stalled_seconds),
+                (
+                    "consolidation",
+                    checkpoint_counts.get("failed", 0) > 0 or stalled_checkpoints > 0,
+                ),
+                ("indexing", index_lag is not None and index_lag >= stalled_seconds),
+                ("injection", injection_errors > 0),
+            )
+            if failed
+        ),
+        None,
+    )
+    visible_organization = tenant(auth, organization_id)
+    visible_workspace = tenant_workspace(auth, workspace_id)
+    audit(
+        session,
+        auth,
+        "console.ops.capture.read",
+        resource_type="organization",
+        resource_id=_opt(visible_organization),
+        detail={
+            "workspace_id": _opt(visible_workspace),
+            "window_hours": hours,
+            "stalled_after_seconds": stalled_seconds,
+        },
+    )
+    session.commit()
+    return {
+        "window_hours": hours,
+        "stalled_after_seconds": stalled_seconds,
+        "failing_stage": failing_stage,
+        "adapter": {
+            "last_seen": _iso(
+                max((_aware(item.updated_at) for item in recent_sessions), default=None)
+            ),
+            "contract_versions": sorted({item.contract_version for item in recent_sessions})[
+                :LIST_LIMIT
+            ],
+            "adapter_versions": adapter_versions,
+            "active_sessions": sum(item.status == "active" for item in recent_sessions),
+            "stalled_sessions": stalled_sessions,
+        },
+        "ingestion": {
+            "accepted": accepted,
+            "rejected": rejected,
+            "redacted": redacted,
+            "last_seen": _iso(
+                session.scalar(select(func.max(CaptureEvent.created_at)).where(*event_scope))
+            ),
+            "failure_reasons": {
+                "policy_denied": rejection_counts.get("capture.policy.denied", 0),
+                "secret_rejected": rejection_counts.get("capture.secret.rejected", 0),
+            },
+            "policy_versions": sorted(
+                {
+                    profile_version
+                    for (profile_version,) in session.execute(
+                        select(CaptureEvent.profile_version)
+                        .where(*events_since)
+                        .order_by(CaptureEvent.created_at.desc())
+                        .limit(TRACE_ROW_CAP)
+                    )
+                }
+            )[:LIST_LIMIT],
+        },
+        "queue": {"by_status": jobs_by_status, "lag_seconds": queue_lag},
+        "consolidation": {
+            "by_status": checkpoint_counts,
+            "stalled": stalled_checkpoints,
+            "failure_reasons": [
+                {"type": kind, "count": count}
+                for kind, count in failure_types.most_common(LIST_LIMIT)
+            ],
+            "last_successful_checkpoint": (
+                {
+                    "id": str(last_checkpoint.id),
+                    "through_sequence": last_checkpoint.through_sequence,
+                    "completed_at": _iso(last_checkpoint.updated_at),
+                }
+                if last_checkpoint is not None
+                else None
+            ),
+        },
+        "indexing": {
+            "indexed": indexed,
+            "unindexed": unindexed,
+            "lag_seconds": index_lag,
+        },
+        "injection": {
+            "count": len(injection_rows),
+            "characters": {
+                "total": sum(characters),
+                "max": max(characters, default=0),
+            },
+            "latency_ms": {
+                "p50": percentile(injection_durations, 50),
+                "p95": percentile(injection_durations, 95),
+            },
+            "errors": injection_errors,
+        },
+        "telemetry": {
+            "row_cap": TRACE_ROW_CAP,
+            "retention_days": get_settings().trace_retention_days,
+            "truncated": sessions_truncated
+            or versions_truncated
+            or injections_truncated
+            or traces_truncated,
+        },
+    }
+
+
 @router.get("/service")
 def service_health(
     hours: int = Hours,
@@ -461,10 +794,7 @@ def service_health(
         },
         "traces": {
             "stored": int(
-                session.scalar(
-                    select(func.count(Trace.id)).where(*trace_scope(auth))
-                )
-                or 0
+                session.scalar(select(func.count(Trace.id)).where(*trace_scope(auth))) or 0
             ),
             "dropped": get_trace_writer().dropped,
             "retention_days": settings.trace_retention_days,

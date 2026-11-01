@@ -23,6 +23,7 @@ from albert.models import (
     utcnow,
 )
 from albert.provenance import merge_event_provenance, normalize_provenance
+from albert.recorder import current_recorder
 from albert.schemas import (
     CAPTURE_CONTRACT_VERSION,
     CaptureCheckpointRead,
@@ -57,6 +58,12 @@ DEFAULT_EVENT_CLASSES = frozenset(
         "failure_summary",
     }
 )
+
+
+def _capture_note(stage: str, **fields: object) -> None:
+    recorder = current_recorder()
+    if recorder is not None:
+        recorder.note(capture_stage=stage, **fields)
 
 
 @dataclass(frozen=True)
@@ -220,6 +227,7 @@ def _deny_policy(
         },
     )
     session.commit()
+    _capture_note("policy", decision="rejected", failure_reason="policy_denied")
     raise HTTPException(
         status_code=403,
         detail={"error": "capture_policy_denied", "reason": public_reason},
@@ -271,6 +279,7 @@ def _apply_policy(
             },
         )
         session.commit()
+        _capture_note("policy", decision="rejected", failure_reason="secret_rejected")
         raise HTTPException(
             status_code=422,
             detail={"error": "capture_secret_rejected", "reasons": list(screening.reasons)},
@@ -700,6 +709,12 @@ def start_session(
         detail={"profile_key": policy.profile_key, "profile_version": policy.version},
     )
     session.commit()
+    _capture_note(
+        "adapter",
+        decision="accepted",
+        contract_version=data.version,
+        policy_version=policy.version,
+    )
     return _session_read(capture_session)
 
 
@@ -749,6 +764,12 @@ def write_event(
             },
         )
         session.commit()
+        _capture_note(
+            "ingestion",
+            accepted=1,
+            redacted=int(result.screening_decision == "redacted"),
+            policy_version=result.policy.version,
+        )
     except IntegrityError as exc:
         session.rollback()
         concurrent = session.scalar(
@@ -825,6 +846,12 @@ def write_event_batch(
             },
         )
         session.commit()
+        _capture_note(
+            "ingestion",
+            accepted=len(events),
+            redacted=sum(item.screening_decision == "redacted" for item in results),
+            policy_version=results[0].policy.version,
+        )
     except IntegrityError as exc:
         session.rollback()
         concurrent = session.scalars(
@@ -929,6 +956,11 @@ def write_checkpoint(
             detail={"through_sequence": data.through_sequence},
         )
         session.commit()
+        _capture_note(
+            "queue",
+            checkpoint_id=str(checkpoint.id),
+            checkpoint_status=checkpoint.promotion_status,
+        )
     except IntegrityError as exc:
         session.rollback()
         concurrent = session.scalar(
@@ -1003,4 +1035,5 @@ def end_session(
         detail={"final_sequence": data.final_sequence},
     )
     session.commit()
+    _capture_note("adapter", decision="ended", final_sequence=data.final_sequence)
     return _session_read(capture_session)
