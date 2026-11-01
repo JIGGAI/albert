@@ -68,14 +68,16 @@ def test_outage_queues_then_flushes_lifecycle_once(tmp_path: Path):
     sdk = CaptureClient("https://albert.test", "secret", queue, client=http)
     assert sdk.start_session("client-1", "start-1", provenance={"vcs": "none"}).status == "queued"
     assert sdk.record_event("start-1", 1, "decision", "keep it", "event-1").status == "queued"
+    assert sdk.checkpoint("start-1", 1, "checkpoint-1").status == "queued"
     assert sdk.end_session("start-1", 1, "end-1").status == "queued"
-    assert sdk.health().queued == 3
+    assert sdk.health().queued == 4
     online[0] = True
-    assert sdk.flush() == 3
+    assert sdk.flush() == 4
     assert sdk.flush() == 0
     assert [path for path, _ in requests] == [
         "/v1/capture/sessions",
         "/v1/capture/sessions/session-1/events",
+        "/v1/capture/sessions/session-1/checkpoints",
         "/v1/capture/sessions/session-1/end",
     ]
     assert sdk.health().queued == 0
