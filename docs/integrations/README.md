@@ -8,7 +8,8 @@ to use memory safely in day-to-day work.
 1. Deploy Albert by following [Deployment](../DEPLOYMENT.md).
 2. Choose an integration:
    - [Codex](codex.md)
-   - [Claude Desktop and Claude Code](claude-desktop.md)
+   - [Claude Desktop and Claude Code MCP](claude-desktop.md)
+   - [Claude Code automatic memory](claude-code.md)
    - [Cursor](cursor.md)
    - [OpenClaw](openclaw.md)
    - [Direct REST clients](rest-client.md)

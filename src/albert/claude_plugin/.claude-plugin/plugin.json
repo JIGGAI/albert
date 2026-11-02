@@ -1,0 +1,11 @@
+{
+  "name": "albert-memory",
+  "displayName": "Albert Memory",
+  "version": "0.1.0",
+  "description": "Policy-safe automatic memory lifecycle hooks for Claude Code",
+  "author": {
+    "name": "JIGGAI"
+  },
+  "repository": "https://github.com/JIGGAI/albert",
+  "license": "MIT"
+}
