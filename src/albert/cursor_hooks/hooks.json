@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "albert-cursor-adapter" }],
+    "beforeSubmitPrompt": [{ "command": "albert-cursor-adapter" }],
+    "preCompact": [{ "command": "albert-cursor-adapter" }],
+    "afterAgentResponse": [{ "command": "albert-cursor-adapter" }],
+    "stop": [{ "command": "albert-cursor-adapter" }],
+    "sessionEnd": [{ "command": "albert-cursor-adapter" }]
+  }
+}
