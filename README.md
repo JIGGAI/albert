@@ -297,6 +297,7 @@ The 22 MCP tools, each with a REST equivalent:
 | [Providers](docs/PROVIDERS.md) | Embedding and classification models |
 | [Security](docs/SECURITY.md) | Keys, sensitivity, what the console can see |
 | [Integration handbook](docs/integrations/README.md) | Connecting Codex, Claude, Cursor, OpenClaw, REST clients |
+| [Automatic-memory release gate](docs/AUTOMATIC_MEMORY_RELEASE.md) | Supported hosts, SLOs, rollback, beta limits, release evidence |
 | [Status](docs/STATUS.md) | What is done, and what is not |
 
 ---
