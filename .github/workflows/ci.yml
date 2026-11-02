@@ -59,6 +59,15 @@ jobs:
           cache: pip
       - run: pip install --constraint constraints.txt -e '.[dev]'
       - run: ruff check .
+      - name: Enforce public retrieval and safety benchmark thresholds
+        run: python scripts/run-public-benchmark.py --output benchmark-results
+      - name: Upload benchmark reproducibility receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-retrieval-safety-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-results
+          if-no-files-found: error
       - name: Test (the graph store contract also runs against FalkorDB and Neo4j)
         env:
           ALBERT_TEST_FALKORDB_URL: redis://127.0.0.1:6379

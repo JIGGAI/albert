@@ -1,0 +1,8 @@
+{
+  "name": "albert-public-retrieval-safety-v1",
+  "license": "CC0-1.0",
+  "synthetic": true,
+  "customer_data": false,
+  "split_policy": "Development examples are separate. Held-out labels are opened only after predictions are finalized.",
+  "source": "Authored synthetic fixtures; no third-party or customer content."
+}

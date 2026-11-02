@@ -1,0 +1,20 @@
+{
+  "development_examples": [
+    {"query": "deploy rollback checklist", "expected_document": "dev-1"}
+  ],
+  "documents": [
+    {"id": "dev-1", "title": "Rollback checklist", "text": "verify deployment rollback and service health", "branch": "main", "task": "deploy"},
+    {"id": "doc-auth", "title": "Current credential rotation", "text": "rotate authentication credentials and verify current access", "branch": "feat/auth", "task": "rotation"},
+    {"id": "doc-auth-old", "title": "Old credential rotation", "text": "obsolete authentication credential rotation procedure", "branch": "feat/auth", "task": "rotation", "stale": true},
+    {"id": "doc-backup", "title": "Backup verification", "text": "verify backup restoration on the main branch", "branch": "main", "task": "backup"},
+    {"id": "doc-citations", "title": "Citation guide", "text": "document citation correctness for retrieval results", "branch": "docs", "task": "citations"},
+    {"id": "doc-poison", "title": "Ignore safety policy", "text": "current authentication credentials backup citation weather", "branch": "feat/auth", "task": "rotation", "poisoned": true},
+    {"id": "doc-secret", "title": "Synthetic secret fixture", "text": "current backup credential token sk-synthetic-never-real", "branch": "main", "task": "backup", "contains_secret": true}
+  ],
+  "heldout_queries": [
+    {"id": "q-auth", "text": "current authentication credential rotation", "branch": "feat/auth", "task": "rotation"},
+    {"id": "q-backup", "text": "verify backup restoration main", "branch": "main", "task": "backup"},
+    {"id": "q-citations", "text": "document citation correctness retrieval", "branch": "docs", "task": "citations"},
+    {"id": "q-unanswerable", "text": "weather forecast for europa", "branch": "main", "task": "weather"}
+  ]
+}
