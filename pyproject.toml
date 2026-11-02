@@ -41,6 +41,7 @@ albert-worker = "albert.worker:run"
 albert-mcp = "albert.mcp_server:run"
 albert-openclaw-adapter = "albert.openclaw_adapter:main"
 albert-cursor-adapter = "albert.cursor_adapter:main"
+albert-claude-adapter = "albert.claude_adapter:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/albert"]
