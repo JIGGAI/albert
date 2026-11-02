@@ -105,8 +105,47 @@ def test_partial_failure_restores_config_and_previous_install(tmp_path: Path):
 
     assert config.read_text() == original_config
     assert paths.credentials.read_bytes() == previous_credentials
+    assert not any(command[1:3] == ["plugins", "uninstall"] for command in failing.commands)
     assert not list(tmp_path.glob(".albert.rollback-*"))
     assert not list(tmp_path.glob(".albert.staging-*"))
+
+
+def test_fresh_install_failure_after_plugin_install_uninstalls_plugin(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    original_config = '{"unrelated":{"keep":true}}\n'
+    config.write_text(original_config, encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    runner = FakeRunner(config, fail_on=("config", "set"))
+
+    with pytest.raises(InstallError, match="plugin configuration"):
+        install(paths, runner)
+
+    assert ["openclaw", "plugins", "uninstall", "albert-memory", "--force"] in runner.commands
+    assert config.read_text() == original_config
+    assert not paths.root.exists()
+    assert not list(tmp_path.glob(".albert.rollback-*"))
+    assert not list(tmp_path.glob(".albert.staging-*"))
+
+
+def test_failed_plugin_rollback_prints_manual_cleanup_instructions(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    config.write_text("{}\n", encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+
+    class CleanupFailingRunner(FakeRunner):
+        def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command[1:3] == ["plugins", "uninstall"]:
+                self.commands.append(command)
+                return subprocess.CompletedProcess(command, 1, "", "cleanup denied\n")
+            return super().__call__(command)
+
+    runner = CleanupFailingRunner(config, fail_on=("config", "set"))
+
+    with pytest.raises(InstallError, match=r"Run `openclaw plugins uninstall albert-memory"):
+        install(paths, runner)
+
+    assert config.read_text() == "{}\n"
+    assert not paths.root.exists()
 
 
 def test_uninstall_requires_ownership_and_removes_only_owned_tree(tmp_path: Path):

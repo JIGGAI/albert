@@ -207,6 +207,8 @@ def install_openclaw(
     backup = paths.root.with_name(f".{paths.root.name}.rollback-{uuid.uuid4().hex}")
     staging = paths.root.with_name(f".{paths.root.name}.staging-{uuid.uuid4().hex}")
     plugin_path = Path(__file__).with_name("openclaw_plugin")
+    previous_install = paths.root.exists()
+    plugin_installed = False
     try:
         staged = InstallPaths(staging)
         _write_private(
@@ -239,6 +241,7 @@ def install_openclaw(
             ],
             "OpenClaw plugin install",
         )
+        plugin_installed = True
         entry = {
             "enabled": True,
             "hooks": {"allowPromptInjection": True, "allowConversationAccess": True},
@@ -262,7 +265,17 @@ def install_openclaw(
             ["openclaw", "plugins", "inspect", PLUGIN_ID, "--runtime", "--json"],
             "OpenClaw runtime inspection",
         )
-    except Exception:
+    except Exception as exc:
+        cleanup_error: Exception | None = None
+        if plugin_installed and not previous_install:
+            try:
+                _checked(
+                    runner,
+                    ["openclaw", "plugins", "uninstall", PLUGIN_ID, "--force"],
+                    "OpenClaw plugin rollback",
+                )
+            except Exception as rollback_exc:
+                cleanup_error = rollback_exc
         if paths.root.exists():
             shutil.rmtree(paths.root)
         if backup.exists():
@@ -277,6 +290,11 @@ def install_openclaw(
             config_path.unlink()
         if staging.exists():
             shutil.rmtree(staging)
+        if cleanup_error is not None:
+            raise InstallError(
+                f"{exc}; automatic plugin rollback failed ({cleanup_error}). "
+                f"Run `openclaw plugins uninstall {PLUGIN_ID} --force`, then retry."
+            ) from exc
         raise
     else:
         if backup.exists():
