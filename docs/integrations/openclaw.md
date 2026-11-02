@@ -2,6 +2,41 @@
 
 ## Automatic memory adapter
 
+### Safe one-command install
+
+After installing the `albert-memory` Python package, connect OpenClaw directly
+to a self-hosted or managed Brain:
+
+```bash
+albert-capture install --api-url https://your-brain.example
+```
+
+The command supports OpenClaw `>=2026.9.6,<2027`, reads the capture credential
+through a hidden prompt, generates a private encrypted-queue key, verifies the
+Brain's health and capabilities, and runs a live capture/recall smoke test
+before enabling the plugin. It stores the credential in an Albert-owned `0600`
+file and configures OpenClaw with only a non-secret wrapper path. The adapter
+reads that file after validating its ownership and permissions, so the
+credential is never placed in command arguments, process environment, stdout,
+or logs.
+
+Installation is transactional: existing Albert-owned files and the complete
+OpenClaw configuration are restored if plugin installation, configuration,
+validation, or runtime inspection fails. Reinstall replaces the one owned
+plugin entry without adding duplicate hooks.
+
+Verify later, optionally repeating the live smoke flow, or remove only
+Albert-owned files and configuration:
+
+```bash
+albert-capture doctor
+albert-capture doctor --smoke
+albert-capture uninstall
+```
+
+Only the released OpenClaw target is currently enabled. Other host targets are
+reported as unavailable until their adapters are independently released.
+
 Albert ships a native OpenClaw plugin fixture at
 `src/albert/openclaw_plugin`. Install Albert's Python package first, then link
 or install that directory with OpenClaw's plugin installer. The plugin invokes
