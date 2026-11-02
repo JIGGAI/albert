@@ -40,6 +40,7 @@ albert-admin = "albert.admin:app"
 albert-worker = "albert.worker:run"
 albert-mcp = "albert.mcp_server:run"
 albert-openclaw-adapter = "albert.openclaw_adapter:main"
+albert-codex-adapter = "albert.codex_adapter:main"
 albert-claude-adapter = "albert.claude_adapter:main"
 
 [tool.hatch.build.targets.wheel]
