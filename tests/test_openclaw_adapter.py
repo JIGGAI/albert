@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import httpx
+import pytest
 
 from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
-from albert.openclaw_adapter import OPENCLAW_EVENTS, OpenClawAdapter, OpenClawState
+from albert.openclaw_adapter import (
+    OPENCLAW_EVENTS,
+    OpenClawAdapter,
+    OpenClawState,
+    _client_from_environment,
+)
 
 
 def make_adapter(
@@ -34,6 +41,37 @@ def envelope(hook: str, **values: object) -> dict[str, object]:
         "project_ref": "jiggai/albert",
         **values,
     }
+
+
+def test_private_credential_file_avoids_secret_process_environment(tmp_path: Path, monkeypatch):
+    credential_file = tmp_path / "credentials.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "ALBERT_API_URL": "https://brain.example",
+                "ALBERT_CAPTURE_TOKEN": "file-only-token",
+                "ALBERT_CAPTURE_QUEUE_KEY": generate_queue_key(),
+                "ALBERT_CAPTURE_QUEUE_PATH": str(tmp_path / "queue.db"),
+                "ALBERT_WORKSPACE_ID": "workspace-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(credential_file, 0o600)
+    monkeypatch.delenv("ALBERT_CAPTURE_TOKEN", raising=False)
+    monkeypatch.setenv("ALBERT_CAPTURE_CREDENTIAL_FILE", str(credential_file))
+
+    client, _, workspace_id = _client_from_environment()
+    try:
+        assert client.client.headers["authorization"] == "Bearer file-only-token"
+        assert workspace_id == "workspace-1"
+        assert "ALBERT_CAPTURE_TOKEN" not in os.environ
+    finally:
+        client.close()
+
+    os.chmod(credential_file, 0o644)
+    with pytest.raises(RuntimeError, match="permissions are unsafe"):
+        _client_from_environment()
 
 
 def test_openclaw_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):

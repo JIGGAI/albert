@@ -260,17 +260,32 @@ class OpenClawAdapter:
         return {"results": [asdict(item) for item in results]}
 
 
-def _client_from_environment() -> tuple[CaptureClient, OpenClawState]:
-    base_url = os.environ.get("ALBERT_API_URL", "http://127.0.0.1:8080")
-    token = os.environ.get("ALBERT_CAPTURE_TOKEN")
-    queue_key = os.environ.get("ALBERT_CAPTURE_QUEUE_KEY")
+def _client_from_environment() -> tuple[CaptureClient, OpenClawState, str | None]:
+    environment = dict(os.environ)
+    credential_file = environment.get("ALBERT_CAPTURE_CREDENTIAL_FILE")
+    if credential_file:
+        path = Path(credential_file)
+        metadata = path.lstat()
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("Albert credential file must be a regular file")
+        if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise RuntimeError("Albert credential file ownership or permissions are unsafe")
+        values = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(values, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in values.items()
+        ):
+            raise RuntimeError("Albert credential file is invalid")
+        environment.update(values)
+    base_url = environment.get("ALBERT_API_URL", "http://127.0.0.1:8080")
+    token = environment.get("ALBERT_CAPTURE_TOKEN")
+    queue_key = environment.get("ALBERT_CAPTURE_QUEUE_KEY")
     if not token or not queue_key:
         raise RuntimeError("ALBERT_CAPTURE_TOKEN and ALBERT_CAPTURE_QUEUE_KEY are required")
     queue_path = Path(
-        os.environ.get("ALBERT_CAPTURE_QUEUE_PATH", "~/.openclaw/albert/capture.db")
+        environment.get("ALBERT_CAPTURE_QUEUE_PATH", "~/.openclaw/albert/capture.db")
     ).expanduser()
-    scope = os.environ.get("ALBERT_CAPTURE_SCOPE", "openclaw:default")
-    timeout = max(0.1, min(5.0, float(os.environ.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
+    scope = environment.get("ALBERT_CAPTURE_SCOPE", "openclaw:default")
+    timeout = max(0.1, min(5.0, float(environment.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
     queue = EncryptedQueue(queue_path, queue_key, scope)
     http = httpx.Client(
         base_url=base_url.rstrip("/"),
@@ -284,7 +299,11 @@ def _client_from_environment() -> tuple[CaptureClient, OpenClawState]:
         local_event_classes=OPENCLAW_EVENTS,
         client=http,
     )
-    return client, OpenClawState(queue_path.with_suffix(".openclaw-state.db"))
+    return (
+        client,
+        OpenClawState(queue_path.with_suffix(".openclaw-state.db")),
+        environment.get("ALBERT_WORKSPACE_ID"),
+    )
 
 
 def main() -> None:
@@ -294,8 +313,8 @@ def main() -> None:
         value = json.load(sys.stdin)
         if not isinstance(value, dict):
             raise ValueError("hook envelope must be an object")
-        client, state = _client_from_environment()
-        adapter = OpenClawAdapter(client, state, workspace_id=os.environ.get("ALBERT_WORKSPACE_ID"))
+        client, state, workspace_id = _client_from_environment()
+        adapter = OpenClawAdapter(client, state, workspace_id=workspace_id)
         print(json.dumps(adapter.handle(value), separators=(",", ":")))
     except Exception as exc:
         print(json.dumps({"error": type(exc).__name__}), file=sys.stderr)
