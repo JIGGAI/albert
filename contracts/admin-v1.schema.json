@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.jiggai.com/albert/admin-v1.schema.json",
+  "title": "Albert admin CLI contract v1",
+  "description": "Output of `albert-admin <command> --json` (stdout) and its errors (stderr, exit code 2). Changes within v1 are additive only.",
+  "oneOf": [
+    { "$ref": "#/$defs/create_key" },
+    { "$ref": "#/$defs/create_principal" },
+    { "$ref": "#/$defs/create_workspace" },
+    { "$ref": "#/$defs/list_principals" },
+    { "$ref": "#/$defs/list_keys" },
+    { "$ref": "#/$defs/revoke_key" },
+    { "$ref": "#/$defs/contract" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "contract_version": { "const": "1" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "description": "ISO-8601 in UTC.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+00:00$"
+    },
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "organization_id", "name", "principal_type", "workspace_id", "active"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "organization_id": { "$ref": "#/$defs/uuid" },
+        "name": { "type": "string" },
+        "principal_type": { "enum": ["agent", "human", "service"] },
+        "workspace_id": {
+          "description": "null for an organization-wide principal.",
+          "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "active": { "type": "boolean" }
+      }
+    },
+    "key": {
+      "description": "Non-secret API-key metadata. Never carries the hash or the credential.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "principal_id",
+        "name",
+        "prefix",
+        "capabilities",
+        "active",
+        "expires_at",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "name": { "type": "string" },
+        "prefix": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "type": "string" } },
+        "active": { "type": "boolean" },
+        "expires_at": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
+        "created_at": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "organization_id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "organization_id": { "$ref": "#/$defs/uuid" },
+        "name": { "type": "string" }
+      }
+    },
+    "create_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "key", "credential"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "key": { "$ref": "#/$defs/key" },
+        "credential": {
+          "description": "The raw API key, shown exactly once.",
+          "type": "string",
+          "pattern": "^alb_"
+        }
+      }
+    },
+    "create_principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "principal"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "principal": { "$ref": "#/$defs/principal" }
+      }
+    },
+    "create_workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "workspace", "created"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "workspace": { "$ref": "#/$defs/workspace" },
+        "created": {
+          "description": "false when the workspace already existed.",
+          "type": "boolean"
+        }
+      }
+    },
+    "list_principals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "organization", "principals"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "organization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "name"],
+          "properties": {
+            "id": { "$ref": "#/$defs/uuid" },
+            "name": { "type": "string" }
+          }
+        },
+        "principals": { "type": "array", "items": { "$ref": "#/$defs/principal" } }
+      }
+    },
+    "list_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "principal_id", "keys"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "principal_id": { "$ref": "#/$defs/uuid" },
+        "keys": { "type": "array", "items": { "$ref": "#/$defs/key" } }
+      }
+    },
+    "revoke_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "key"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "active"],
+          "properties": {
+            "id": { "$ref": "#/$defs/uuid" },
+            "active": { "const": false }
+          }
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "package", "package_version", "json_commands"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "package": { "const": "albert-memory" },
+        "package_version": { "type": "string" },
+        "json_commands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "error": {
+      "description": "Written to stderr; the process exits with code 2.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "error"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "organization_not_found",
+                "workspace_not_found",
+                "principal_not_found",
+                "api_key_not_found",
+                "unknown_capabilities",
+                "invalid_principal_type",
+                "invalid_id"
+              ]
+            },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

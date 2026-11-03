@@ -312,6 +312,34 @@ administration, cross-workspace retrieval and imports, and grant
 `memory.write.organization` only to the agents that should publish knowledge
 every workspace sees.
 
+### Admin CLI contract (v1)
+
+Automation should pass `--json` to `create-key`, `create-principal`,
+`create-workspace`, `list-principals`, `list-keys`, and `revoke-key`, and run
+`albert-admin contract` to discover the contract version, package version, and
+the commands that accept `--json`. In JSON mode each command prints exactly one
+compact JSON object and a newline on stdout, always carrying
+`"admin_contract": "1"`. The shape of every output is defined in
+[`contracts/admin-v1.schema.json`](../contracts/admin-v1.schema.json) (JSON
+Schema draft 2020-12, one `$defs` entry per command plus `error`). Ids are UUID
+strings and timestamps are ISO-8601 UTC or `null`. `create-key` returns the
+credential once; `list-keys` never returns hashes or credentials.
+
+```bash
+docker compose exec api albert-admin list-principals --organization "Acme" --json
+```
+
+On failure a JSON-mode command writes
+`{"admin_contract":"1","error":{"code":"...","message":"..."}}` to stderr and
+exits with code 2. Codes: `organization_not_found`, `workspace_not_found`,
+`principal_not_found`, `api_key_not_found`, `unknown_capabilities`,
+`invalid_principal_type`, and `invalid_id` (a malformed UUID).
+
+Within v1 changes are additive only: new fields, commands, or error codes may
+appear, so consumers must ignore what they do not know. Removing or retyping a
+field requires a new contract version. The tab-separated text output is for
+people and is not a contract; parse `--json` instead.
+
 ## Backups and restores
 
 Create a database backup:
