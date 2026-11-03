@@ -24,6 +24,7 @@ from albert.capture_installer import (
     install_openclaw,
     uninstall_openclaw,
 )
+from albert.host_targets import HostTargetError
 
 
 def encoded(value: bytes) -> str:
@@ -272,6 +273,24 @@ def test_unsupported_versions_are_reported_truthfully(tmp_path: Path):
 
     with pytest.raises(InstallError, match="unsupported"):
         _detect_openclaw(old_version)
+
+
+def test_invalid_host_target_fails_before_filesystem_or_cloud_changes(tmp_path: Path, monkeypatch):
+    config = tmp_path / "openclaw.json"
+    config.write_text("{}\n", encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    runner = FakeRunner(config)
+    monkeypatch.setattr(
+        "albert.capture_installer.negotiate_host_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(HostTargetError("invalid target")),
+    )
+
+    with pytest.raises(InstallError, match="invalid target"):
+        install(paths, runner)
+
+    assert runner.commands == [["openclaw", "--version"]]
+    assert config.read_text(encoding="utf-8") == "{}\n"
+    assert not paths.root.exists()
 
 
 def test_credentials_reject_newlines_and_encode_metacharacters(tmp_path: Path):

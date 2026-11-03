@@ -11,6 +11,7 @@
   "components": {
     "connector": "albert.capture_installer:app",
     "adapter": "albert.openclaw_adapter:main",
+    "host_target": "albert/host_targets/openclaw.json",
     "plugin_manifest": "albert/openclaw_plugin/openclaw.plugin.json",
     "plugin_runtime": "albert/openclaw_plugin/index.js",
     "ownership_marker": "albert-memory"
