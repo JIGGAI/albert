@@ -59,6 +59,16 @@ jobs:
           cache: pip
       - run: pip install --constraint constraints.txt -e '.[dev]'
       - run: ruff check .
+      - name: Validate OpenClaw package source contract
+        run: python scripts/openclaw-package-contract.py source
+      - name: Build and verify the OpenClaw wheel contract
+        run: |
+          python -m build --wheel
+          wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          python scripts/openclaw-package-contract.py emit "$wheel" \
+            --source-revision "$GITHUB_SHA" --output dist/openclaw-package-provenance.json
+          python scripts/openclaw-package-contract.py verify \
+            "$wheel" dist/openclaw-package-provenance.json
       - name: Enforce public retrieval and safety benchmark thresholds
         run: python scripts/run-public-benchmark.py --output benchmark-results
       - name: Upload benchmark reproducibility receipts

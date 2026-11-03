@@ -38,7 +38,7 @@ def cloud_contract() -> tuple[str, dict[str, object], dict[str, object]]:
     rest = "https://console.example.com/api/brain-gateway/brain-1/rest"
     adapter = {
         "artifact_sha256": "a" * 64,
-        "artifact_signature": "release-signature",
+        "artifact_signature": f"github-oidc-dsse:sha256:{'a' * 64}",
         "artifact_url": "https://releases.example.com/albert-memory-0.4.0.whl",
         "family": "openclaw",
         "package": "albert-memory",
@@ -107,7 +107,6 @@ def cloud_contract() -> tuple[str, dict[str, object], dict[str, object]]:
     )
     trust = {
         "manifest_keys": {"test-key": encoded(public)},
-        "releases": [adapter.copy()],
     }
     return link, manifest, trust
 
@@ -510,14 +509,13 @@ def test_manifest_rejects_tampering_and_untrusted_release():
         )
 
     _, clean_manifest, clean_trust = cloud_contract()
-    clean_trust["releases"] = []
     with pytest.raises(InstallError, match="provenance"):
         _verify_manifest(
             clean_manifest,
             link_url=link,
             openclaw_version=(2026, 9, 6),
             trust=clean_trust,
-            package_version="0.4.0",
+            package_version="0.4.1",
         )
 
     for endpoint in (

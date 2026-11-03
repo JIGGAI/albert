@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": "albert-memory",
+  "package_version": "0.4.0",
+  "family": "openclaw",
+  "owner": "JIGGAI/albert",
+  "manifest_contract": ">=2,<3",
+  "supported_openclaw": ">=2026.9.6,<2027.0.0",
+  "install_root": "~/.openclaw/albert",
+  "rollback_source_template": "https://github.com/JIGGAI/albert/tree/{source_revision}",
+  "components": {
+    "connector": "albert.capture_installer:app",
+    "adapter": "albert.openclaw_adapter:main",
+    "plugin_manifest": "albert/openclaw_plugin/openclaw.plugin.json",
+    "plugin_runtime": "albert/openclaw_plugin/index.js",
+    "ownership_marker": "albert-memory"
+  }
+}

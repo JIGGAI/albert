@@ -270,7 +270,6 @@ def _verify_manifest(
         raise InstallError("Cloud adapter manifest identity or capabilities are invalid")
 
     adapter = unsigned.get("adapter")
-    releases = loaded_trust.get("releases")
     if (
         not isinstance(adapter, dict)
         or set(adapter)
@@ -283,39 +282,18 @@ def _verify_manifest(
             "package_version",
             "supported_openclaw",
         }
-        or not isinstance(releases, list)
     ):
         raise InstallError("Cloud adapter package provenance is malformed")
     local_version = package_version or _package_version()
-    expected_release = next(
-        (
-            release
-            for release in releases
-            if isinstance(release, dict)
-            and release.get("package_version") == local_version
-            and all(
-                release.get(field) == adapter.get(field)
-                for field in (
-                    "artifact_url",
-                    "artifact_sha256",
-                    "artifact_signature",
-                    "supported_openclaw",
-                )
-            )
-        ),
-        None,
-    )
+    artifact_sha256 = adapter.get("artifact_sha256")
     if (
         adapter.get("family") != "openclaw"
         or adapter.get("package") != "albert-memory"
         or adapter.get("package_version") != local_version
-        or not isinstance(adapter.get("artifact_signature"), str)
-        or not adapter["artifact_signature"]
-        or len(adapter["artifact_signature"]) > 4096
-        or any(character in adapter["artifact_signature"] for character in "\r\n\0")
-        or not isinstance(adapter.get("artifact_sha256"), str)
-        or not SHA256_PATTERN.fullmatch(adapter["artifact_sha256"])
-        or expected_release is None
+        or not isinstance(artifact_sha256, str)
+        or not SHA256_PATTERN.fullmatch(artifact_sha256)
+        or adapter.get("artifact_signature")
+        != f"github-oidc-dsse:sha256:{artifact_sha256}"
         or not isinstance(adapter.get("supported_openclaw"), str)
         or not _version_in_range(openclaw_version, adapter["supported_openclaw"])
     ):
