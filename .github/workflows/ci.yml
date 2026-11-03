@@ -89,12 +89,16 @@ jobs:
           ALBERT_API_KEY_PEPPER: ci-pepper-that-is-longer-than-thirty-two-characters
           ALBERT_POSTGRES_PASSWORD: ci-database-password
         run: docker compose config --quiet
-      - name: Build production image
-        run: docker build --tag albert-memory:ci .
-      - name: Verify image compatibility manifest (no environment, no database)
+      - name: Build both production image variants from this revision
+        run: |
+          docker build --tag albert-memory:ci .
+          docker build --build-arg ALBERT_INSTALL_SEMANTIC=true --tag albert-memory-semantic:ci .
+      - name: Verify revision-matched image compatibility manifests
         run: |
           docker run --rm --entrypoint albert-admin albert-memory:ci compat --json > "$RUNNER_TEMP/compat.json"
+          docker run --rm --entrypoint albert-admin albert-memory-semantic:ci compat --json > "$RUNNER_TEMP/compat-semantic.json"
           python -m json.tool "$RUNNER_TEMP/compat.json"
+          cmp "$RUNNER_TEMP/compat.json" "$RUNNER_TEMP/compat-semantic.json"
           python -c "import json, os; m = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'compat.json'))); assert m['migrations']['heads'], m; assert set(m['migrations']['heads']) <= set(m['migrations']['known_revisions']), m"
       - name: Verify PostgreSQL migration
         env:
@@ -159,7 +163,8 @@ jobs:
       attestations: write
       id-token: write
     outputs:
-      digest: ${{ steps.image.outputs.digest }}
+      standard_digest: ${{ steps.standard.outputs.digest }}
+      semantic_digest: ${{ steps.semantic.outputs.digest }}
       tree: ${{ steps.candidate.outputs.tree }}
     steps:
       - uses: actions/checkout@v4
@@ -186,13 +191,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested merge-tree candidate
-        id: image
+      - name: Publish tested standard merge-tree candidate
+        id: standard
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           pull: true
+          sbom: true
+          provenance: mode=max
           tags: ghcr.io/jiggai/albert:candidate-tree-${{ steps.candidate.outputs.tree }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -201,35 +208,64 @@ jobs:
             io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
             io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
             io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      - name: Write candidate provenance
+      - name: Publish tested semantic merge-tree candidate
+        id: semantic
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          pull: true
+          sbom: true
+          provenance: mode=max
+          build-args: ALBERT_INSTALL_SEMANTIC=true
+          tags: ghcr.io/jiggai/albert-semantic:candidate-tree-${{ steps.candidate.outputs.tree }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.albert.provenance.source-head=${{ steps.candidate.outputs.source }}
+            io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
+            io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
+            io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Verify candidates and write signed release-bundle manifest
         env:
-          DIGEST: ${{ steps.image.outputs.digest }}
+          STANDARD_DIGEST: ${{ steps.standard.outputs.digest }}
+          SEMANTIC_DIGEST: ${{ steps.semantic.outputs.digest }}
           TREE: ${{ steps.candidate.outputs.tree }}
-          BASE: ${{ steps.candidate.outputs.base }}
-          SOURCE: ${{ steps.candidate.outputs.source }}
         run: |
-          jq -n \
-            --arg digest "$DIGEST" --arg tree "$TREE" --arg base "$BASE" \
-            --arg source "$SOURCE" --arg merge_commit "$GITHUB_SHA" \
-            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{schema:1, mode:"candidate", image:"ghcr.io/jiggai/albert", digest:$digest,
-              tree:$tree, base_revision:$base, source_head:$source,
-              merge_commit:$merge_commit, ci_run:$run}' > image-provenance.json
+          docker run --rm --entrypoint albert-admin "ghcr.io/jiggai/albert@$STANDARD_DIGEST" compat --json > compat-standard.json
+          docker run --rm --entrypoint albert-admin "ghcr.io/jiggai/albert-semantic@$SEMANTIC_DIGEST" compat --json > compat-semantic.json
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "ghcr.io/jiggai/albert@$STANDARD_DIGEST")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "ghcr.io/jiggai/albert-semantic@$SEMANTIC_DIGEST")" = "$GITHUB_SHA"
+          scripts/release-bundle.py emit --revision "$GITHUB_SHA" --tree "$TREE" \
+            --standard-digest "$STANDARD_DIGEST" --semantic-digest "$SEMANTIC_DIGEST" \
+            --standard-compat compat-standard.json --semantic-compat compat-semantic.json \
+            --ci-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --output release-bundle.json
       - uses: actions/upload-artifact@v4
         with:
-          name: image-provenance-${{ steps.candidate.outputs.tree }}
-          path: image-provenance.json
+          name: release-bundle-${{ steps.candidate.outputs.tree }}
+          path: release-bundle.json
           if-no-files-found: error
-      - name: Attest candidate image
+      - name: Attest standard candidate image
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/jiggai/albert
-          subject-digest: ${{ steps.image.outputs.digest }}
+          subject-digest: ${{ steps.standard.outputs.digest }}
           push-to-registry: true
+      - name: Attest semantic candidate image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/jiggai/albert-semantic
+          subject-digest: ${{ steps.semantic.outputs.digest }}
+          push-to-registry: true
+      - name: Sign the versioned release-bundle manifest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-bundle.json
 
   release:
-    # A matching main tree promotes the already-tested manifest. If no matching
-    # candidate exists (or its labels are stale), main builds automatically.
+    # Main publishes both lanes from the same checked-out revision. Each lane
+    # keeps its own digest so Cloud can roll it back independently.
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       github.event_name == 'workflow_dispatch'
@@ -250,96 +286,76 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Find a current tested candidate
-        id: candidate
-        run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          base=$(git rev-parse 'HEAD^1')
-          ref="ghcr.io/jiggai/albert:candidate-tree-$tree"
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          if ! docker pull "$ref"; then
-            echo "promote=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          label_tree=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.tree" }}' "$ref")
-          label_base=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.base-revision" }}' "$ref")
-          label_source=$(docker image inspect --format '{{ index .Config.Labels "io.albert.provenance.source-head" }}' "$ref")
-          if [ "$label_tree" != "$tree" ] || [ "$label_base" != "$base" ] || [ -z "$label_source" ]; then
-            echo "Candidate provenance is stale; main will build its final tree."
-            echo "promote=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$ref")
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "source=$label_source" >> "$GITHUB_OUTPUT"
-          echo "promote=true" >> "$GITHUB_OUTPUT"
-      - name: Promote tested candidate manifest
-        if: steps.candidate.outputs.promote == 'true'
-        run: >-
-          docker buildx imagetools create
-          --tag ghcr.io/jiggai/albert:sha-${{ github.sha }}
-          ${{ steps.candidate.outputs.digest }}
-      - name: Build final main tree when promotion is unsafe
-        if: steps.candidate.outputs.promote != 'true'
-        id: fallback
+      - name: Record release tree
+        id: source
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - name: Publish standard release image
+        id: standard
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           pull: true
+          sbom: true
+          provenance: mode=max
           tags: ghcr.io/jiggai/albert:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             io.albert.provenance.source-head=${{ github.sha }}
-            io.albert.provenance.base-revision=${{ steps.candidate.outputs.base }}
-            io.albert.provenance.tree=${{ steps.candidate.outputs.tree }}
+            io.albert.provenance.tree=${{ steps.source.outputs.tree }}
             io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      - name: Resolve released digest
-        id: released
+      - name: Publish semantic release image
+        id: semantic
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          pull: true
+          sbom: true
+          provenance: mode=max
+          build-args: ALBERT_INSTALL_SEMANTIC=true
+          tags: ghcr.io/jiggai/albert-semantic:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            io.albert.provenance.source-head=${{ github.sha }}
+            io.albert.provenance.tree=${{ steps.source.outputs.tree }}
+            io.albert.provenance.ci-run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Verify release images and write bundle
         env:
-          PROMOTED_DIGEST: ${{ steps.candidate.outputs.digest }}
-          FALLBACK_DIGEST: ${{ steps.fallback.outputs.digest }}
+          STANDARD_DIGEST: ${{ steps.standard.outputs.digest }}
+          SEMANTIC_DIGEST: ${{ steps.semantic.outputs.digest }}
+          TREE: ${{ steps.source.outputs.tree }}
         run: |
-          if [ "${{ steps.candidate.outputs.promote }}" = true ]; then
-            digest=${PROMOTED_DIGEST#*@}
-            mode=promoted
-          else
-            digest=$FALLBACK_DIGEST
-            mode=built
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-      - name: Write release provenance
-        env:
-          DIGEST: ${{ steps.released.outputs.digest }}
-          MODE: ${{ steps.released.outputs.mode }}
-          TREE: ${{ steps.candidate.outputs.tree }}
-          CANDIDATE: ${{ steps.candidate.outputs.ref }}
-          SOURCE: ${{ steps.candidate.outputs.promote == 'true' && steps.candidate.outputs.source || github.sha }}
-          BASE: ${{ steps.candidate.outputs.base }}
-        run: |
-          jq -n \
-            --arg digest "$DIGEST" --arg mode "$MODE" --arg tree "$TREE" \
-            --arg revision "$GITHUB_SHA" --arg candidate "$CANDIDATE" \
-            --arg source "$SOURCE" --arg base "$BASE" \
-            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{schema:1, mode:$mode, image:"ghcr.io/jiggai/albert", digest:$digest,
-              final_revision:$revision, tree:$tree, source_head:$source,
-              base_revision:$base, candidate:$candidate, ci_run:$run}' \
-            > image-provenance.json
-          scripts/verify-image-provenance.sh image-provenance.json "$GITHUB_SHA" "$TREE"
+          docker run --rm --entrypoint albert-admin "ghcr.io/jiggai/albert@$STANDARD_DIGEST" compat --json > compat-standard.json
+          docker run --rm --entrypoint albert-admin "ghcr.io/jiggai/albert-semantic@$SEMANTIC_DIGEST" compat --json > compat-semantic.json
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "ghcr.io/jiggai/albert@$STANDARD_DIGEST")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "ghcr.io/jiggai/albert-semantic@$SEMANTIC_DIGEST")" = "$GITHUB_SHA"
+          scripts/release-bundle.py emit --revision "$GITHUB_SHA" --tree "$TREE" \
+            --standard-digest "$STANDARD_DIGEST" --semantic-digest "$SEMANTIC_DIGEST" \
+            --standard-compat compat-standard.json --semantic-compat compat-semantic.json \
+            --ci-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --output release-bundle.json
+          scripts/release-bundle.py verify release-bundle.json --revision "$GITHUB_SHA" --tree "$TREE"
       - uses: actions/upload-artifact@v4
         with:
-          name: release-provenance-${{ github.sha }}
-          path: image-provenance.json
+          name: release-bundle-${{ github.sha }}
+          path: release-bundle.json
           if-no-files-found: error
-      - name: Attest fallback image
-        if: steps.candidate.outputs.promote != 'true'
+      - name: Attest standard release image
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/jiggai/albert
-          subject-digest: ${{ steps.fallback.outputs.digest }}
+          subject-digest: ${{ steps.standard.outputs.digest }}
           push-to-registry: true
+      - name: Attest semantic release image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/jiggai/albert-semantic
+          subject-digest: ${{ steps.semantic.outputs.digest }}
+          push-to-registry: true
+      - name: Sign the versioned release-bundle manifest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-bundle.json

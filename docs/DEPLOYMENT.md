@@ -268,26 +268,34 @@ Compose binds REST and MCP to `127.0.0.1` by default. Before exposing Albert:
 
 ## Upgrades
 
-CI builds a pull request's synthetic merge tree after the backend, migration,
-graph-store, console, and browser gates pass. The image is addressed by its Git
-tree hash and accompanied by a JSON provenance artifact containing the source
-head, base revision, merge commit, image digest, and CI run. When the pull
-request merges, CI compares that tested tree with the final `main` tree:
+CI builds standard and semantic images from the same pull-request merge tree
+after the backend, migration, graph-store, console, and browser gates pass. A
+main release publishes both lanes from one checked-out revision:
 
-- matching trees promote the same immutable image manifest to
-  `sha-<final-main-revision>` without rebuilding it;
-- a missing candidate, changed base, or mismatched tree automatically builds
-  and publishes the final `main` tree instead;
-- `workflow_dispatch` remains available for exceptional operator recovery, but
-  is not part of a normal merge or release.
+- `ghcr.io/jiggai/albert@sha256:...` is the standard runtime;
+- `ghcr.io/jiggai/albert-semantic@sha256:...` includes the pinned
+  `semantic` extra without inheriting from an older Albert image;
+- both BuildKit outputs carry SBOM and provenance attestations; and
+- `release-bundle.json` binds both immutable digests to the source revision,
+  Git tree, compatibility manifest, model identity, embedding dimensions, and
+  artifact-test result.
 
-Guarded deployment must consume `image-provenance.json`, pin the recorded
-`sha256` digest, and run
-`scripts/verify-image-provenance.sh PROVENANCE EXPECTED_REVISION EXPECTED_TREE`.
-For a promoted image, the OCI revision can name the pre-merge synthetic commit;
-the final revision and equivalent Git tree are attested in the release
-provenance. Continue to require a database backup, reviewed migrations, a
-rollback digest, and post-deploy readiness checks.
+The bundle uses the versioned `albert-release-bundle/v1` contract and is itself
+signed with a GitHub artifact attestation. Guarded deployment must verify it
+before promotion:
+
+```bash
+scripts/release-bundle.py verify release-bundle.json \
+  --revision <40-character-Albert-revision> \
+  --tree <40-character-Albert-tree>
+```
+
+Verification fails closed if an image or evidence reference is missing, a
+reference is tag-based instead of digest-pinned, revisions differ, or the two
+compatibility manifests differ. JIGGAI/albert-cloud must consume each
+`images.<lane>.reference` independently; record both rollback digests so one
+lane can roll back without changing the other. Continue to require a database
+backup, reviewed migrations, and post-deploy readiness checks.
 
 ```bash
 ./scripts/backup.sh backups/albert-before-upgrade.dump
