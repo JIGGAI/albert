@@ -115,6 +115,57 @@ removes Graphiti's own copy: the episode, the facts it created, entities only
 it mentioned, and the summaries of entities it shared with other episodes.
 The job retries until Graphiti's store is reachable.
 
+## Ingestion contract (v1)
+
+External and private connectors that push documents into Albert build against
+this contract. Every statement here is pinned by
+[`tests/test_ingestion_contract.py`](../tests/test_ingestion_contract.py).
+
+**Request.** `POST /v1/episodes` with `content` (required), `source_type` (at
+most 64 characters), `source_uri` (at most 1000 characters), `metadata` (a JSON
+object of at most 64,000 serialized characters) and `workspace_id`.
+Out-of-bounds fields are refused with `422`. `metadata` is returned verbatim as
+`extra`; `content_hash` is Albert's own SHA-256 of `content`.
+
+**Dedup key and idempotency.** An episode is identified by (organization,
+workspace, owning principal, SHA-256 of `content`, `source_uri`). Re-posting an
+identical body with the same key returns the same episode with `200` (the first
+post is `201`), including its current `indexing` state, so a write-only caller
+can poll by re-posting. A different principal, workspace, `source_uri` or
+`content` gets a new episode.
+
+**No upsert by source.** Changing `content` at the same `source_uri` creates a
+new episode and leaves the earlier one untouched. A new revision of a source is
+a new episode; the caller records the episode ids it receives and deletes the
+old ones itself.
+
+**Capabilities and workspaces.**
+
+| Operation | Needs | Otherwise |
+|---|---|---|
+| `POST /v1/episodes` | `memory.write` | `403` |
+| `GET /v1/episodes/{id}`, `POST /v1/search` | `memory.read` | `403` |
+| `DELETE /v1/episodes/{id}` | `memory.read` and `memory.delete` | `403` |
+
+An organization-wide key writes into the workspace named by `workspace_id`, or
+organization-wide when it is omitted. A workspace-scoped key naming another
+workspace gets `403` `{"detail": "Workspace is outside the API key scope"}`. A
+`workspace_id` that does not exist, was deleted, or belongs to another
+organization gets `404` `{"detail": "Workspace not found"}`.
+
+**Deletion.** `DELETE /v1/episodes/{id}` answers `204`. Any principal in scope
+with the capabilities above may delete, not only the one that wrote the
+episode. The derived memory disappears from search, and reading it answers
+`404`. Deleting the episode again, or deleting an id that never existed, answers
+`404` `{"detail": "Episode not found"}`. Graph forgetting is covered by
+`tests/test_graph_forget.py` and `tests/test_graphiti_forget.py`.
+
+**Re-posting after delete.** Dedup does not skip deleted episodes. Re-posting
+the identical body returns `200` with the deleted episode: `content` and
+`extra` are empty, `deleted_at` is set, `indexing.state` still reads `complete`
+with `memory_id: null`, and nothing is re-indexed. To ingest the same content
+again, vary `source_uri`.
+
 ## Automatic capture
 
 `/v1/capture` lets an agent client record a working session as it happens,

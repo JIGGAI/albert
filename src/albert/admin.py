@@ -1,16 +1,131 @@
 from __future__ import annotations
 
+import json
+import sys
+from datetime import UTC, datetime
+from typing import Any, NoReturn
 from uuid import UUID
 
 import typer
 from sqlalchemy import Engine, inspect, or_, select, text
 
+from albert import __version__
 from albert.db import SessionLocal, engine, initialize_database
 from albert.embeddings import get_embedder
 from albert.models import APIKey, Job, Memory, Organization, Principal, Workspace
 from albert.security import ALL_CAPABILITIES, KNOWN_CAPABILITIES, issue_api_key
 
 app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
+
+# Version of the machine-readable `--json` output. Changes within a version are
+# additive only; see contracts/admin-v1.schema.json.
+ADMIN_CONTRACT_VERSION = "1"
+JSON_COMMANDS = frozenset(
+    {
+        "contract",
+        "create-key",
+        "create-principal",
+        "create-workspace",
+        "list-keys",
+        "list-principals",
+        "revoke-key",
+    }
+)
+JSON_OPTION = typer.Option(
+    False, "--json", help="Print one machine-readable JSON object (admin contract)"
+)
+
+
+def _emit(payload: dict[str, Any]) -> None:
+    typer.echo(
+        json.dumps({"admin_contract": ADMIN_CONTRACT_VERSION, **payload}, separators=(",", ":"))
+    )
+
+
+def _fail(json_mode: bool, code: str, message: str) -> NoReturn:
+    """Exit with code 2: a JSON error on stderr, or typer's usual BadParameter."""
+    if not json_mode:
+        raise typer.BadParameter(message)
+    error = {"admin_contract": ADMIN_CONTRACT_VERSION, "error": {"code": code, "message": message}}
+    typer.echo(json.dumps(error, separators=(",", ":")), err=True)
+    raise typer.Exit(code=2)
+
+
+def _parse_id(value: str, json_mode: bool) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError:
+        if not json_mode:
+            raise  # Text mode keeps its historical behavior: an uncaught ValueError.
+        _fail(json_mode, "invalid_id", f"Invalid id: {value!r}")
+
+
+def _timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:  # SQLite drops the offset; stored values are UTC.
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def _workspace_json(workspace: Workspace) -> dict[str, Any]:
+    return {
+        "id": str(workspace.id),
+        "organization_id": str(workspace.organization_id),
+        "name": workspace.name,
+    }
+
+
+def _principal_json(principal: Principal) -> dict[str, Any]:
+    return {
+        "id": str(principal.id),
+        "organization_id": str(principal.organization_id),
+        "name": principal.name,
+        "principal_type": principal.principal_type,
+        "workspace_id": str(principal.workspace_id) if principal.workspace_id else None,
+        "active": principal.active,
+    }
+
+
+def _key_json(key: APIKey) -> dict[str, Any]:
+    # Never includes key_hash or any credential material.
+    return {
+        "id": str(key.id),
+        "principal_id": str(key.principal_id),
+        "name": key.name,
+        "prefix": key.prefix,
+        "capabilities": list(key.capabilities),
+        "active": key.active,
+        "expires_at": _timestamp(key.expires_at),
+        "created_at": _timestamp(key.created_at),
+    }
+
+
+@app.command("compat")
+def compat(
+    json_output: bool = typer.Option(
+        True, "--json", help="Print JSON (the only format; accepted for symmetry)"
+    ),
+) -> None:
+    """Print this image's runtime compatibility manifest as compact JSON.
+
+    Needs no environment and no database. Consumers decide rollback with: a
+    Brain migrated by image T can run image O iff every revision in
+    T.migrations.heads is in O.migrations.known_revisions.
+    """
+    from albert.compatibility import (
+        MigrationsUnavailable,
+        compatibility_error,
+        compatibility_manifest,
+    )
+
+    try:
+        manifest = compatibility_manifest()
+    except MigrationsUnavailable as exc:
+        error = compatibility_error("migrations_unavailable", str(exc))
+        sys.stderr.write(json.dumps(error, separators=(",", ":")) + "\n")
+        raise typer.Exit(code=2) from exc
+    sys.stdout.write(json.dumps(manifest, separators=(",", ":")) + "\n")
 
 
 class SchemaNotReady(RuntimeError):
@@ -102,27 +217,31 @@ def create_key(
     principal_id: str = typer.Option(...),
     name: str = typer.Option("agent key"),
     capabilities: str = typer.Option("memory.read,memory.write,graph.query"),
+    json_mode: bool = JSON_OPTION,
 ) -> None:
     """Issue an additional API key for an existing principal."""
     requested_capabilities = [item.strip() for item in capabilities.split(",") if item.strip()]
     unknown = sorted(set(requested_capabilities) - KNOWN_CAPABILITIES)
     if unknown:
-        raise typer.BadParameter(f"Unknown capabilities: {', '.join(unknown)}")
+        _fail(json_mode, "unknown_capabilities", f"Unknown capabilities: {', '.join(unknown)}")
     with SessionLocal() as session:
-        actor = session.get(Principal, UUID(principal_id))
+        actor = session.get(Principal, _parse_id(principal_id, json_mode))
         if actor is None:
-            raise typer.BadParameter("Principal not found")
+            _fail(json_mode, "principal_not_found", "Principal not found")
         raw, prefix, digest = issue_api_key()
-        session.add(
-            APIKey(
-                principal_id=actor.id,
-                prefix=prefix,
-                key_hash=digest,
-                name=name,
-                capabilities=requested_capabilities,
-            )
+        key = APIKey(
+            principal_id=actor.id,
+            prefix=prefix,
+            key_hash=digest,
+            name=name,
+            capabilities=requested_capabilities,
         )
+        session.add(key)
         session.commit()
+        if json_mode:
+            session.refresh(key)
+            _emit({"key": _key_json(key), "credential": raw})
+            return
     typer.echo(raw)
 
 
@@ -130,12 +249,13 @@ def create_key(
 def create_workspace(
     organization: str = typer.Option(..., help="Organization name"),
     name: str = typer.Option(..., help="Workspace name"),
+    json_mode: bool = JSON_OPTION,
 ) -> None:
     """Create a workspace in an existing organization."""
     with SessionLocal() as session:
         org = session.scalar(select(Organization).where(Organization.name == organization))
         if org is None:
-            raise typer.BadParameter("Organization not found")
+            _fail(json_mode, "organization_not_found", "Organization not found")
         existing = session.scalar(
             select(Workspace).where(
                 Workspace.organization_id == org.id,
@@ -143,13 +263,19 @@ def create_workspace(
             )
         )
         if existing is not None:
-            typer.echo(str(existing.id))
+            if json_mode:
+                _emit({"workspace": _workspace_json(existing), "created": False})
+            else:
+                typer.echo(str(existing.id))
             return
         workspace = Workspace(organization_id=org.id, name=name)
         session.add(workspace)
         session.commit()
         session.refresh(workspace)
-        typer.echo(str(workspace.id))
+        if json_mode:
+            _emit({"workspace": _workspace_json(workspace), "created": True})
+        else:
+            typer.echo(str(workspace.id))
 
 
 @app.command("create-principal")
@@ -158,14 +284,19 @@ def create_principal(
     name: str = typer.Option(..., help="Principal display name"),
     workspace: str | None = typer.Option(None, help="Optional workspace name"),
     principal_type: str = typer.Option("agent", help="agent, human, or service"),
+    json_mode: bool = JSON_OPTION,
 ) -> None:
     """Create an organization- or workspace-scoped principal."""
     if principal_type not in {"agent", "human", "service"}:
-        raise typer.BadParameter("principal-type must be agent, human, or service")
+        _fail(
+            json_mode,
+            "invalid_principal_type",
+            "principal-type must be agent, human, or service",
+        )
     with SessionLocal() as session:
         org = session.scalar(select(Organization).where(Organization.name == organization))
         if org is None:
-            raise typer.BadParameter("Organization not found")
+            _fail(json_mode, "organization_not_found", "Organization not found")
         workspace_id = None
         if workspace is not None:
             record = session.scalar(
@@ -175,7 +306,7 @@ def create_principal(
                 )
             )
             if record is None:
-                raise typer.BadParameter("Workspace not found")
+                _fail(json_mode, "workspace_not_found", "Workspace not found")
             workspace_id = record.id
         principal = Principal(
             organization_id=org.id,
@@ -186,21 +317,33 @@ def create_principal(
         session.add(principal)
         session.commit()
         session.refresh(principal)
-        typer.echo(str(principal.id))
+        if json_mode:
+            _emit({"principal": _principal_json(principal)})
+        else:
+            typer.echo(str(principal.id))
 
 
 @app.command("list-principals")
 def list_principals(
     organization: str = typer.Option(..., help="Organization name"),
+    json_mode: bool = JSON_OPTION,
 ) -> None:
     """List principals and their workspace scope."""
     with SessionLocal() as session:
         org = session.scalar(select(Organization).where(Organization.name == organization))
         if org is None:
-            raise typer.BadParameter("Organization not found")
+            _fail(json_mode, "organization_not_found", "Organization not found")
         principals = session.scalars(
             select(Principal).where(Principal.organization_id == org.id).order_by(Principal.name)
         )
+        if json_mode:
+            _emit(
+                {
+                    "organization": {"id": str(org.id), "name": org.name},
+                    "principals": [_principal_json(principal) for principal in principals],
+                }
+            )
+            return
         for principal in principals:
             typer.echo(
                 f"{principal.id}\t{principal.name}\t{principal.principal_type}\t"
@@ -209,15 +352,21 @@ def list_principals(
 
 
 @app.command("list-keys")
-def list_keys(principal_id: str = typer.Option(...)) -> None:
+def list_keys(
+    principal_id: str = typer.Option(...),
+    json_mode: bool = JSON_OPTION,
+) -> None:
     """List non-secret API-key metadata for one principal."""
     with SessionLocal() as session:
-        actor = session.get(Principal, UUID(principal_id))
+        actor = session.get(Principal, _parse_id(principal_id, json_mode))
         if actor is None:
-            raise typer.BadParameter("Principal not found")
+            _fail(json_mode, "principal_not_found", "Principal not found")
         keys = session.scalars(
             select(APIKey).where(APIKey.principal_id == actor.id).order_by(APIKey.created_at)
         )
+        if json_mode:
+            _emit({"principal_id": str(actor.id), "keys": [_key_json(key) for key in keys]})
+            return
         for key in keys:
             typer.echo(
                 f"{key.id}\t{key.name}\tprefix={key.prefix}\tactive={key.active}\t"
@@ -226,15 +375,33 @@ def list_keys(principal_id: str = typer.Option(...)) -> None:
 
 
 @app.command("revoke-key")
-def revoke_key(key_id: str = typer.Option(...)) -> None:
+def revoke_key(
+    key_id: str = typer.Option(...),
+    json_mode: bool = JSON_OPTION,
+) -> None:
     """Revoke an API key without deleting its audit identity."""
     with SessionLocal() as session:
-        key = session.get(APIKey, UUID(key_id))
+        key = session.get(APIKey, _parse_id(key_id, json_mode))
         if key is None:
-            raise typer.BadParameter("API key not found")
+            _fail(json_mode, "api_key_not_found", "API key not found")
         key.active = False
         session.commit()
+        if json_mode:
+            _emit({"key": {"id": str(key.id), "active": key.active}})
+            return
     typer.echo("API key revoked")
+
+
+@app.command("contract")
+def contract(json_mode: bool = JSON_OPTION) -> None:
+    """Print the machine-readable admin contract version (always JSON)."""
+    _emit(
+        {
+            "package": "albert-memory",
+            "package_version": __version__,
+            "json_commands": sorted(JSON_COMMANDS),
+        }
+    )
 
 
 @app.command("validate-runtime")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -567,8 +567,14 @@ class RelationshipExport(BaseModel):
     _bounded_metadata = field_validator("metadata")(_bounded_json)
 
 
+ExportFormatVersion = Literal["albert-export-v1"]
+# Single source for the portability bundle format id (used by /v1/export and
+# published in the runtime compatibility manifest).
+EXPORT_FORMAT_VERSION: str = get_args(ExportFormatVersion)[0]
+
+
 class ExportBundle(BaseModel):
-    format_version: Literal["albert-export-v1"] = "albert-export-v1"
+    format_version: ExportFormatVersion = EXPORT_FORMAT_VERSION
     exported_at: datetime
     organization_name: str
     workspaces: list[WorkspaceExport]
