@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from base64 import urlsafe_b64encode
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from albert.capture_installer import (
     InstallError,
@@ -14,9 +18,98 @@ from albert.capture_installer import (
     _brain_check,
     _credentials_text,
     _detect_openclaw,
+    _https_url,
+    _verify_manifest,
+    connect_openclaw,
     install_openclaw,
     uninstall_openclaw,
 )
+
+
+def encoded(value: bytes) -> str:
+    return urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def cloud_contract() -> tuple[str, dict[str, object], dict[str, object]]:
+    link = (
+        "https://console.example.com/api/brain-gateway/brain-1/rest/"
+        "onboard/abcdefghijklmnopqrstuvwxyz123456?adapter_context=signed-context"
+    )
+    rest = "https://console.example.com/api/brain-gateway/brain-1/rest"
+    adapter = {
+        "artifact_sha256": "a" * 64,
+        "artifact_signature": "release-signature",
+        "artifact_url": "https://releases.example.com/albert-memory-0.4.0.whl",
+        "family": "openclaw",
+        "package": "albert-memory",
+        "package_version": "0.4.0",
+        "supported_openclaw": ">=2026.9.6,<2027.0.0",
+    }
+    now = datetime.now(UTC)
+    manifest: dict[str, object] = {
+        "adapter": adapter,
+        "capabilities": ["memory.read", "memory.write"],
+        "compensation": {
+            "credential_specific": True,
+            "method": "POST",
+            "receipt_ttl_seconds": 600,
+            "url": f"{rest}/onboard/compensate",
+        },
+        "connection": {"authorization": "***", "rest_url": rest},
+        "expires_at": (now + timedelta(minutes=15)).isoformat().replace("+00:00", "Z"),
+        "identity": {
+            "brain_id": "brain-1",
+            "cloud": "albert-cloud",
+            "request_id": "request-1",
+            "workspace_id": "workspace-1",
+        },
+        "issued_at": (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+        "manifest_id": "request-1",
+        "manifest_version": "2.0",
+        "redemption": {
+            "identity_bound": True,
+            "method": "POST",
+            "single_use": True,
+            "url": (
+                f"{rest}/onboard/abcdefghijklmnopqrstuvwxyz123456/redeem/v2"
+                "?adapter_context=signed-context"
+            ),
+        },
+        "reload": {"command": ["openclaw", "plugins", "reload", "albert-memory"]},
+        "revocation": {
+            "credential_id_issued_on_redemption": True,
+            "independent_agent": True,
+            "scope": "single-credential",
+        },
+        "rollback": {
+            "compensate_before_commit": True,
+            "ownership_marker": "albert-memory",
+            "restore_previous_state": True,
+        },
+        "schema": "com.jiggai.albert.adapter-manifest",
+        "verification": {
+            "capture_recall_smoke": True,
+            "health": "/v1/health/ready",
+            "runtime_inspection": True,
+        },
+    }
+    private_key = Ed25519PrivateKey.generate()
+    signature = encoded(
+        private_key.sign(json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode())
+    )
+    manifest["signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": "test-key",
+        "value": signature,
+    }
+    public = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    trust = {
+        "manifest_keys": {"test-key": encoded(public)},
+        "releases": [adapter.copy()],
+    }
+    return link, manifest, trust
 
 
 class FakeRunner:
@@ -82,9 +175,15 @@ def test_repeat_install_is_idempotent_and_replaces_only_owned_tree(tmp_path: Pat
     runner = FakeRunner(config)
 
     install(paths, runner, "first")
+    first_values = json.loads(paths.credentials.read_text())
+    paths.queue.write_bytes(b"encrypted queued capture")
     install(paths, runner, "second")
 
-    assert json.loads(paths.credentials.read_text())["ALBERT_CAPTURE_TOKEN"] == "second"
+    second_values = json.loads(paths.credentials.read_text())
+    assert second_values["ALBERT_CAPTURE_TOKEN"] == "second"
+    assert second_values["ALBERT_CAPTURE_QUEUE_KEY"] == first_values["ALBERT_CAPTURE_QUEUE_KEY"]
+    assert paths.queue.read_bytes() == b"encrypted queued capture"
+    assert stat_mode(paths.queue) == 0o600
     assert not list(tmp_path.glob(".albert.rollback-*"))
     assert not list(tmp_path.glob(".albert.staging-*"))
 
@@ -243,6 +342,192 @@ def test_direct_brain_check_runs_health_capability_capture_and_recall(monkeypatc
         "/v1/context/session-start",
         "/v1/capture/sessions/server-session/end",
     ]
+
+
+def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
+    tmp_path: Path, monkeypatch
+):
+    link, manifest, trust = cloud_contract()
+    requests: list[httpx.Request] = []
+    credential = "credential-canary-never-log"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        if request.url.path.endswith("/redeem/v2"):
+            assert json.loads(request.content) == {
+                "agent_name": "Native OpenClaw",
+                "brain_id": "brain-1",
+                "capabilities": ["memory.read", "memory.write"],
+                "manifest_id": "request-1",
+                "manifest_version": "2.0",
+                "request_id": "request-1",
+                "workspace_id": "workspace-1",
+            }
+            return httpx.Response(
+                201,
+                json={
+                    "capabilities": ["memory.read", "memory.write"],
+                    "compensation": {
+                        "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+                        "receipt": "private-compensation-receipt",
+                    },
+                    "credential": credential,
+                    "credential_notice": (
+                        "Shown once; store only in the Albert-owned credential file."
+                    ),
+                    "identity": {
+                        "brain_id": "brain-1",
+                        "connection_id": "connection-1",
+                        "credential_id": "credential-1",
+                        "request_id": "request-1",
+                        "workspace_id": "workspace-1",
+                    },
+                    "manifest_version": "2.0",
+                    "rest_url": ("https://console.example.com/api/brain-gateway/brain-1/rest"),
+                },
+            )
+        return httpx.Response(404)
+
+    monkeypatch.setattr("albert.capture_installer._brain_check", lambda *args, **kwargs: None)
+    config = tmp_path / "openclaw.json"
+    config.write_text('{"unrelated":true}\n', encoding="utf-8")
+    runner = FakeRunner(config)
+    paths = InstallPaths(tmp_path / "albert")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    connect_openclaw(
+        link_url=link,
+        paths=paths,
+        runner=runner,
+        trust=trust,
+        package_version="0.4.0",
+        http=client,
+    )
+
+    values = json.loads(paths.credentials.read_text())
+    marker = json.loads(paths.marker.read_text())
+    assert values["ALBERT_CAPTURE_TOKEN"] == credential
+    assert marker["cloud"] == {
+        "brain_id": "brain-1",
+        "connection_id": "connection-1",
+        "credential_id": "credential-1",
+        "manifest_id": "request-1",
+        "manifest_version": "2.0",
+        "request_id": "request-1",
+        "rest_url": "https://console.example.com/api/brain-gateway/brain-1/rest",
+        "workspace_id": "workspace-1",
+    }
+    observable = json.dumps(runner.commands) + config.read_text() + paths.marker.read_text()
+    assert credential not in observable
+    assert credential not in os.environ.values()
+    assert "private-compensation-receipt" not in observable
+    assert link not in observable
+    assert ["openclaw", "plugins", "reload", "albert-memory"] in runner.commands
+    assert [request.url.path.rsplit("/", 1)[-1] for request in requests] == ["v2", "v2"]
+
+
+def test_connect_failure_restores_predecessor_and_compensates_only_replacement(
+    tmp_path: Path, monkeypatch
+):
+    link, manifest, trust = cloud_contract()
+    compensated: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        if request.url.path.endswith("/redeem/v2"):
+            return httpx.Response(
+                201,
+                json={
+                    "capabilities": ["memory.read", "memory.write"],
+                    "compensation": {
+                        "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+                        "receipt": "replacement-only-receipt",
+                    },
+                    "credential": "replacement-secret",
+                    "credential_notice": (
+                        "Shown once; store only in the Albert-owned credential file."
+                    ),
+                    "identity": {
+                        "brain_id": "brain-1",
+                        "connection_id": "replacement-connection",
+                        "credential_id": "replacement-credential",
+                        "request_id": "request-1",
+                        "workspace_id": "workspace-1",
+                    },
+                    "manifest_version": "2.0",
+                    "rest_url": ("https://console.example.com/api/brain-gateway/brain-1/rest"),
+                },
+            )
+        if request.url.path.endswith("/onboard/compensate"):
+            compensated.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "connection_id": "replacement-connection",
+                    "credential_id": "replacement-credential",
+                    "revoked": True,
+                },
+            )
+        return httpx.Response(404)
+
+    monkeypatch.setattr("albert.capture_installer._brain_check", lambda *args, **kwargs: None)
+    config = tmp_path / "openclaw.json"
+    config.write_text("{}\n", encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    install(paths, FakeRunner(config), "predecessor-secret")
+    previous = paths.credentials.read_bytes()
+    failing = FakeRunner(config, fail_on=("plugins", "inspect"))
+
+    with pytest.raises(InstallError, match="runtime inspection"):
+        connect_openclaw(
+            link_url=link,
+            paths=paths,
+            runner=failing,
+            trust=trust,
+            package_version="0.4.0",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+    assert paths.credentials.read_bytes() == previous
+    assert compensated == [{"receipt": "replacement-only-receipt"}]
+    assert not any(command[1:3] == ["plugins", "uninstall"] for command in failing.commands)
+
+
+def test_manifest_rejects_tampering_and_untrusted_release():
+    link, manifest, trust = cloud_contract()
+    manifest["capabilities"] = ["memory.read"]
+
+    with pytest.raises(InstallError, match="signature is invalid"):
+        _verify_manifest(
+            manifest,
+            link_url=link,
+            openclaw_version=(2026, 9, 6),
+            trust=trust,
+            package_version="0.4.0",
+        )
+
+    _, clean_manifest, clean_trust = cloud_contract()
+    clean_trust["releases"] = []
+    with pytest.raises(InstallError, match="provenance"):
+        _verify_manifest(
+            clean_manifest,
+            link_url=link,
+            openclaw_version=(2026, 9, 6),
+            trust=clean_trust,
+            package_version="0.4.0",
+        )
+
+    for endpoint in (
+        "http://console.example.com/adapter",
+        "https://127.0.0.1/adapter",
+        "https://brain.internal/adapter",
+        "https://user:password@console.example.com/adapter",
+    ):
+        with pytest.raises(InstallError, match="public HTTPS"):
+            _https_url(endpoint, "Adapter endpoint")
 
 
 def stat_mode(path: Path) -> int:
