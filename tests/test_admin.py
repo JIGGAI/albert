@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from click.utils import strip_ansi
 from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from typer.testing import CliRunner
@@ -348,7 +349,7 @@ def test_every_listed_json_command_accepts_the_flag() -> None:
     for command in document["json_commands"]:
         result = CliRunner().invoke(app, [command, "--help"])
         assert result.exit_code == 0
-        assert "--json" in result.output
+        assert "--json" in strip_ansi(result.output)
 
 
 @pytest.fixture(scope="module")
