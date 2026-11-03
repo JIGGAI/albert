@@ -1,161 +1,178 @@
 # OpenClaw integration
 
-## Automatic memory adapter
+Albert's supported OpenClaw path is the native lifecycle adapter. It provides
+bounded cited recall and minimized capture without a core OpenClaw patch. Manual
+MCP and REST connections are custom-client options and do not provide equivalent
+lifecycle capture.
 
-### Safe one-command install
+## Requirements and package verification
 
-After installing the `albert-memory` Python package, connect OpenClaw directly
-to a self-hosted or managed Brain:
+- OpenClaw `>=2026.9.6,<2027.0.0`.
+- A released `albert-memory` wheel whose exact URL, SHA-256 digest, GitHub OIDC
+  attestation subject, version, compatibility range, and source revision match
+  the signed Cloud manifest v2.
+- An HTTPS Albert Brain endpoint or a private Albert Cloud one-time link.
+
+Install an exact version from the release channel selected by your operator. Do
+not use an unversioned VCS URL or a floating branch. Before production use,
+verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-albert-capture install --api-url https://your-brain.example
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.0
+python -m pip hash albert_memory-0.4.0-py3-none-any.whl
+gh attestation verify albert_memory-0.4.0-py3-none-any.whl --repo JIGGAI/albert
+python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 
-The command supports OpenClaw `>=2026.9.6,<2027`, reads the capture credential
-through a hidden prompt, generates a private encrypted-queue key, verifies the
-Brain's health and capabilities, and runs a live capture/recall smoke test
-before enabling the plugin. It stores the credential in an Albert-owned `0600`
-file and configures OpenClaw with only a non-secret wrapper path. The adapter
-reads that file after validating its ownership and permissions, so the
-credential is never placed in command arguments, process environment, stdout,
-or logs.
+The release provenance names the full rollback source commit. The package
+contract check rejects a wheel missing the connector, adapter, plugin runtime,
+plugin manifest, ownership marker, or compatibility declaration.
 
-Installation is transactional: existing Albert-owned files and the complete
-OpenClaw configuration are restored if plugin installation, configuration,
-validation, or runtime inspection fails. Reinstall replaces the one owned
-plugin entry without adding duplicate hooks.
+## Connect from Albert Cloud
 
-Verify later, optionally repeating the live smoke flow, or remove only
-Albert-owned files and configuration:
+Copy the private, single-use connection link from Cloud. Avoid shell history and
+process arguments by allowing the command to prompt:
 
 ```bash
-albert-capture doctor
+albert-capture connect
 albert-capture doctor --smoke
+```
+
+For managed automation, provide the link over private standard input or an
+already-open private file descriptor:
+
+```bash
+secret-provider read-once albert-link | albert-capture connect --link-stdin
+albert-capture connect --link-fd 3 3<operator-owned-private-link-file
+```
+
+`connect` validates the signed manifest, package provenance, host compatibility,
+one-time redemption identity, Brain health, runtime plugin state, live capture,
+and fresh recall. It commits only after every check passes. Before commit, a
+failure compensates the newly issued credential and restores the prior
+Albert-owned files and complete OpenClaw configuration.
+
+## Direct self-hosted installation
+
+Cloud links are preferred because they bind identity, revocation, package, and
+rollback metadata. A self-hosted operator can connect directly:
+
+```bash
+albert-capture install --api-url https://brain.example.com
+albert-capture doctor --smoke
+```
+
+The token is read by hidden prompt. Albert stores it in an owned `0600` file and
+configures OpenClaw with a non-secret wrapper path. The token is never placed in
+arguments, process environment, stdout, or logs.
+
+## Operate the connection
+
+### Diagnose
+
+Run `albert-capture doctor` after host or Brain maintenance. Add `--smoke` when
+an operator explicitly wants one live capture-and-recall proof. Doctor validates
+the host range, OpenClaw configuration, runtime plugin, Brain readiness, and
+credential without printing secret values.
+
+### Upgrade
+
+1. Download and verify the exact new wheel and its attestation.
+2. Record the currently installed version and provenance rollback source.
+3. Install the exact new version from the operator-approved hash lock.
+4. Run `albert-capture connect` with a newly issued Cloud link. For direct
+   self-hosting, rerun `install` and enter the replacement credential privately.
+5. Run `albert-capture doctor --smoke`.
+
+Reconnection is transactional and preserves the encrypted queue key and queued
+captures. If validation fails, reinstall the exact previous wheel from its
+recorded digest and source, then rerun doctor.
+
+### Rotate or reconnect
+
+Issue a new single-agent Cloud link, run `albert-capture connect`, and verify with
+doctor. Successful commit replaces only Albert's credential and owned plugin
+entry. Revoke the old credential in Cloud after proof succeeds. If redemption
+fails before commit, Cloud compensation revokes the newly issued credential.
+
+### Revoke
+
+Revoke the OpenClaw agent credential in Cloud or the Brain administration API,
+then run `albert-capture uninstall` on the host. Revocation stops remote access;
+uninstall removes the local owned plugin entry and files. Perform both steps for
+a retired or compromised host.
+
+### Roll back
+
+Use the `rollback_source` and exact wheel digest from the prior release
+provenance. Install that wheel by hash, reconnect with a fresh one-time link, and
+run doctor. Never reactivate an old or revoked credential. If the new release
+changed server requirements, complete the server rollback first.
+
+### Uninstall
+
+```bash
 albert-capture uninstall
 ```
 
-Only the released OpenClaw target is currently enabled. Other host targets are
-reported as unavailable until their adapters are independently released.
+Uninstall requires Albert's ownership marker and removes only Albert-owned
+OpenClaw configuration and `~/.openclaw/albert`. It preserves unrelated plugins
+and settings. Revoke the corresponding credential separately.
 
-Albert ships a native OpenClaw plugin fixture at
-`src/albert/openclaw_plugin`. Install Albert's Python package first, then link
-or install that directory with OpenClaw's plugin installer. The plugin invokes
-`albert-openclaw-adapter` with minimized JSON envelopes; credentials are read
-from the Gateway environment and are never placed in process arguments.
+## Migration from manual MCP
 
-Required secret-backed environment variables:
+1. Leave the manual connection in place while installing and verifying the
+   native adapter.
+2. Run `albert-capture doctor --smoke` and confirm cited recall in a fresh
+   session.
+3. Disable the manual MCP entry, reload OpenClaw, and verify the native adapter
+   again.
+4. Remove the manual entry and revoke its distinct credential after an operator
+   observation window.
 
-- `ALBERT_CAPTURE_TOKEN`: an Albert credential limited to context read and capture write.
-- `ALBERT_CAPTURE_QUEUE_KEY`: a URL-safe 32-byte AES key generated by
-  `albert.capture_sdk.generate_queue_key()` and stored in the operator's secret store.
+Rollback is the reverse: disable or uninstall the native adapter, restore the
+previous custom-client configuration from its operator backup, and issue a new
+least-privilege credential. Do not reuse the native adapter credential.
 
-Optional environment variables are `ALBERT_API_URL`, `ALBERT_WORKSPACE_ID`,
-`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, and
-`ALBERT_CAPTURE_TIMEOUT`. The encrypted queue defaults to
-`~/.openclaw/albert/capture.db`; the adjacent sequencing database contains
-only hook identities, event classes, and sequence numbers.
+## Reduced-fidelity behavior
 
-Enable the plugin and the two OpenClaw permissions its typed hooks require:
+Albert outages do not block an OpenClaw turn. Allowed capture events enter a
+bounded encrypted queue for idempotent replay. Recall may be absent or stale
+until connectivity returns. The adapter never substitutes uncited memory, and
+agents must treat recalled text as non-authoritative context. Queue saturation,
+repeated replay failure, or failed doctor checks require operator attention.
 
-```json5
-{
-  plugins: {
-    entries: {
-      "albert-memory": {
-        enabled: true,
-        hooks: {
-          allowPromptInjection: true,
-          allowConversationAccess: true
-        },
-        config: {
-          command: "albert-openclaw-adapter",
-          timeoutMs: 1800
-        }
-      }
-    }
-  }
-}
-```
+Capture is limited to current user goals, bounded final assistant outcomes or
+failure summaries, lifecycle counts, and reasons. Hidden prompts, full
+transcripts, tool bodies, absolute paths, hook message arrays, and known
+credential material are not sent to Albert.
 
-The adapter maps `session_start`, `before_prompt_build`,
-`before_compaction`, `agent_end`, and `session_end` to the shared SDK. Start
-recall is bounded, cited, delimited, and explicitly non-authoritative.
-Capture uses only current user goals, bounded final assistant outcomes or
-failure summaries, lifecycle counts, and reasons. Hidden prompts, complete
-transcripts, tool bodies, absolute paths, and hook message arrays are not sent
-to Albert. Known credential material is rejected before durable queueing.
-Albert outages never block the OpenClaw turn; allowed events enter the bounded
-encrypted SDK queue for idempotent replay.
+## Compatibility evidence
 
-### Compatibility matrix
+| OpenClaw version | Evidence | Status |
+| --- | --- | --- |
+| 2026.9.6 | Typed lifecycle fixture and native manifest validation | Tested |
+| `>=2026.9.6,<2027.0.0` | Package and manifest v2 compatibility gates | Supported contract |
+| Outside that range | Installer rejection | Unsupported |
 
-| OpenClaw version | Plugin API | Evidence | Status |
-| --- | --- | --- | --- |
-| 2026.9.6 | Typed `session_*`, prompt, compaction, and `agent_end` hooks | End-to-end lifecycle fixture and native manifest validation | Tested |
-| >=2026.9.6, <2027 | Same declared plugin API range | Package compatibility gate; run the fixture before release on each host update | Supported contract |
-| <2026.9.6 or >=2027 | Outside declared range | Install/discovery compatibility rejection | Unsupported |
-
-The end-to-end fixture is `tests/test_openclaw_adapter.py`. It proves retry
-idempotency, sequence preservation, start recall placement and citations,
-pre-compaction/end checkpoints, completion/failure minimization, outage
+The lifecycle fixture covers retry idempotency, ordering, cited start recall,
+pre-compaction and end checkpoints, completion/failure minimization, outage
 continuity, and secret non-retention.
 
-## MCP tools
+## Advanced: manual MCP and REST clients
 
-OpenClaw can register Albert as a local stdio server or as a protected remote
-streamable-HTTP server.
+Use manual MCP or REST only for custom clients that intentionally do not use the
+native lifecycle adapter. They provide tool calls, not automatic session recall
+and capture. Current OpenClaw configuration has no documented portable secret
+reference for these custom entries; do not place a durable credential in an
+OpenClaw configuration file. Use an operator-controlled wrapper or credential
+broker that injects a short-lived, least-privilege credential at process start.
 
-## Local stdio
+For remote MCP, use a public HTTPS endpoint and configure the broker to send the
+caller's credential as bearer authorization. For stdio, configure an absolute
+path to an operator-owned wrapper that launches `albert-mcp --transport stdio`.
+Keep this custom credential distinct from the native adapter credential and
+reload the client after changes.
 
-```bash
-openclaw mcp add albert \
-  --command /absolute/path/to/albert-mcp \
-  --arg=--transport \
-  --arg=stdio \
-  --env ALBERT_API_URL=http://127.0.0.1:8080 \
-  --env ALBERT_MCP_API_KEY=REPLACE_FROM_SECRET_STORE
-
-openclaw mcp doctor albert --probe
-```
-
-Configure OpenClaw's secret-backed HTTP authorization setting to send the
-caller's Albert API key as `Authorization: Bearer <key>`.
-
-Prefer an OpenClaw-supported secret reference over a literal key when managing
-the production configuration.
-
-## Protected remote endpoint
-
-```bash
-openclaw mcp add albert \
-  --url https://memory.internal.example/mcp \
-  --transport streamable-http
-
-openclaw mcp doctor albert --probe
-```
-
-Equivalent direct configuration:
-
-```json5
-{
-  mcp: {
-    servers: {
-      albert: {
-        url: "https://memory.internal.example/mcp",
-        transport: "streamable-http",
-        enabled: true
-      }
-    }
-  }
-}
-```
-
-Use `openclaw mcp status --verbose` for a configuration summary and
-`openclaw mcp reload` after a change when the active runtime owns the
-connection. The remote gateway forwards each caller's bearer key, preserving
-its Albert principal, capabilities, and audit identity.
-
-Apply [AGENTS.example.md](AGENTS.example.md) as the durable operating policy for
-agents that receive these tools.
-
-Reference: [OpenClaw's MCP connection guide](https://docs.openclaw.ai/tools/mcp).
+Apply [AGENTS.example.md](AGENTS.example.md) as operating policy and use the
+[sanitized troubleshooting guide](troubleshooting.md) for failures.

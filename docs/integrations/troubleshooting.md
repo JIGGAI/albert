@@ -1,5 +1,23 @@
 # Integration troubleshooting
 
+Never paste credentials, one-time links, authorization values, full command
+environments, or unsanitized configuration into a ticket. Record only the
+command name, exit status, redacted endpoint host, package version and digest,
+OpenClaw version, and the final sanitized error line.
+
+## Native OpenClaw adapter
+
+Run `albert-capture doctor` first. Use `--smoke` only when a live write/read
+proof is appropriate. A package or compatibility error requires the exact
+approved wheel and digest; do not bypass the check with an editable or floating
+install. A redemption failure requires a fresh Cloud link because links are
+single-use. A runtime failure should be checked with OpenClaw's plugin inspect
+command, with credential and configuration values omitted from captured output.
+
+If an upgrade fails, reinstall the prior exact wheel from the release
+provenance's rollback source, reconnect with a new link, and rerun doctor. If a
+credential or link may have been exposed, revoke it before retrying.
+
 ## Establish the failing layer
 
 Check the REST service first:
@@ -31,7 +49,8 @@ The default MCP URL is `http://127.0.0.1:8081/mcp`.
 - Restart the client or reload its MCP catalog after configuration changes.
 - Codex: run `codex mcp list`.
 - Claude Code: run `claude mcp list` and inspect `/mcp`.
-- OpenClaw: run `openclaw mcp doctor albert --probe`.
+- OpenClaw custom MCP: inspect the custom entry and broker without printing its
+  credential. Native OpenClaw users run `albert-capture doctor` instead.
 
 ## MCP starts and immediately exits
 

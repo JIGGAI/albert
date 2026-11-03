@@ -19,7 +19,14 @@ to use memory safely in day-to-day work.
    also read [multi-agent handoffs](multi-agent-handoffs.md).
 5. Keep [troubleshooting](troubleshooting.md) available to operators.
 
-## Choosing MCP or REST
+## Choosing an integration
+
+OpenClaw users should start with its supported native adapter and
+`albert-capture connect`. It provides lifecycle recall and capture plus
+transactional ownership and rollback. MCP and REST are secondary custom-client
+interfaces for OpenClaw and do not provide the same lifecycle behavior.
+
+## Choosing MCP or REST for custom clients
 
 | Use case | Interface |
 |---|---|
