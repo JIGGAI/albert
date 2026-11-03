@@ -341,8 +341,7 @@ def _verify_manifest(
         not all(isinstance(value, dict) for value in (connection, redemption, compensation))
         or set(connection) != {"authorization", "rest_url"}
         or set(redemption) != {"identity_bound", "method", "single_use", "url"}
-        or set(compensation)
-        != {"credential_specific", "method", "receipt_ttl_seconds", "url"}
+        or set(compensation) != {"credential_specific", "method", "receipt_ttl_seconds", "url"}
     ):
         raise InstallError("Cloud adapter endpoints are malformed")
     rest_url = _https_url(connection.get("rest_url"), "Brain endpoint")
