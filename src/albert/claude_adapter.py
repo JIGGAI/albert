@@ -210,12 +210,21 @@ class ClaudeAdapter:
 
         if hook == "UserPromptSubmit":
             prompt = str(event.get("prompt", ""))[:MAX_SUMMARY_CHARACTERS]
-            if prompt.strip():
-                identity = str(
-                    event.get("prompt_id") or hashlib.sha256(prompt.encode()).hexdigest()
-                )
-                results.append(self._record(event, "user_goal", prompt, identity, hook))
-        elif hook == "PreCompact":
+            screened = screen_capture(prompt, {})
+            if not prompt.strip() or screened.reasons:
+                return {"results": [asdict(item) for item in results]}
+            identity = str(event.get("prompt_id") or hashlib.sha256(prompt.encode()).hexdigest())
+            results.append(self._record(event, "user_goal", prompt, identity, hook))
+            project, branch = self._project_refs(event)
+            context = self.client.recall(screened.content, project_ref=project, branch_ref=branch)
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context,
+                },
+                "results": [asdict(item) for item in results],
+            }
+        if hook == "PreCompact":
             trigger = str(event.get("trigger", "unknown"))[:100]
             identity = str(event.get("prompt_id") or f"{trigger}:compaction")
             results.append(

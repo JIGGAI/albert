@@ -193,6 +193,15 @@ same key with a different body is a 409. Sessions belong to the principal that
 started them; another principal gets 404. Once ended, a session accepts no more
 events.
 
+**Checkpoints promote durable events.** A checkpoint queues a job that turns
+the session's durable events into searchable memories: `user_goal`,
+`assistant_outcome`, `selected_tool_outcome`, `decision`, `correction`,
+`failure_summary`, `vcs_checkpoint` and `pre_compaction_checkpoint`. Events
+shorter than 12 characters, plain chatter ("ok", "thanks") and user prompts that
+only steer the turn ("thanks, keep going") are skipped; identical content is
+deduplicated, and a `correction` supersedes the earlier claim about the same
+subject.
+
 **Profiles decide what is kept.** A profile lists the event classes it accepts,
 which metadata fields each class may keep (everything else is dropped before
 storage), size bounds, a sensitivity floor, how long raw capture is retained
