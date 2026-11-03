@@ -173,3 +173,37 @@ async def test_same_content_isolated_by_tenant() -> None:
         )
         assert checkpoints[0].organization_id != checkpoints[1].organization_id  # type: ignore[union-attr]
         assert checkpoints[0].derived_memory_id != checkpoints[1].derived_memory_id  # type: ignore[union-attr]
+
+
+async def test_user_goal_with_content_is_promoted_and_continuations_are_not(
+    client: httpx.AsyncClient,
+) -> None:
+    checkpoint_id = await _capture(
+        client,
+        [
+            ("user_goal", "Book the offsite with Devon in Sonoma; he is vegetarian."),
+            ("user_goal", "ok, go ahead"),
+            ("user_goal", "Thanks! Please continue with it."),
+        ],
+    )
+    drain_jobs()
+
+    with SessionLocal() as session:
+        checkpoint = session.get(CaptureCheckpoint, checkpoint_id)
+        assert checkpoint is not None
+        assert checkpoint.promotion_status == "complete"
+        assert checkpoint.metadata_["promoted_count"] == 1
+        events = list(
+            session.scalars(
+                select(CaptureEvent)
+                .where(CaptureEvent.session_id == checkpoint.session_id)
+                .order_by(CaptureEvent.sequence)
+            )
+        )
+        assert events[1].derived_memory_id is None
+        assert events[2].derived_memory_id is None
+        memory = session.get(Memory, events[0].derived_memory_id)
+        assert memory is not None
+        assert memory.status == "active"
+        assert "vegetarian" in memory.content
+        assert memory.metadata_["capture_event_class"] == "user_goal"

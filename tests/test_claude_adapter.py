@@ -59,7 +59,9 @@ def test_claude_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path)
     started = envelope("SessionStart", tmp_path, source="startup")
     first = adapter.handle(started)
     adapter.handle(started)
-    adapter.handle(envelope("UserPromptSubmit", tmp_path, prompt="Implement the adapter"))
+    prompted = adapter.handle(
+        envelope("UserPromptSubmit", tmp_path, prompt="Implement the adapter")
+    )
     compact = envelope("PreCompact", tmp_path, trigger="auto")
     adapter.handle(compact)
     adapter.handle(compact)
@@ -69,6 +71,12 @@ def test_claude_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path)
     context = first["hookSpecificOutput"]["additionalContext"]
     assert "NON-AUTHORITATIVE" in context
     assert "memory://approved/claude-1" in context
+    assert prompted["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert "memory://approved/claude-1" in prompted["hookSpecificOutput"]["additionalContext"]
+    recall_queries = [
+        body["query"] for path, body in requests if path == "/v1/context/session-start"
+    ]
+    assert recall_queries[-1] == "Implement the adapter"
     event_requests = [body for path, body in requests if path.endswith("/events")]
     unique_events = {body["idempotency_key"]: body for body in event_requests}
     assert [item["event_class"] for item in unique_events.values()] == [
@@ -122,6 +130,35 @@ def test_claude_failure_is_minimized_and_secret_is_never_queued(tmp_path: Path):
     payloads = [queue.decrypt(row["payload"]) for row in queue.ready(100)]
     assert all(secret not in str(payload) for payload in payloads)
     assert secret.encode() not in (tmp_path / "capture.db").read_bytes()
+
+
+def test_claude_secret_prompt_is_neither_recorded_nor_used_for_recall(tmp_path: Path):
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(201, json={"id": "stored"})
+
+    adapter, _queue = make_adapter(tmp_path, httpx.MockTransport(handler))
+    secret = "password=supersecretvalue"
+    response = adapter.handle(envelope("UserPromptSubmit", tmp_path, prompt=secret))
+
+    assert "hookSpecificOutput" not in response
+    assert "/v1/context/session-start" not in paths
+    assert not any(path.endswith("/events") for path in paths)
+    assert secret.encode() not in (tmp_path / "capture.db").read_bytes()
+
+
+def test_claude_plugin_bundles_albert_mcp_server_without_credentials():
+    root = Path(__file__).parents[1] / "src/albert/claude_plugin"
+    servers = json.loads((root / ".mcp.json").read_text())["mcpServers"]
+
+    assert set(servers) == {"albert"}
+    albert = servers["albert"]
+    assert albert["command"] == "albert-mcp"
+    assert albert["args"] == ["--transport", "stdio"]
+    assert albert["env"]["ALBERT_MCP_API_KEY"] == "${ALBERT_MCP_API_KEY}"
+    assert albert["env"]["ALBERT_API_URL"].startswith("${ALBERT_API_URL")
 
 
 def test_claude_plugin_fixture_declares_only_supported_minimized_hooks():

@@ -19,10 +19,19 @@ _DURABLE_CLASSES = {
     "failure_summary",
     "pre_compaction_checkpoint",
     "selected_tool_outcome",
+    "user_goal",
     "vcs_checkpoint",
 }
 _CHATTER = re.compile(
     r"^(?:ok(?:ay)?|thanks?|hello|hi|got it|sounds good|working on it|done)[.!\s]*$", re.I
+)
+# A user prompt that only steers the current turn ("thanks, keep going") states
+# nothing worth remembering; anything with its own content is promoted.
+_CONTINUATION = re.compile(
+    r"^(?:(?:ok(?:ay)?|thanks?|thank you|great|cool|yes|sure)[,.!\s]+)*(?:please\s+)?"
+    r"(?:keep (?:going|working)|continue|carry on|go ahead|proceed)"
+    r"(?:\s+(?:on|with)\s+(?:this|that|it)(?:\s+task)?)?[.!\s]*$",
+    re.I,
 )
 _PROCEDURE = re.compile(r"\b(?:steps?|procedure|runbook|how to|first.+then)\b", re.I | re.S)
 _LESSON = re.compile(r"\b(?:lesson|learned|root cause|failed because|avoid)\b", re.I)
@@ -65,6 +74,7 @@ def _durable(event: CaptureEvent) -> bool:
         event.event_class in _DURABLE_CLASSES
         and len(content) >= 12
         and not _CHATTER.match(content)
+        and not (event.event_class == "user_goal" and _CONTINUATION.match(content))
     )
 
 
