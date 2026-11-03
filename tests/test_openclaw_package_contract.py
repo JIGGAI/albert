@@ -23,14 +23,24 @@ def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) ->
     descriptor = (ROOT / "src/albert/openclaw_package.json").read_bytes()
     with zipfile.ZipFile(wheel, "w") as archive:
         required = {
-            "albert/capture_installer.py", "albert/openclaw_adapter.py",
-            "albert/openclaw_adapter_trust.json", "albert/openclaw_package.json",
+            "albert/capture_installer.py",
+            "albert/openclaw_adapter.py",
+            "albert/host_targets.py",
+            "albert/host_targets/openclaw.json",
+            "albert/openclaw_adapter_trust.json",
+            "albert/openclaw_package.json",
             "albert/openclaw_plugin/index.js",
             "albert/openclaw_plugin/openclaw.plugin.json",
             "albert/openclaw_plugin/package.json",
         }
         for name in required:
-            archive.writestr(name, descriptor if name.endswith("openclaw_package.json") else b"x")
+            if name.endswith("openclaw_package.json"):
+                content = descriptor
+            elif name.endswith("host_targets/openclaw.json"):
+                content = (ROOT / "src" / name).read_bytes()
+            else:
+                content = b"x"
+            archive.writestr(name, content)
         archive.writestr("albert_memory-0.4.0.dist-info/METADATA", "Version: 0.4.0\n")
     provenance = tmp_path / "provenance.json"
     revision = "a" * 40

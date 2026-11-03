@@ -149,6 +149,15 @@ credential material are not sent to Albert.
 
 ## Compatibility evidence
 
+The released wheel includes the versioned
+`com.jiggai.albert.host-target` OpenClaw descriptor. The installer validates its
+package provenance, exact tested host release, supported range, full hook
+fidelity, owned install root, private credential transport, reload and uninstall
+commands, probes, and upgrade/rotation/revoke/rollback behavior before changing
+host state. Unknown schemas, versions, capabilities, target IDs, unsafe paths,
+foreign ownership, or contradictory hook declarations fail closed. Other host
+targets remain disabled until their own conformance tickets pass.
+
 | OpenClaw version | Evidence | Status |
 | --- | --- | --- |
 | 2026.9.6 | Typed lifecycle fixture and native manifest validation | Tested |

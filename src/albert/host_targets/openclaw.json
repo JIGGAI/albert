@@ -1,0 +1,45 @@
+{
+  "schema": "com.jiggai.albert.host-target",
+  "schema_version": 1,
+  "descriptor_version": "1.0.0",
+  "target_id": "openclaw",
+  "enabled": true,
+  "package": {
+    "distribution": "albert-memory",
+    "version": "0.4.0",
+    "artifact_provenance": "github-oidc-dsse+sha256"
+  },
+  "host": {
+    "family": "openclaw",
+    "tested": "2026.9.6",
+    "supported": ">=2026.9.6,<2027.0.0"
+  },
+  "hooks": {
+    "fidelity": "full",
+    "present": ["session_start", "user_prompt", "pre_compaction", "run_complete", "session_end"],
+    "absent": []
+  },
+  "install": {
+    "root": "~/.openclaw/albert",
+    "reload": ["openclaw", "plugins", "reload", "albert-memory"],
+    "uninstall": ["openclaw", "plugins", "uninstall", "albert-memory", "--force"]
+  },
+  "credentials": {
+    "acquisition": ["hidden_prompt", "private_stdin", "private_fd"],
+    "storage": "owned_file_0600",
+    "forbidden_surfaces": ["args", "ordinary_env", "host_config", "logs", "diagnostics", "artifacts"]
+  },
+  "ownership": {
+    "marker": "albert-memory",
+    "scope": "target-owned-tree-and-entry"
+  },
+  "lifecycle": {
+    "upgrade": true,
+    "rotate": true,
+    "revoke": true,
+    "rollback": true,
+    "direct_brain": true
+  },
+  "probes": ["host_config", "runtime", "brain_ready", "capture_recall"],
+  "capabilities": ["capture", "direct_brain", "recall", "reload", "revoke", "rollback", "rotate", "uninstall", "upgrade"]
+}

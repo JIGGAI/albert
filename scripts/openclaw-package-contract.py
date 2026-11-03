@@ -14,6 +14,8 @@ from pathlib import Path
 DESCRIPTOR = "albert/openclaw_package.json"
 REQUIRED = {
     "albert/capture_installer.py",
+    "albert/host_targets.py",
+    "albert/host_targets/openclaw.json",
     "albert/openclaw_adapter.py",
     "albert/openclaw_adapter_trust.json",
     "albert/openclaw_package.json",
@@ -52,11 +54,18 @@ def descriptor(raw: bytes) -> dict[str, object]:
         fail("OpenClaw compatibility declaration drifted")
     components = value.get("components")
     if not isinstance(components, dict) or set(components) != {
-        "connector", "adapter", "plugin_manifest", "plugin_runtime", "ownership_marker"
+        "connector",
+        "adapter",
+        "host_target",
+        "plugin_manifest",
+        "plugin_runtime",
+        "ownership_marker",
     }:
         fail("component inventory is incomplete")
     if components["ownership_marker"] != "albert-memory":
         fail("ownership marker drifted")
+    if components["host_target"] != "albert/host_targets/openclaw.json":
+        fail("host target descriptor drifted")
     return value
 
 
@@ -75,6 +84,15 @@ def source(root: Path) -> None:
         fail("plugin and package versions differ")
     if plugin.get("openclaw", {}).get("compat", {}).get("pluginApi") != ">=2026.9.6 <2027":
         fail("native plugin compatibility drifted")
+    target = json.loads((root / "src" / meta["components"]["host_target"]).read_text())
+    if (
+        target.get("schema") != "com.jiggai.albert.host-target"
+        or target.get("schema_version") != 1
+        or target.get("target_id") != "openclaw"
+        or target.get("package", {}).get("version") != meta["package_version"]
+        or target.get("host", {}).get("supported") != meta["supported_openclaw"]
+    ):
+        fail("host target identity or compatibility drifted")
 
 
 def wheel(path: Path) -> tuple[dict[str, object], str]:

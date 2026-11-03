@@ -24,6 +24,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
+from albert.host_targets import (
+    HostTargetError,
+    assert_owned_install_root,
+    negotiate_host_target,
+)
 from albert.openclaw_adapter import OPENCLAW_EVENTS
 
 app = typer.Typer(help="Connect supported agent hosts directly to an Albert Brain.")
@@ -501,6 +506,13 @@ def install_openclaw(
     cloud_metadata: dict[str, object] | None = None,
 ) -> None:
     version = _detect_openclaw(runner)
+    try:
+        target = negotiate_host_target(
+            "openclaw", version, {"capture", "recall", "reload", "rollback", "uninstall"}
+        )
+        assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
+    except HostTargetError as exc:
+        raise InstallError(str(exc)) from None
     token = _validate_secret(token)
     api_url = api_url.rstrip("/")
     if not api_url.startswith(("http://", "https://")):
@@ -546,6 +558,8 @@ def install_openclaw(
         marker = {
             "owner": "albert-memory",
             "host": "openclaw",
+            "host_target_schema": target.schema_version,
+            "host_target_version": target.descriptor_version,
             "api_url": api_url,
             "openclaw_version": ".".join(str(value) for value in version),
         }
@@ -650,7 +664,12 @@ def _load_credentials(paths: InstallPaths) -> dict[str, str]:
 
 
 def doctor_openclaw(paths: InstallPaths, *, smoke: bool = False, runner: Runner = _run) -> None:
-    _detect_openclaw(runner)
+    version = _detect_openclaw(runner)
+    try:
+        target = negotiate_host_target("openclaw", version, {"capture", "recall"})
+        assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
+    except HostTargetError as exc:
+        raise InstallError(str(exc)) from None
     values = _load_credentials(paths)
     _checked(runner, ["openclaw", "config", "validate"], "OpenClaw config validation")
     _checked(
@@ -668,6 +687,12 @@ def doctor_openclaw(paths: InstallPaths, *, smoke: bool = False, runner: Runner 
 
 
 def uninstall_openclaw(paths: InstallPaths, *, runner: Runner = _run) -> None:
+    version = _detect_openclaw(runner)
+    try:
+        target = negotiate_host_target("openclaw", version, {"uninstall"})
+        assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
+    except HostTargetError as exc:
+        raise InstallError(str(exc)) from None
     _load_credentials(paths)
     result = runner(["openclaw", "plugins", "uninstall", PLUGIN_ID, "--force"])
     if result.returncode:
@@ -707,6 +732,14 @@ def connect_openclaw(
         (parsed.scheme, parsed.netloc, base_path + "/manifest/v2", parsed.query, "")
     )
     version = _detect_openclaw(runner)
+    try:
+        negotiate_host_target(
+            "openclaw",
+            version,
+            {"capture", "recall", "reload", "rollback", "rotate", "revoke"},
+        )
+    except HostTargetError as exc:
+        raise InstallError(str(exc)) from None
     client = http or httpx.Client(timeout=15, follow_redirects=False)
     owns_client = http is None
     receipt: str | None = None
