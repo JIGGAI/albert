@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 from uuid import UUID
@@ -98,6 +99,33 @@ def _key_json(key: APIKey) -> dict[str, Any]:
         "expires_at": _timestamp(key.expires_at),
         "created_at": _timestamp(key.created_at),
     }
+
+
+@app.command("compat")
+def compat(
+    json_output: bool = typer.Option(
+        True, "--json", help="Print JSON (the only format; accepted for symmetry)"
+    ),
+) -> None:
+    """Print this image's runtime compatibility manifest as compact JSON.
+
+    Needs no environment and no database. Consumers decide rollback with: a
+    Brain migrated by image T can run image O iff every revision in
+    T.migrations.heads is in O.migrations.known_revisions.
+    """
+    from albert.compatibility import (
+        MigrationsUnavailable,
+        compatibility_error,
+        compatibility_manifest,
+    )
+
+    try:
+        manifest = compatibility_manifest()
+    except MigrationsUnavailable as exc:
+        error = compatibility_error("migrations_unavailable", str(exc))
+        sys.stderr.write(json.dumps(error, separators=(",", ":")) + "\n")
+        raise typer.Exit(code=2) from exc
+    sys.stdout.write(json.dumps(manifest, separators=(",", ":")) + "\n")
 
 
 class SchemaNotReady(RuntimeError):

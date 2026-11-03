@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.jiggai.com/albert/compatibility-v1.schema.json",
+  "title": "Albert runtime compatibility manifest v1",
+  "description": "Output of `albert-admin compat --json`. Success prints a manifest on stdout; failure prints an error document on stderr and exits non-zero. Rollback rule: a Brain migrated by image T can run image O iff every revision in T.migrations.heads is in O.migrations.known_revisions.",
+  "oneOf": [
+    { "$ref": "#/$defs/manifest" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "versionList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compatibility_manifest",
+        "package",
+        "package_version",
+        "contracts",
+        "migrations"
+      ],
+      "properties": {
+        "compatibility_manifest": { "const": "1" },
+        "package": { "const": "albert-memory" },
+        "package_version": { "type": "string", "minLength": 1 },
+        "contracts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rest_api", "capture", "export_format"],
+          "properties": {
+            "rest_api": { "$ref": "#/$defs/versionList" },
+            "capture": { "$ref": "#/$defs/versionList" },
+            "export_format": { "$ref": "#/$defs/versionList" }
+          }
+        },
+        "migrations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["heads", "known_revisions"],
+          "properties": {
+            "heads": {
+              "description": "Alembic head revision ids, sorted.",
+              "$ref": "#/$defs/versionList"
+            },
+            "known_revisions": {
+              "description": "Every revision id shipped in this image, base to head.",
+              "$ref": "#/$defs/versionList"
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compatibility_manifest", "error"],
+      "properties": {
+        "compatibility_manifest": { "const": "1" },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string", "minLength": 1, "examples": ["migrations_unavailable"] },
+            "message": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

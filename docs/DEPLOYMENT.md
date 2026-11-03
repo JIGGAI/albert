@@ -301,6 +301,47 @@ curl --fail http://127.0.0.1:8080/v1/health/ready
 Review release notes and migrations before every upgrade. Test restores on a
 separate environment periodically.
 
+### Compatibility manifest (v1)
+
+Every image publishes what it supports, so automation can decide upgrades and
+rollbacks without inspecting Alembic or the image layout:
+
+```bash
+docker run --rm --entrypoint albert-admin ghcr.io/jiggai/albert@sha256:... compat --json
+```
+
+The command needs no environment variables and no database. It prints one line
+of compact JSON (`--json` is accepted for symmetry; JSON is the only format),
+described by `contracts/compatibility-v1.schema.json`:
+
+```json
+{"compatibility_manifest":"1","package":"albert-memory","package_version":"0.4.0","contracts":{"rest_api":["v1"],"capture":["1"],"export_format":["albert-export-v1"]},"migrations":{"heads":["0014"],"known_revisions":["0001","0002","0003","0004","0005","0006","0007","0008","0009","0010","0011","0012","0013","0014"]}}
+```
+
+- `contracts.rest_api`, `contracts.capture`, `contracts.export_format`: the REST
+  API, capture contract, and `/v1/export` bundle format versions this image
+  serves.
+- `migrations.heads`: the Alembic head revision(s), sorted.
+- `migrations.known_revisions`: every revision the image ships, base to head.
+
+**Rollback rule:** a database migrated by image T can run image O if and only if
+every revision in T's `migrations.heads` appears in O's
+`migrations.known_revisions`. Otherwise restore the pre-upgrade backup instead
+of rolling back.
+
+If the image cannot read its migrations it exits non-zero, prints nothing on
+stdout, and writes
+`{"compatibility_manifest":"1","error":{"code":"migrations_unavailable","message":"..."}}`
+on stderr; never treat that as a partial manifest. The image locates migrations
+through `/app/alembic.ini` (its `script_location`, resolved relative to the ini
+file); `ALBERT_MIGRATIONS_DIR` overrides this for custom layouts.
+
+Stability: within manifest version `1`, existing fields are never renamed,
+removed, or retyped. New fields (for example additional contract entries) may
+be added and the schema extended to match, so consumers should ignore keys they
+do not recognise. Any incompatible change ships as `compatibility_manifest`
+`"2"` with a new schema.
+
 ## Identity administration
 
 Use `albert-admin create-workspace`, `create-principal`, `list-principals`,
