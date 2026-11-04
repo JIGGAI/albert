@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "package": "albert-memory",
+  "package_version": "0.4.0",
+  "family": "codex",
+  "owner": "JIGGAI/albert",
+  "supported_codex": ">=0.154.0,<0.155.0",
+  "tested_codex": "0.154.0",
+  "hook_fidelity": "reduced-no-session-end-or-failure-hook",
+  "install_root": "~/.codex/albert",
+  "provenance": "github-oidc-dsse+sha256",
+  "components": {
+    "adapter": "albert.codex_adapter:main",
+    "connector": "albert.codex_lifecycle:app",
+    "hooks": "albert/codex_hooks/hooks.json",
+    "host_target": "albert/host_targets/codex.json",
+    "ownership_marker": "albert-memory"
+  }
+}

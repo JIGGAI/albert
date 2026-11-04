@@ -79,7 +79,7 @@ def test_malicious_or_incomplete_descriptors_fail_closed(mutation, match):
 
 def test_unknown_target_version_and_capability_fail_without_loading_a_fallback():
     with pytest.raises(HostTargetError, match="unknown or disabled"):
-        load_host_target("codex")
+        load_host_target("cursor")
     with pytest.raises(HostTargetError, match="version is unsupported"):
         negotiate_host_target("openclaw", (2027, 0, 0), {"capture"})
     with pytest.raises(HostTargetError, match="lacks required"):
