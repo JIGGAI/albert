@@ -1,6 +1,6 @@
 # Albert
 
-**Self-hosted memory for AI agents: remembers what matters, recalls it by meaning, keyword and relationship, and shows you exactly why.**
+**Shared memory for AI agents that's safe to trust: self-hosted, multi-tenant, and built so untrusted content can't steer your agents.**
 
 [![CI](https://github.com/JIGGAI/albert/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JIGGAI/albert/actions/workflows/ci.yml)
 ![Version](https://img.shields.io/badge/version-0.4.0-blue)
@@ -22,19 +22,26 @@ and see which backend found each hit and why it ranked where it did.
 
 ![The memory map: clusters of related memories with one open in the reading pane](docs/images/console-map.png)
 
-- **One service, any agent.** REST, MCP and native hooks reach the same API and
-  the same authorization rules.
+## Highlights
+
+- **Safe to trust.** Every memory records how far its source is trusted. Every
+  write path scans for injected instructions and quarantines them before any
+  agent can recall them, credential-shaped text is refused, and recall labels
+  what is unverified. Clients can lower a memory's trust, never raise it.
+- **Memory for teams, not just users.** Organizations, workspaces and shared
+  organization-wide memories, with a capability-scoped key per agent and an
+  audit trail that tells a human's change from an agent's.
+- **No model required; your data stays yours.** The baseline runs on PostgreSQL
+  alone, with zero model calls to store or recall. Embedding models, an LLM
+  classifier and Graphiti are opt-in upgrades, local or hosted.
+- **Automatic memory where developers work.** Native hooks for Claude Code,
+  Codex, Cursor and OpenClaw recall on every prompt and capture as work happens,
+  failing open through an encrypted local queue.
+- **Explainable retrieval.** For any recall you can see which retriever found
+  each memory, how it scored, and which scope it came from.
 - **Hybrid recall.** Keyword search, vector similarity and the knowledge graph
-  each rank candidates; reciprocal-rank fusion merges them. If one backend is
-  down, the others still answer and the response says so.
-- **Trust is part of the data.** Every memory carries its source trust. Content
-  that looks like an injected instruction is quarantined before any agent sees
-  it, and credential-shaped text is refused outright.
-- **Nothing is a black box.** A flight recorder captures every request and job;
-  the console replays them.
-- **Yours.** PostgreSQL holds everything. Multi-tenant, with workspaces,
-  capability-scoped keys, sensitivity levels on every path, an audit trail,
-  export and import.
+  each rank candidates; reciprocal-rank fusion merges them, and if one backend
+  is down the others still answer.
 
 ---
 
@@ -450,8 +457,22 @@ docs/                     guides (see below)
 
 ## Configuration
 
-PostgreSQL with embeddings is the baseline every install has; the rest is
-configuration ([graph backends](docs/GRAPH_BACKENDS.md), [providers](docs/PROVIDERS.md)).
+PostgreSQL is the baseline every install has; the rest is configuration
+([graph backends](docs/GRAPH_BACKENDS.md), [providers](docs/PROVIDERS.md)).
+
+### Stack profiles
+
+Albert behaves differently depending on what is enabled, so every measurement
+and comparison names the stack it came from, with the exact embedding model,
+LLM and Albert commit noted alongside:
+
+| Profile | Stack | Model calls |
+|---|---|---|
+| **Albert** | PostgreSQL full text, the development hashing embedder, regex graph in PostgreSQL | None |
+| **Albert-E** | Albert + a real embedding model (local sentence-transformers or OpenAI-compatible) | Embeddings |
+| **Albert-F** | Albert-E + FalkorDB as the graph store | Embeddings |
+| **Albert-N** | Albert-E + Neo4j as the graph store | Embeddings |
+| **Albert-G** | Albert-E + the Graphiti graph builder, on FalkorDB (**Albert-GN** on Neo4j) | Embeddings, plus an LLM per write |
 
 | Choice | Options | Setting |
 |---|---|---|
