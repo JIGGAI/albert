@@ -445,6 +445,7 @@ def _brain_check(
     workspace_id: str | None,
     *,
     smoke: bool,
+    event_classes: frozenset[str] = OPENCLAW_EVENTS,
 ) -> None:
     base_url = api_url.rstrip("/")
     try:
@@ -462,7 +463,7 @@ def _brain_check(
                     base_url,
                     token,
                     queue,
-                    local_event_classes=OPENCLAW_EVENTS,
+                    local_event_classes=event_classes,
                     client=http,
                 )
                 if not client.negotiate():

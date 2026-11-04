@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "package": "albert-memory",
+  "package_version": "0.4.0",
+  "family": "claude-code",
+  "owner": "JIGGAI/albert",
+  "supported_claude": ">=2.1.78,<2.2.0",
+  "tested_claude": "2.1.312",
+  "hook_fidelity": "full-with-best-effort-failure-hook",
+  "install_root": "~/.claude/albert",
+  "rollback_source_template": "https://github.com/JIGGAI/albert/tree/{source_revision}/src/albert/claude_plugin",
+  "components": {
+    "adapter": "albert.claude_adapter:main",
+    "connector": "albert.claude_lifecycle:app",
+    "host_target": "albert/host_targets/claude-code.json",
+    "ownership_marker": "albert-memory",
+    "plugin_manifest": "albert/claude_plugin/.claude-plugin/plugin.json"
+  }
+}

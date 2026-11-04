@@ -217,7 +217,7 @@ def validate_host_target(payload: object) -> HostTarget:
 
 def load_host_target(target_id: str) -> HostTarget:
     """Load only explicitly shipped targets; unknown targets fail closed."""
-    if target_id != "openclaw":
+    if target_id not in {"openclaw", "claude-code"}:
         raise HostTargetError(f"unknown or disabled host target: {target_id}")
     try:
         payload = json.loads((TARGET_PATH / f"{target_id}.json").read_text(encoding="utf-8"))

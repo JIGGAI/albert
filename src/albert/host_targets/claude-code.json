@@ -1,0 +1,45 @@
+{
+  "schema": "com.jiggai.albert.host-target",
+  "schema_version": 1,
+  "descriptor_version": "1.0.0",
+  "target_id": "claude-code",
+  "enabled": true,
+  "package": {
+    "distribution": "albert-memory",
+    "version": "0.4.0",
+    "artifact_provenance": "github-oidc-dsse+sha256"
+  },
+  "host": {
+    "family": "claude-code",
+    "tested": "2.1.312",
+    "supported": ">=2.1.78,<2.2.0"
+  },
+  "hooks": {
+    "fidelity": "reduced",
+    "present": ["session_start", "user_prompt", "pre_compaction", "run_complete", "session_end"],
+    "absent": ["reliable_failure_delivery"]
+  },
+  "install": {
+    "root": "~/.claude/albert",
+    "reload": ["claude", "plugin", "validate", "--strict"],
+    "uninstall": ["claude", "plugin", "uninstall", "albert-memory", "--scope", "user"]
+  },
+  "credentials": {
+    "acquisition": ["hidden_prompt", "private_stdin", "private_fd"],
+    "storage": "owned_file_0600",
+    "forbidden_surfaces": ["args", "ordinary_env", "host_config", "logs", "diagnostics", "artifacts"]
+  },
+  "ownership": {
+    "marker": "albert-memory",
+    "scope": "target-owned-tree-and-entry"
+  },
+  "lifecycle": {
+    "upgrade": true,
+    "rotate": true,
+    "revoke": true,
+    "rollback": true,
+    "direct_brain": true
+  },
+  "probes": ["host_config", "runtime", "brain_ready", "capture_recall"],
+  "capabilities": ["capture", "direct_brain", "recall", "reload", "revoke", "rollback", "rotate", "uninstall", "upgrade"]
+}
