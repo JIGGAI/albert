@@ -110,6 +110,31 @@ def test_failed_replacement_rolls_back_exact_private_state(tmp_path: Path) -> No
     assert not list(tmp_path.glob(".albert.*-*"))
 
 
+def test_reconnect_after_revoke_preserves_queue_key_and_state(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    _install(paths, runner, "original-secret")
+    original = json.loads(paths.credentials.read_text())
+    queue_state = b"encrypted queue state"
+    claude_state = b"fresh-session recall state"
+    paths.queue.write_bytes(queue_state)
+    (paths.root / "capture.claude-state.db").write_bytes(claude_state)
+
+    revoke_claude(paths)
+    revoked_marker = json.loads(paths.marker.read_text())
+    assert revoked_marker["reconnect_queue_key"] == original["ALBERT_CAPTURE_QUEUE_KEY"]
+
+    _install(paths, runner, "replacement-secret")
+
+    reconnected = json.loads(paths.credentials.read_text())
+    assert reconnected["ALBERT_CAPTURE_QUEUE_KEY"] == original["ALBERT_CAPTURE_QUEUE_KEY"]
+    assert reconnected["ALBERT_CAPTURE_TOKEN"] == "replacement-secret"
+    assert paths.queue.read_bytes() == queue_state
+    assert (paths.root / "capture.claude-state.db").read_bytes() == claude_state
+    assert "revoked" not in json.loads(paths.marker.read_text())
+    assert "reconnect_queue_key" not in json.loads(paths.marker.read_text())
+
+
 def test_malicious_plugin_fails_without_disturbing_existing_install(tmp_path: Path) -> None:
     paths = ClaudeInstallPaths(tmp_path / "albert")
     runner = ClaudeRunner()

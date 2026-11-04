@@ -205,8 +205,20 @@ def install_claude(
     api_url = api_url.rstrip("/")
     if not api_url.startswith(("http://", "https://")):
         raise InstallError("Brain URL must use http:// or https://")
-    previous = _load_install(paths)[1] if paths.root.exists() else {}
-    queue_key = previous.get("ALBERT_CAPTURE_QUEUE_KEY") or generate_queue_key()
+    previous_marker: dict = {}
+    previous_credentials: dict = {}
+    if paths.root.exists():
+        previous_marker, previous_credentials = _load_install(
+            paths, require_credentials=False
+        )
+        if not previous_credentials and not previous_marker.get("revoked"):
+            raise InstallError("Claude Code installation credentials are missing")
+    queue_key = previous_credentials.get("ALBERT_CAPTURE_QUEUE_KEY")
+    if not queue_key and previous_marker.get("revoked"):
+        queue_key = previous_marker.get("reconnect_queue_key")
+        if not isinstance(queue_key, str) or not queue_key:
+            raise InstallError("revoked Claude Code installation reconnect state is invalid")
+    queue_key = queue_key or generate_queue_key()
     check = brain_check or (
         lambda url, secret, key, workspace: _brain_check(
             url, secret, key, workspace, smoke=True, event_classes=CLAUDE_EVENTS
@@ -319,10 +331,11 @@ def revoke_claude(paths: ClaudeInstallPaths) -> None:
         assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None
-    marker, _ = _load_install(paths)
-    paths.credentials.unlink()
+    marker, values = _load_install(paths)
+    marker["reconnect_queue_key"] = values["ALBERT_CAPTURE_QUEUE_KEY"]
     marker["revoked"] = True
     _write_private(paths.marker, json.dumps(marker, sort_keys=True) + "\n", 0o600)
+    paths.credentials.unlink()
 
 
 def uninstall_claude(paths: ClaudeInstallPaths, *, runner: Runner = _run) -> None:
