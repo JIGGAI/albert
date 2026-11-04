@@ -138,6 +138,52 @@ def main() -> None:
                 "pgvector retrieval did not return the enriched memory; "
                 f"matching_backends={backends}, degraded={results.degraded}"
             )
+        # Keyword search matches any query term: a natural-language prompt must
+        # find a memory sharing only some of its words, long prompts keep their
+        # rarest terms, and an all-stopword query is simply empty.
+        coffee = create_memory(
+            session,
+            auth,
+            MemoryCreate(
+                subject="Morning routine",
+                content="Still doing Blue Bottle if I'm out early enough.",
+                project_ref="postgres-smoke",
+            ),
+        )
+        session.commit()
+        prompts = {
+            "sentence": "I'm out early. Please order one small latte for pickup.",
+            "long": (
+                "Before the quarterly planning review tomorrow morning, could you please "
+                "order one small latte for pickup since I'm out early, and also remind me "
+                "about the budget spreadsheet, the hiring plan, and the onboarding checklist"
+            ),
+        }
+        for label, prompt in prompts.items():
+            found = hybrid_search(
+                session,
+                organization_id=organization.id,
+                workspace_id=workspace.id,
+                request=SearchRequest(query=prompt, project_ref="postgres-smoke", limit=5),
+                allowed_sensitivities=["public", "internal"],
+            )
+            lexical = [
+                hit
+                for hit in found.hits
+                if hit.memory_id == coffee.id and "lexical" in hit.backends
+            ]
+            if not lexical:
+                raise RuntimeError(f"keyword search missed a partial-term match ({label} query)")
+        stopwords = hybrid_search(
+            session,
+            organization_id=organization.id,
+            workspace_id=workspace.id,
+            request=SearchRequest(query="the and of to", project_ref="postgres-smoke", limit=5),
+            allowed_sensitivities=["public", "internal"],
+        )
+        if any("lexical" in hit.backends for hit in stopwords.hits):
+            raise RuntimeError("an all-stopword query returned keyword matches")
+
         relationships = query_relationships(
             session,
             organization_id=organization.id,

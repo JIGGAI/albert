@@ -51,6 +51,56 @@ def _scope_conditions(
     return conditions
 
 
+# A memory matches when it shares any query term; ts_rank_cd then ranks by how
+# many terms it covers and how close together they are. plainto_tsquery ANDs
+# every term, so a natural-language prompt (what recall hooks send) matched
+# nothing. ts_rank_cd has no IDF and ranks every OR match, so a long query keeps
+# only its rarest terms that occur in this tenant's memories (Hindsight caps
+# terms the same way after long OR queries caused production timeouts).
+MAX_LEXICAL_TERMS = 16
+# Document frequency is counted up to this cap: enough to rank rare terms
+# exactly while a common term costs at most this many index hits.
+TERM_FREQUENCY_CAP = 1000
+
+
+def _rarest_lexemes(session: Session, lexemes: list[str], organization_id: UUID) -> list[str]:
+    """Keep the MAX_LEXICAL_TERMS rarest lexemes that occur in this organization."""
+    if len(lexemes) <= MAX_LEXICAL_TERMS:
+        return lexemes
+    rows = session.execute(
+        text(
+            "SELECT term, (SELECT count(*) FROM (SELECT 1 FROM memories AS m "
+            "WHERE m.organization_id = :organization_id AND m.status = 'active' "
+            "AND m.search_vector @@ plainto_tsquery('simple', term) LIMIT :cap) AS hits) "
+            "FROM unnest(CAST(:terms AS text[])) AS term"
+        ),
+        {"organization_id": organization_id, "terms": lexemes, "cap": TERM_FREQUENCY_CAP},
+    ).all()
+    # A term no memory contains can only waste a slot; longer terms break ties.
+    present = [(int(count), term) for term, count in rows if int(count) > 0]
+    present.sort(key=lambda item: (item[0], -len(item[1]), item[1]))
+    return [term for _count, term in present[:MAX_LEXICAL_TERMS]]
+
+
+def _any_term_query(session: Session, query: str, organization_id: UUID):  # type: ignore[no-untyped-def]
+    """OR of the query's English lexemes, or None when none can match."""
+    lexemes = session.scalar(
+        text("SELECT tsvector_to_array(to_tsvector('english', :query))"), {"query": query}
+    )
+    if not lexemes:
+        return None
+    terms = _rarest_lexemes(session, list(lexemes), organization_id)
+    if not terms:
+        return None
+    # Lexemes are already normalized; the 'simple' config keeps them unchanged.
+    combined = func.plainto_tsquery(literal_column("'simple'::regconfig"), terms[0])
+    for term in terms[1:]:
+        combined = combined.op("||")(
+            func.plainto_tsquery(literal_column("'simple'::regconfig"), term)
+        )
+    return combined
+
+
 def _lexical_search(
     session: Session,
     *,
@@ -66,7 +116,9 @@ def _lexical_search(
         # with a GIN index; matching on the column keeps the index usable and
         # avoids recomputing to_tsvector for every ranked row.
         document = literal_column("memories.search_vector")
-        query = func.plainto_tsquery(literal_column("'english'::regconfig"), request.query)
+        query = _any_term_query(session, request.query, organization_id)
+        if query is None:
+            return []
         rank = func.ts_rank_cd(document, query)
         statement = (
             select(Memory, rank.label("lexical_rank"))
