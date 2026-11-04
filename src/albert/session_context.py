@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from albert.schemas import SearchHit, SearchResponse, SessionContextRequest, SessionContextResponse
 
 _TOKEN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
-_TRUST_SCORE = {"trusted": 2, "verified": 1, "untrusted": 0}
 
 
 def count_tokens(value: str) -> int:
@@ -30,18 +29,45 @@ def _timestamp(value: Any) -> float:
         return 0.0
 
 
-def _rank_key(hit: SearchHit, request: SessionContextRequest) -> tuple[Any, ...]:
+# Recall orders by relevance: the fused search score, nudged by bounded
+# adjustments. Trust, confidence and recency used to be strict sort keys ahead
+# of the score, so recall returned the newest candidates rather than the most
+# relevant ones; as multipliers they can reorder near-ties but never bury a
+# clearly better match. Scope matches (task, branch, project) remain tiers.
+_TRUST_FACTOR = {"trusted": 1.10, "verified": 1.0, "untrusted": 0.90}
+CONFIDENCE_WEIGHT = 0.10  # confidence 0 costs 10%, confidence 1 costs nothing
+RECENCY_BOOST = 0.10  # a memory valid from today gains up to 10% ...
+RECENCY_WINDOW_DAYS = 365.0  # ... fading linearly to nothing over a year
+DIVERSITY_WINDOW = 3  # memory types are diversified among the top few only
+
+
+def _scope_tier(hit: SearchHit, request: SessionContextRequest) -> tuple[int, int, int]:
     metadata = hit.metadata
-    trust = str(metadata.get("capture_source_trust", "verified"))
     return (
         int(bool(request.task_ref) and metadata.get("task_ref") == request.task_ref),
         int(bool(request.branch_ref) and _branch(hit) == request.branch_ref),
         int(bool(request.project_ref) and metadata.get("project_ref") == request.project_ref),
-        _TRUST_SCORE.get(trust, 0),
-        float(metadata.get("confidence", 0.0)),
-        _timestamp(metadata.get("valid_from")),
-        float(hit.score),
-        str(hit.memory_id or metadata.get("relationship_id", "")),
+    )
+
+
+def _relevance(hit: SearchHit, now: float) -> float:
+    metadata = hit.metadata
+    trust = _TRUST_FACTOR.get(str(metadata.get("capture_source_trust", "verified")), 1.0)
+    confidence = min(max(float(metadata.get("confidence", 1.0)), 0.0), 1.0)
+    confidence_factor = 1.0 - CONFIDENCE_WEIGHT * (1.0 - confidence)
+    valid_from = _timestamp(metadata.get("valid_from"))
+    recency = 1.0
+    if valid_from:
+        age_days = max(0.0, (now - valid_from) / 86400)
+        recency += RECENCY_BOOST * max(0.0, 1.0 - age_days / RECENCY_WINDOW_DAYS)
+    return float(hit.score) * trust * confidence_factor * recency
+
+
+def _rank_key(hit: SearchHit, request: SessionContextRequest, now: float) -> tuple[Any, ...]:
+    return (
+        *_scope_tier(hit, request),
+        _relevance(hit, now),
+        str(hit.memory_id or hit.metadata.get("relationship_id", "")),
     )
 
 
@@ -53,23 +79,25 @@ def _eligible(hit: SearchHit, request: SessionContextRequest) -> bool:
 
 
 def _ordered(hits: list[SearchHit], request: SessionContextRequest) -> list[SearchHit]:
+    now = datetime.now(UTC).timestamp()
     remaining = sorted(
         (hit for hit in hits if _eligible(hit, request)),
-        key=lambda hit: _rank_key(hit, request),
+        key=lambda hit: _rank_key(hit, request, now),
         reverse=True,
     )
     ordered: list[SearchHit] = []
     seen_types: set[str] = set()
     while remaining:
-        best_tier = _rank_key(remaining[0], request)[:3]
-        tier = [hit for hit in remaining if _rank_key(hit, request)[:3] == best_tier]
+        best_tier = _scope_tier(remaining[0], request)
+        window = [hit for hit in remaining if _scope_tier(hit, request) == best_tier]
+        window = window[:DIVERSITY_WINDOW]
         diverse = next(
             (
                 hit
-                for hit in tier
+                for hit in window
                 if str(hit.metadata.get("memory_type", "relationship")) not in seen_types
             ),
-            tier[0],
+            window[0],
         )
         remaining.remove(diverse)
         ordered.append(diverse)
