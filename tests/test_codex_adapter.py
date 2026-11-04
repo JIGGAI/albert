@@ -4,11 +4,16 @@ import json
 import sys
 from io import StringIO
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
+from fastapi.testclient import TestClient
 
+from albert.api import app
 from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
 from albert.codex_adapter import CODEX_EVENTS, CodexAdapter, CodexState, main
+
+from .conftest import create_identity, drain_jobs
 
 
 def make_adapter(
@@ -54,7 +59,13 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
                 },
             )
         if request.url.path == "/v1/capture/sessions":
-            return httpx.Response(201, json={"id": "server-session"})
+            return httpx.Response(
+                201,
+                json={
+                    "id": "server-session",
+                    "provenance": {"project_id": "prj_brain_normalized"},
+                },
+            )
         return httpx.Response(201, json={"id": "stored"})
 
     adapter, _ = make_adapter(tmp_path, httpx.MockTransport(handler))
@@ -101,6 +112,10 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
     assert checkpoints[2]["idempotency_key"] == checkpoints[3]["idempotency_key"]
     assert checkpoints[0]["idempotency_key"] != checkpoints[2]["idempotency_key"]
     assert not any(path.endswith("/end") for path, _ in requests)
+    recall_requests = [body for path, body in requests if path == "/v1/context/session-start"]
+    assert recall_requests
+    assert all(body["project_ref"] == "prj_brain_normalized" for body in recall_requests)
+    assert all(body["project_ref"] != tmp_path.name for body in recall_requests)
 
 
 def test_codex_outage_is_fail_open_and_secret_is_never_queued(tmp_path: Path):
@@ -127,6 +142,71 @@ def test_codex_outage_is_fail_open_and_secret_is_never_queued(tmp_path: Path):
     }
     assert all(secret not in str(queue.decrypt(row["payload"])) for row in queue.ready(100))
     assert secret.encode() not in (tmp_path / "capture.db").read_bytes()
+
+
+def test_codex_capture_is_recalled_in_a_fresh_session_by_brain_project_id(tmp_path: Path):
+    token, _organization, _workspace = create_identity("Codex project identity")
+    http = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+    profile_key = f"codex-project-identity-{uuid4().hex}"
+    created = http.post(
+        "/v1/capture/profiles",
+        json={
+            "profile_key": profile_key,
+            "version": 1,
+            "allowed_event_classes": sorted(CODEX_EVENTS),
+            "metadata_allowlists": {},
+            "event_bounds": {},
+            "sensitivity_floor": "internal",
+            "source_trust": "verified",
+            "retention_days": 14,
+            "raw_body_policy": "deny",
+            "deny_reasons": {},
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    def adapter(name: str) -> CodexAdapter:
+        queue = EncryptedQueue(
+            tmp_path / f"{name}-capture.db", generate_queue_key(), f"codex:{name}"
+        )
+        client = CaptureClient(
+            "http://testserver",
+            token,
+            queue,
+            profile_key=profile_key,
+            local_event_classes=CODEX_EVENTS,
+            client=http,  # type: ignore[arg-type]
+        )
+        state_name = name.split("-", 1)[0]
+        return CodexAdapter(client, CodexState(tmp_path / f"{state_name}-state.db"))
+
+    first = adapter("first")
+    first.handle(envelope("SessionStart", tmp_path, session_id="first-session"))
+    first.handle(
+        envelope(
+            "Stop",
+            tmp_path,
+            session_id="first-session",
+            last_assistant_message="Project identity regression marker: SAPPHIRE ELM 0460",
+        )
+    )
+    drain_jobs()
+
+    adapter("fresh-start").handle(
+        envelope("SessionStart", tmp_path, session_id="fresh-session")
+    )
+    fresh = adapter("fresh-prompt").handle(
+        envelope(
+            "UserPromptSubmit",
+            tmp_path,
+            session_id="fresh-session",
+            prompt="Recall the SAPPHIRE ELM project marker.",
+        )
+    )
+
+    context = fresh["hookSpecificOutput"]["additionalContext"]
+    assert "SAPPHIRE ELM 0460" in context
+    assert "--- CITATIONS ---\n- [1]" in context
 
 
 def test_codex_fixture_declares_only_supported_hooks_and_reduced_fidelity():

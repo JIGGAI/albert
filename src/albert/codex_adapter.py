@@ -123,11 +123,13 @@ class CodexAdapter:
 
     def _start(self, event: dict[str, Any]) -> DeliveryResult:
         session = self._capture_session(event)
+        provenance = self._provenance(event)
+        provenance.pop("event", None)
         return self.client.start_session(
             session,
             session,
             workspace_id=self.workspace_id,
-            provenance=self._provenance(event),
+            provenance=provenance,
         )
 
     @classmethod
@@ -183,7 +185,7 @@ class CodexAdapter:
             project = str(vcs.get("project", "unknown"))[:300]
             context = self.client.recall(
                 f"Codex session context for project {project}",
-                project_ref=project,
+                project_ref=self.client.session_project_ref(session),
                 branch_ref=str(vcs.get("branch")) if vcs.get("branch") else None,
             )
             response = self._context_response(hook, context)
@@ -200,7 +202,7 @@ class CodexAdapter:
             vcs = self._vcs(event)
             context = self.client.recall(
                 screened.content,
-                project_ref=str(vcs.get("project")) if vcs.get("project") else None,
+                project_ref=self.client.session_project_ref(session),
                 branch_ref=str(vcs.get("branch")) if vcs.get("branch") else None,
             )
             response = self._context_response(hook, context)
