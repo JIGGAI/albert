@@ -35,6 +35,7 @@ from albert.memory_safety import (
     apply_memory_safety,
     preserve_safety_metadata,
     sanitize_client_metadata,
+    trust_level,
 )
 from albert.models import (
     AuditEvent,
@@ -1195,6 +1196,19 @@ def enrich_memory(
     refresh_links_for_memory(session, memory)
 
 
+def _episode_trust(episode: Episode) -> str:
+    """Source trust for a memory derived from an episode.
+
+    Capture episodes carry the trust their capture profile assigned. Any other
+    episode (documents, connector content, memory_ingest) is client-submitted:
+    the client may lower it to untrusted, as for direct writes, but never raise
+    it above verified.
+    """
+    if episode.source_type == "automatic_capture":
+        return trust_level(episode.extra, default="untrusted")
+    return "untrusted" if trust_level(episode.extra) == "untrusted" else "verified"
+
+
 def enrich_episode(session: Session, episode_id: UUID) -> None:
     episode = session.get(Episode, episode_id)
     if episode is None or episode.deleted_at is not None or episode.enrichment_status == "complete":
@@ -1237,6 +1251,19 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
         return
     if episode.content_hash != request.content_fingerprint:
         return
+    confidence, metadata = apply_memory_safety(
+        episode.content,
+        result.confidence,
+        {
+            "derived_from_episode": True,
+            **(
+                {"provenance": episode.extra["provenance"]}
+                if isinstance(episode.extra.get("provenance"), dict)
+                else {}
+            ),
+            "capture_source_trust": _episode_trust(episode),
+        },
+    )
     memory = Memory(
         episode_id=episode.id,
         organization_id=episode.organization_id,
@@ -1249,16 +1276,9 @@ def enrich_episode(session: Session, episode_id: UUID) -> None:
         content=episode.content,
         memory_type=result.memory_type,
         sensitivity=_highest_sensitivity(episode.sensitivity, result.sensitivity),
-        confidence=result.confidence,
+        confidence=confidence,
         valid_from=episode.occurred_at,
-        metadata_={
-            "derived_from_episode": True,
-            **(
-                {"provenance": episode.extra["provenance"]}
-                if isinstance(episode.extra.get("provenance"), dict)
-                else {}
-            ),
-        },
+        metadata_=metadata,
     )
     session.add(memory)
     # The episode holds the same text, so it must be at least as hard to read:
