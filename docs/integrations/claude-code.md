@@ -51,7 +51,8 @@ Albert context through Claude Code's documented `additionalContext` field. Each
 submitted prompt is screened, recorded as a `user_goal`, and used as the recall
 query, so the turn also receives context relevant to what was just asked. A
 prompt containing detected secret material is neither recorded nor sent for
-recall.
+recall. Recall includes automatically captured memories; each item is labeled
+with its source trust (`[verified]`, `[untrusted]`) and verified items rank first.
 Pre-compaction and session-end checkpoints are idempotent. Turn outcomes use
 the documented bounded `last_assistant_message`; the adapter never reads
 `transcript_path`, captures hidden prompts, or sends `custom_instructions`,

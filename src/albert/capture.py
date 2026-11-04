@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -80,6 +80,10 @@ class CapturePolicy:
     secret_policy: str
     derivative_policy: str
     deny_reasons: dict[str, str]
+    event_source_trust: dict[str, str] = field(default_factory=dict)
+
+    def trust_for(self, event_class: str) -> str:
+        return self.event_source_trust.get(event_class, self.source_trust)
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,11 @@ def _default_policy() -> CapturePolicy:
         secret_policy="reject",
         derivative_policy="cascade",
         deny_reasons={},
+        # What the user typed is the least likely place for injected text and
+        # is where the user's facts live; assistant replies and tool outcomes
+        # stay untrusted. Operators whose "users" may be third parties (for
+        # example public channel bots) can publish a profile without this.
+        event_source_trust={"user_goal": "verified"},
     )
 
 
@@ -127,6 +136,7 @@ def _profile_policy(value: CaptureProfile) -> CapturePolicy:
         secret_policy=value.secret_policy,
         derivative_policy=value.derivative_policy,
         deny_reasons=value.deny_reasons,
+        event_source_trust=dict(value.event_source_trust or {}),
     )
 
 
@@ -451,7 +461,7 @@ def _stage_event(
             "capture_event_class": data.event_class,
             "capture_profile_key": policy.profile_key,
             "capture_profile_version": policy.version,
-            "capture_source_trust": policy.source_trust,
+            "capture_source_trust": policy.trust_for(data.event_class),
             "capture_retention_days": policy.retention_days,
             "provenance": provenance,
         },
@@ -476,7 +486,7 @@ def _stage_event(
         profile_version=policy.version,
         policy_decision="allow",
         sensitivity=data.sensitivity,
-        source_trust=policy.source_trust,
+        source_trust=policy.trust_for(data.event_class),
         retention_days=policy.retention_days,
         body_kind=data.body_kind,
         screening_decision=result.screening_decision,
@@ -511,6 +521,7 @@ def _profile_read(value: CaptureProfile) -> CaptureProfileRead:
         secret_policy=value.secret_policy,
         derivative_policy=value.derivative_policy,
         deny_reasons=value.deny_reasons,
+        event_source_trust=dict(value.event_source_trust or {}),
         created_at=_as_utc(value.created_at),
     )
 
@@ -560,6 +571,7 @@ def create_profile(
         secret_policy=data.secret_policy,
         derivative_policy=data.derivative_policy,
         deny_reasons=data.deny_reasons,
+        event_source_trust=data.event_source_trust,
     )
     session.add(profile)
     try:

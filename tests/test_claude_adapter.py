@@ -77,6 +77,9 @@ def test_claude_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path)
         body["query"] for path, body in requests if path == "/v1/context/session-start"
     ]
     assert recall_queries[-1] == "Implement the adapter"
+    assert {
+        body["trust_policy"] for path, body in requests if path == "/v1/context/session-start"
+    } == {"label_untrusted"}
     event_requests = [body for path, body in requests if path.endswith("/events")]
     unique_events = {body["idempotency_key"]: body for body in event_requests}
     assert [item["event_class"] for item in unique_events.values()] == [

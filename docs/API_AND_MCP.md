@@ -217,7 +217,18 @@ its own, a session uses `safe-default`: the classes `session_started`,
 `user_goal`, `assistant_outcome`, `selected_tool_outcome`, `decision`,
 `correction`, `vcs_checkpoint`, `pre_compaction_checkpoint`, `session_ended`
 and `failure_summary`, no metadata fields, 64,000-character bounds,
-`internal` floor, 30-day retention, raw bodies denied, secrets rejected.
+`internal` floor, 30-day retention, raw bodies denied, secrets rejected, and
+source trust `untrusted` except `user_goal`, which is `verified`.
+
+**Source trust.** A profile's `source_trust` applies to every event it keeps;
+`event_source_trust` overrides it per event class, for example
+`{"user_goal": "verified"}`. Memories promoted from capture carry that trust.
+What the user typed is the least likely place for injected text, so
+`safe-default` trusts it; assistant replies and tool outcomes stay untrusted.
+If a deployment's "users" can be third parties (a public channel bot, say),
+publish a profile without the `user_goal` override. Adapters recall with
+`trust_policy: label_untrusted`: untrusted memories are included, marked
+`[untrusted]`, and ranked below verified ones.
 
 **Provenance.** A session and its events can carry where they came from
 (client, agent, project, repository remote, branch, ref, commit, task, run).
