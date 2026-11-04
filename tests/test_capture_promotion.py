@@ -207,3 +207,6 @@ async def test_user_goal_with_content_is_promoted_and_continuations_are_not(
         assert memory.status == "active"
         assert "vegetarian" in memory.content
         assert memory.metadata_["capture_event_class"] == "user_goal"
+        # The default profile trusts what the user typed; assistant output is not.
+        assert memory.metadata_["capture_source_trust"] == "verified"
+        assert events[0].source_trust == "verified"

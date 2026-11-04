@@ -275,3 +275,48 @@ async def test_safe_default_denies_parent_disabled_classes(
             )
             == 0
         )
+
+
+async def test_profile_event_source_trust_overrides_per_class(client: httpx.AsyncClient) -> None:
+    profile_key = f"event-trust-{uuid4().hex}"
+    bad = await client.post(
+        "/v1/capture/profiles",
+        json=_profile(profile_key, event_source_trust={"assistant_outcome": "verified"}),
+    )
+    assert bad.status_code == 422
+
+    created = await client.post(
+        "/v1/capture/profiles",
+        json=_profile(
+            profile_key,
+            allowed_event_classes=["user_goal", "assistant_outcome"],
+            metadata_allowlists={},
+            event_bounds={},
+            source_trust="untrusted",
+            event_source_trust={"user_goal": "verified"},
+        ),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["event_source_trust"] == {"user_goal": "verified"}
+
+    started = await _start(
+        client, profile_key, local_event_classes=["user_goal", "assistant_outcome"]
+    )
+    goal = await client.post(
+        f"/v1/capture/sessions/{started['id']}/events",
+        json={**_event(), "metadata": {}},
+    )
+    outcome = await client.post(
+        f"/v1/capture/sessions/{started['id']}/events",
+        json={
+            **_event(),
+            "sequence": 2,
+            "idempotency_key": f"outcome-{uuid4().hex}",
+            "event_class": "assistant_outcome",
+            "metadata": {},
+        },
+    )
+    assert goal.status_code == 201, goal.text
+    assert outcome.status_code == 201, outcome.text
+    assert goal.json()["source_trust"] == "verified"
+    assert outcome.json()["source_trust"] == "untrusted"

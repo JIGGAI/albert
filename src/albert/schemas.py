@@ -114,6 +114,10 @@ class CaptureProfileWrite(BaseModel):
     event_bounds: dict[str, dict[str, int]] = Field(default_factory=dict)
     sensitivity_floor: Literal["public", "internal", "confidential", "restricted"] = "internal"
     source_trust: Literal["untrusted", "verified", "trusted"] = "untrusted"
+    # Per-event-class override of source_trust, e.g. {"user_goal": "verified"}.
+    event_source_trust: dict[str, Literal["untrusted", "verified", "trusted"]] = Field(
+        default_factory=dict
+    )
     retention_days: int = Field(default=30, ge=1, le=3650)
     raw_body_policy: Literal["deny", "allow"] = "deny"
     secret_policy: Literal["reject", "redact"] = "reject"
@@ -129,6 +133,8 @@ class CaptureProfileWrite(BaseModel):
             raise ValueError("metadata allowlists must reference allowed event classes")
         if not set(self.event_bounds).issubset(allowed):
             raise ValueError("event bounds must reference allowed event classes")
+        if not set(self.event_source_trust).issubset(allowed):
+            raise ValueError("event source trust must reference allowed event classes")
         for event_class, bounds in self.event_bounds.items():
             if not set(bounds).issubset({"max_content_chars", "max_metadata_chars"}):
                 raise ValueError(f"unsupported bound for {event_class}")

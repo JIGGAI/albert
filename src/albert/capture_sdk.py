@@ -510,7 +510,7 @@ class CaptureClient:
                 "max_characters": max_characters,
                 "max_tokens": max_tokens,
                 "max_items": max_items,
-                "trust_policy": "exclude_untrusted",
+                "trust_policy": "label_untrusted",
             },
         )
         if response is None or not response.is_success:

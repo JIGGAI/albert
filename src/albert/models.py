@@ -184,6 +184,8 @@ class CaptureProfile(Base, TimestampMixin):
     secret_policy: Mapped[str] = mapped_column(String(16), default="reject")
     derivative_policy: Mapped[str] = mapped_column(String(16), default="cascade")
     deny_reasons: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    # Overrides source_trust for individual event classes (e.g. user_goal).
+    event_source_trust: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
 
 
 class CaptureSession(Base, TimestampMixin):
