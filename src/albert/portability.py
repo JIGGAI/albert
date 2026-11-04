@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from albert.classifier import ExtractedEntity, ExtractedRelationship
 from albert.graph_store import get_graph_store
+from albert.memory_safety import apply_memory_safety, sanitize_client_metadata
 from albert.models import Memory, Organization, Workspace
 from albert.schemas import (
     EntityInput,
@@ -196,6 +197,11 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
             memory_map[item.ref] = already_imported.id
             memories_skipped += 1
             continue
+        # A bundle is client-supplied: it may keep a memory untrusted or
+        # quarantined, but cannot assert verified-or-higher review state.
+        confidence, safe_metadata = apply_memory_safety(
+            item.content, item.confidence, sanitize_client_metadata(item.metadata)
+        )
         memory = Memory(
             organization_id=auth.organization_id,
             workspace_id=mapped_workspace(item.workspace_ref),
@@ -207,11 +213,11 @@ def import_bundle(session: Session, auth: AuthContext, request: ImportRequest) -
             content=item.content,
             memory_type=item.memory_type,
             sensitivity=item.sensitivity,
-            confidence=item.confidence,
+            confidence=confidence,
             valid_from=item.valid_from,
             valid_until=item.valid_until,
             metadata_={
-                **item.metadata,
+                **safe_metadata,
                 "imported_from": {
                     "organization": request.bundle.organization_name,
                     "memory_ref": str(item.ref),

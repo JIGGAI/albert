@@ -6,6 +6,16 @@ Albert treats imported content, model output, MCP clients, API clients, and
 optional model providers as separate trust boundaries. Authentication does not
 make supplied memory content trustworthy.
 
+Every write path applies the same memory-safety pass: a scan for
+instruction-like text (quarantined memories are never recalled), a confidence
+ceiling by source trust, and review-owned metadata that clients cannot set.
+That covers direct writes, documents and other episodes (`POST /v1/episodes`,
+MCP `memory_ingest`, connector content), automatic capture, and imports. A
+client may lower a memory's source trust to `untrusted` (connectors that
+ingest third-party text such as web pages should), but only capture profiles
+assign trust, and an import bundle cannot assert `trusted`, corroboration, or
+cleared quarantine.
+
 ## Tenant isolation
 
 - Every canonical and derived row carries an organization identifier.
