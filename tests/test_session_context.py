@@ -144,3 +144,59 @@ async def test_session_start_is_tenant_isolated_and_reports_safe_degradation(
     assert body["degraded"] == ["vector retrieval unavailable: RuntimeError"]
     assert "backend body must not leak" not in response.text
     assert body["complete"] is False
+
+
+def _order(hits: list[SearchHit], **request: object) -> list[int]:
+    package = assemble_session_context(
+        SearchResponse(hits=hits, degraded=[]),
+        SessionContextRequest(max_characters=12_000, max_tokens=3_000, max_items=20, **request),
+    )
+    return [int(citation["memory_id"].replace("-", ""), 16) for citation in package.citations]
+
+
+def test_session_order_follows_relevance_not_recency() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    today = datetime.now(UTC)
+    old_but_relevant = _hit(1, "relevant", valid_from=(today - timedelta(days=900)).isoformat())
+    old_but_relevant.score = 0.05
+    new_but_weak = _hit(2, "weak", valid_from=today.isoformat())
+    new_but_weak.score = 0.02
+
+    assert _order([new_but_weak, old_but_relevant]) == [1, 2]
+
+
+def test_session_order_uses_trust_and_recency_only_to_break_near_ties() -> None:
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC).isoformat()
+    untrusted = _hit(1, "a", capture_source_trust="untrusted", valid_from=now)
+    verified = _hit(2, "b", capture_source_trust="verified", valid_from=now)
+    for hit in (untrusted, verified):
+        hit.score = 0.03
+
+    assert _order([untrusted, verified], trust_policy="label_untrusted") == [2, 1]
+
+
+def test_session_scope_tier_still_outranks_relevance() -> None:
+    in_project = _hit(1, "in project", project_ref="project-a")
+    in_project.score = 0.01
+    elsewhere = _hit(2, "elsewhere", project_ref="project-b")
+    elsewhere.score = 0.05
+
+    assert _order([elsewhere, in_project], project_ref="project-a") == [1, 2]
+
+
+def test_session_diversity_does_not_promote_a_distant_weak_match() -> None:
+    facts = []
+    for index in range(1, 6):
+        hit = _hit(index, f"fact {index}")
+        hit.score = 0.10 - index * 0.01
+        facts.append(hit)
+    procedure = _hit(9, "weak procedure", memory_type="procedure")
+    procedure.score = 0.001
+
+    order = _order([procedure, *facts])
+    # Diversity may lift another type at most DIVERSITY_WINDOW - 1 places.
+    assert order[:3] == [1, 2, 3]
+    assert order.index(9) >= 3
