@@ -11,8 +11,8 @@
   },
   "host": {
     "family": "codex",
-    "tested": "0.135.0",
-    "supported": ">=0.135.0,<0.136.0"
+    "tested": "0.154.0",
+    "supported": ">=0.154.0,<0.155.0"
   },
   "hooks": {
     "fidelity": "reduced",

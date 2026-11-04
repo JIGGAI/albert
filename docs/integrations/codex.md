@@ -60,11 +60,11 @@ bounded encrypted queue for later idempotent replay.
 
 | Codex CLI version | Hook evidence | Status |
 | --- | --- | --- |
-| 0.135.0 | Native fixture plus lifecycle, outage, policy, provenance, and idempotency tests | Tested |
-| >=0.135.0, <0.136.0 | Stable `hooks` feature with the same command schemas | Supported contract; rerun the fixture for each release |
-| <0.135.0 or >=0.136.0 | Not validated by this adapter release | Unsupported until conformance passes |
+| 0.154.0 | Native fixture, lifecycle/security suites, and a normal-auth `gpt-5.6-sol` fresh-session proof | Tested |
+| >=0.154.0, <0.155.0 | Stable `hooks` feature with the same command schemas | Supported contract; rerun the fixture for each release |
+| <0.154.0 or >=0.155.0 | Not validated by this adapter release | Unsupported until conformance passes |
 
-Codex CLI 0.135.0 does not expose a session-end or failure hook. Consequently,
+Codex CLI 0.154.0 does not expose a session-end or failure hook. Consequently,
 Albert creates turn-end checkpoints at `Stop`, but it cannot truthfully emit a
 `session_ended` or `failure_summary` event or call the capture session-end
 endpoint. This is an explicit reduced-fidelity state, not an inferred event.
@@ -93,8 +93,8 @@ To revoke local use without changing Codex hooks, run
 recorded by the ownership marker and the `~/.codex/albert` tree. If the commands
 were modified, uninstall fails closed instead of deleting foreign state.
 
-Release `albert-memory==0.4.0` targets Codex `0.135.0` and supports only
-`>=0.135.0,<0.136.0`. The installed marker records host-target descriptor
+Release `albert-memory==0.4.0` targets Codex `0.154.0` and supports only
+`>=0.154.0,<0.155.0`. The installed marker records host-target descriptor
 version `1.0.0`. Immutable release provenance is GitHub OIDC DSSE plus SHA-256,
 declared in `src/albert/codex_package.json` and
 `src/albert/host_targets/codex.json`. Codex still has no session-end or failure

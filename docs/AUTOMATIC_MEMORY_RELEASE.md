@@ -11,7 +11,7 @@ records real opt-in deployment feedback beyond synthetic and internal fixtures.
 | Host | Tested | Supported contract | Fidelity |
 | --- | --- | --- | --- |
 | OpenClaw | 2026.9.6 | `>=2026.9.6,<2027` | Full |
-| Codex CLI | 0.135.0 | `>=0.135.0,<0.136.0` | No true session-end/failure hook |
+| Codex CLI | 0.154.0 | `>=0.154.0,<0.155.0` | No true session-end/failure hook |
 | Claude Code | 2.1.312 | `>=2.1.268,<2.2` | Failure hook is best effort on affected 2.1.x builds |
 | Cursor | Desktop 3.27.22; Agent CLI 2026.10.22-27dcf5f | Tested hooks-v1 surfaces | Cloud agents lack start/end hooks |
 

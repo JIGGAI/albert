@@ -141,7 +141,7 @@ def test_codex_fixture_declares_only_supported_hooks_and_reduced_fidelity():
         for groups in hooks.values()
         for group in groups
     )
-    assert "0.135.0" in docs
+    assert "0.154.0" in docs
     assert "does not expose a session-end or failure hook" in docs
     assert "transcript_path" in docs
 

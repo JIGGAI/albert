@@ -359,7 +359,7 @@ def doctor_codex(
 
 def revoke_codex(paths: CodexInstallPaths) -> None:
     try:
-        target = negotiate_host_target("codex", (0, 135, 0), {"revoke"})
+        target = negotiate_host_target("codex", (0, 154, 0), {"revoke"})
         assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None
