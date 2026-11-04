@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "package": "albert-memory",
+  "package_version": "0.4.0",
+  "family": "cursor",
+  "owner": "JIGGAI/albert",
+  "supported_cursor": ">=2026.10.22,<2026.10.23",
+  "tested_cursor": "2026.10.22",
+  "tested_cursor_agent_build": "2026.10.22-27dcf5f",
+  "tested_cursor_desktop_schema": "3.27.22",
+  "hook_fidelity": "full-local-cloud-reduced-no-session-start-or-end",
+  "install_root": "~/.cursor/albert",
+  "provenance": "github-oidc-dsse+sha256",
+  "components": {
+    "adapter": "albert.cursor_adapter:main",
+    "connector": "albert.cursor_lifecycle:app",
+    "hooks": "albert/cursor_hooks/hooks.json",
+    "rule": "albert/cursor_rules/albert-memory.mdc",
+    "host_target": "albert/host_targets/cursor.json",
+    "ownership_marker": "albert-memory"
+  }
+}

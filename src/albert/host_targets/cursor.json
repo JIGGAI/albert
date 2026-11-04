@@ -1,0 +1,45 @@
+{
+  "schema": "com.jiggai.albert.host-target",
+  "schema_version": 1,
+  "descriptor_version": "1.0.0",
+  "target_id": "cursor",
+  "enabled": true,
+  "package": {
+    "distribution": "albert-memory",
+    "version": "0.4.0",
+    "artifact_provenance": "github-oidc-dsse+sha256"
+  },
+  "host": {
+    "family": "cursor",
+    "tested": "2026.10.22",
+    "supported": ">=2026.10.22,<2026.10.23"
+  },
+  "hooks": {
+    "fidelity": "full",
+    "present": ["session_start", "user_prompt", "pre_compaction", "assistant_response", "stop", "session_end"],
+    "absent": []
+  },
+  "install": {
+    "root": "~/.cursor/albert",
+    "reload": ["cursor-agent", "--version"],
+    "uninstall": ["albert-cursor-lifecycle", "uninstall"]
+  },
+  "credentials": {
+    "acquisition": ["hidden_prompt", "private_stdin", "private_fd"],
+    "storage": "owned_file_0600",
+    "forbidden_surfaces": ["args", "ordinary_env", "host_config", "logs", "diagnostics", "artifacts"]
+  },
+  "ownership": {
+    "marker": "albert-memory",
+    "scope": "target-owned-tree-and-entry"
+  },
+  "lifecycle": {
+    "upgrade": true,
+    "rotate": true,
+    "revoke": true,
+    "rollback": true,
+    "direct_brain": true
+  },
+  "probes": ["host_config", "runtime", "brain_ready", "capture_recall"],
+  "capabilities": ["capture", "direct_brain", "recall", "reload", "revoke", "rollback", "rotate", "uninstall", "upgrade"]
+}

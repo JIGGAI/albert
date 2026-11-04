@@ -217,7 +217,7 @@ def validate_host_target(payload: object) -> HostTarget:
 
 def load_host_target(target_id: str) -> HostTarget:
     """Load only explicitly shipped targets; unknown targets fail closed."""
-    if target_id != "openclaw":
+    if target_id not in {"openclaw", "cursor"}:
         raise HostTargetError(f"unknown or disabled host target: {target_id}")
     try:
         payload = json.loads((TARGET_PATH / f"{target_id}.json").read_text(encoding="utf-8"))
@@ -266,6 +266,6 @@ def assert_owned_install_root(root: Path, *, expected_marker: str) -> None:
         raise HostTargetError("host target ownership marker is unavailable") from exc
     if not isinstance(marker, dict) or marker.get("owner") != expected_marker:
         raise HostTargetError("host target installation has foreign ownership")
-    for private_path in (marker_path, root / "credentials.env"):
+    for private_path in (marker_path, root / "credentials.env", root / "credentials.json"):
         if private_path.exists() and stat.S_IMODE(os.stat(private_path).st_mode) != 0o600:
             raise HostTargetError("host target private file mode is unsafe")
