@@ -28,6 +28,11 @@ VERSION_PATTERN = re.compile(r"(?:Claude Code\s+)?v?(\d+)\.(\d+)\.(\d+)")
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
+
+# Seconds Claude Code allows each hook. Recall hooks search (and may embed) on the
+# Brain, so they get longer than the capture-only hooks.
+HOOK_TIMEOUTS = {"SessionStart": 5, "UserPromptSubmit": 5}
+
 @dataclass(frozen=True)
 class ClaudeInstallPaths:
     root: Path
@@ -161,7 +166,7 @@ def _stage_plugin(staged: ClaudeInstallPaths, source: Path, adapter_command: Pat
             "UserPromptSubmit",
         }:
             raise InstallError("Claude plugin hook manifest contains unsupported events")
-        for matchers in entries.values():
+        for event, matchers in entries.items():
             if not isinstance(matchers, list) or len(matchers) != 1:
                 raise InstallError("Claude plugin hook manifest is untrusted")
             for matcher in matchers:
@@ -171,7 +176,7 @@ def _stage_plugin(staged: ClaudeInstallPaths, source: Path, adapter_command: Pat
                     if hook != {
                         "type": "command",
                         "command": "albert-claude-adapter",
-                        "timeout": 2,
+                        "timeout": HOOK_TIMEOUTS.get(event, 2),
                     }:
                         raise InstallError("Claude plugin hook manifest is untrusted")
                     hook["command"] = str(adapter_command)

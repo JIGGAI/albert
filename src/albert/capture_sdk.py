@@ -253,8 +253,12 @@ class CaptureClient:
         client: httpx.Client | None = None,
         profile_ttl_seconds: int = 300,
         clock: Callable[[], float] = time.time,
+        recall_timeout: float | None = None,
     ) -> None:
         self.queue, self.profile_key, self.clock = queue, profile_key, clock
+        # Recall runs a search (and, on semantic Brains, an embedding), so it may take
+        # longer than a capture write. None keeps the HTTP client's own timeout.
+        self.recall_timeout = recall_timeout
         self.local_events = frozenset(local_event_classes or DEFAULT_EVENTS)
         self.local_fields = {k: frozenset(v) for k, v in (local_metadata_allowlists or {}).items()}
         self.client = client or httpx.Client(
@@ -271,9 +275,18 @@ class CaptureClient:
             else None
         )
 
-    def _request(self, path: str, payload: dict[str, Any] | None = None) -> httpx.Response | None:
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> httpx.Response | None:
+        options: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         try:
-            return self.client.request("POST" if payload is not None else "GET", path, json=payload)
+            return self.client.request(
+                "POST" if payload is not None else "GET", path, json=payload, **options
+            )
         except httpx.HTTPError:
             self._degraded.add("delivery_unavailable")
             return None
@@ -345,6 +358,12 @@ class CaptureClient:
     ) -> DeliveryResult:
         if self._policy() is None:
             return DeliveryResult("dropped", "policy_unavailable")
+        # Each hook runs in a new process and calls start first. Once this install has
+        # delivered the start, reuse that session: re-sending it with hook-specific
+        # provenance would be refused as a changed replay (409).
+        known = self.queue.server_session(idempotency_key)
+        if known is not None:
+            return DeliveryResult("delivered", identifier=known)
         payload: dict[str, Any] = {
             "version": CONTRACT_VERSION,
             "client_session_id": client_session_id[:300],
@@ -521,6 +540,7 @@ class CaptureClient:
                 "max_items": max_items,
                 "trust_policy": "label_untrusted",
             },
+            timeout=self.recall_timeout,
         )
         if response is None or not response.is_success:
             self._degraded.add("recall_unavailable")

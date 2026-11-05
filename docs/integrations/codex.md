@@ -35,8 +35,9 @@ secret-backed environment variables:
   `albert.capture_sdk.generate_queue_key()` and stored in the operator's secret store.
 
 Optional environment variables are `ALBERT_API_URL`, `ALBERT_WORKSPACE_ID`,
-`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, and
-`ALBERT_CAPTURE_TIMEOUT`. The encrypted queue defaults to
+`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, `ALBERT_CAPTURE_TIMEOUT`
+(capture requests, default 1 second), and `ALBERT_RECALL_TIMEOUT` (recall
+requests, default 4 seconds). The encrypted queue defaults to
 `~/.codex/albert/capture.db`. The adjacent sequencing database contains only
 hook identities, event classes, and sequence numbers.
 
@@ -47,6 +48,8 @@ The adapter uses these documented hooks:
 - `UserPromptSubmit` captures the bounded current user goal and injects similarly
   bounded turn-relevant recall.
 - `PreCompact` records an idempotent minimized checkpoint through the shared SDK.
+
+The two recall hooks have a five-second command budget; the others have two seconds.
 - `Stop` records the bounded final assistant message when present and creates an
   idempotent turn-end checkpoint.
 

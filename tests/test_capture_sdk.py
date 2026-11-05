@@ -179,3 +179,47 @@ def test_vcs_context_never_contains_absolute_path(tmp_path: Path):
     context = collect_vcs_context(tmp_path)
     assert context == {"vcs": "none", "project": tmp_path.name}
     assert str(tmp_path) not in str(context)
+
+
+def test_a_delivered_session_start_is_reused_by_later_hook_processes(tmp_path: Path):
+    """Each hook is a new process that calls start first. Re-sending the start with
+    hook-specific provenance would be refused as a changed replay (409), so once the
+    install has delivered it, later processes reuse the recorded server session."""
+    starts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/capture/sessions":
+            starts.append(__import__("json").loads(request.content))
+            return httpx.Response(201, json={"id": "server-session"})
+        return httpx.Response(201, json={"id": "event"})
+
+    queue = make_queue(tmp_path)
+
+    def process() -> CaptureClient:
+        http = httpx.Client(base_url="https://albert.test", transport=httpx.MockTransport(handler))
+        return CaptureClient("https://albert.test", "secret", queue, client=http)
+
+    first = process().start_session("client-1", "start-1", provenance={"event": "SessionStart"})
+    later = process().start_session("client-1", "start-1", provenance={"event": "Stop"})
+
+    assert first.status == later.status == "delivered"
+    assert first.identifier == later.identifier == "server-session"
+    assert len(starts) == 1
+
+
+def test_recall_uses_its_own_timeout(tmp_path: Path):
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"context": "ctx", "citations": []})
+
+    http = httpx.Client(
+        base_url="https://albert.test", transport=httpx.MockTransport(handler), timeout=1.0
+    )
+    sdk = CaptureClient(
+        "https://albert.test", "secret", make_queue(tmp_path), client=http, recall_timeout=4.0
+    )
+
+    assert "ctx" in sdk.recall("task")
+    assert seen["timeout"] == {"connect": 4.0, "read": 4.0, "write": 4.0, "pool": 4.0}

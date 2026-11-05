@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "albert-codex-adapter",
-            "timeout": 2,
+            "timeout": 5,
             "statusMessage": "Loading Albert memory"
           }
         ]
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "albert-codex-adapter",
-            "timeout": 2
+            "timeout": 5
           }
         ]
       }

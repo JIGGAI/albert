@@ -39,8 +39,9 @@ remember on demand. Set `ALBERT_MCP_API_KEY` to a least-privilege key for it;
 server reports an error and the hooks keep working.
 
 Optional variables are `ALBERT_API_URL`, `ALBERT_WORKSPACE_ID`,
-`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, and
-`ALBERT_CAPTURE_TIMEOUT`. The encrypted queue defaults to
+`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, `ALBERT_CAPTURE_TIMEOUT`
+(capture requests, default 1 second), and `ALBERT_RECALL_TIMEOUT` (recall
+requests, default 4 seconds). The encrypted queue defaults to
 `~/.claude/albert/capture.db`; the adjacent state database contains only hook
 identities, event classes, and sequence numbers.
 
@@ -58,7 +59,8 @@ the documented bounded `last_assistant_message`; the adapter never reads
 `transcript_path`, captures hidden prompts, or sends `custom_instructions`,
 absolute paths, complete transcripts, tool inputs, or error details.
 
-All hooks have a two-second command budget and the adapter exits successfully
+`SessionStart` and `UserPromptSubmit`, which recall, have a five-second command
+budget; the capture-only hooks have two seconds. The adapter exits successfully
 with an empty object if configuration, policy, networking, or local state is
 unavailable. Allowed events queue in the bounded encrypted shared-SDK queue.
 Denied or detected-secret content is dropped before queueing. This preserves
