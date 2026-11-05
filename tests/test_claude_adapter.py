@@ -4,11 +4,16 @@ import io
 import json
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
+from fastapi.testclient import TestClient
 
+from albert.api import app
 from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
 from albert.claude_adapter import CLAUDE_EVENTS, ClaudeAdapter, ClaudeState, main
+
+from .conftest import create_identity, drain_jobs
 
 
 def make_adapter(
@@ -207,3 +212,74 @@ def test_claude_cli_missing_configuration_is_fail_open(monkeypatch, capsys):
     assert output.out == "{}\n"
     assert "RuntimeError" in output.err
     assert "ALBERT_CAPTURE" not in output.err
+
+
+def test_claude_capture_is_recalled_in_a_fresh_session_of_the_same_project_only(tmp_path: Path):
+    """Recall must resolve the same project identity the captured memories were stored under.
+
+    Regression: the hook recalled with the folder name as project_ref while capture stored a
+    server-derived ``prj_...`` identity, so hook recall always came back empty.
+    """
+    token, _organization, _workspace = create_identity("Claude project identity")
+    http = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+    profile_key = f"claude-project-identity-{uuid4().hex}"
+    created = http.post(
+        "/v1/capture/profiles",
+        json={
+            "profile_key": profile_key,
+            "version": 1,
+            "allowed_event_classes": sorted(CLAUDE_EVENTS),
+            "metadata_allowlists": {},
+            "event_bounds": {},
+            "sensitivity_floor": "internal",
+            "source_trust": "verified",
+            "retention_days": 14,
+            "raw_body_policy": "deny",
+            "deny_reasons": {},
+        },
+    )
+    assert created.status_code == 201, created.text
+    alpha, beta = tmp_path / "alpha-project", tmp_path / "beta-project"
+    alpha.mkdir()
+    beta.mkdir()
+
+    queue_key = generate_queue_key()
+
+    def adapter(name: str) -> ClaudeAdapter:
+        """A fresh client per hook call (each hook is a new process) over the install's
+        one on-disk queue and state, as in a real Claude Code install."""
+        queue = EncryptedQueue(tmp_path / "capture.db", queue_key, "claude-code")
+        client = CaptureClient(
+            "http://testserver",
+            token,
+            queue,
+            profile_key=profile_key,
+            local_event_classes=CLAUDE_EVENTS,
+            client=http,  # type: ignore[arg-type]
+        )
+        return ClaudeAdapter(client, ClaudeState(tmp_path / "state.db"))
+
+    marker = "Project identity regression marker: CEDAR LANTERN 0471"
+    adapter("first-start").handle(envelope("SessionStart", alpha, session_id="first"))
+    adapter("first-stop").handle(
+        envelope("Stop", alpha, session_id="first", prompt_id="p1", last_assistant_message=marker)
+    )
+    drain_jobs()
+
+    def recall(folder: Path, session: str) -> str:
+        adapter(f"{session}-start").handle(envelope("SessionStart", folder, session_id=session))
+        result = adapter(f"{session}-prompt").handle(
+            envelope(
+                "UserPromptSubmit",
+                folder,
+                session_id=session,
+                prompt_id=f"{session}-p",
+                prompt="Recall the CEDAR LANTERN project marker.",
+            )
+        )
+        return result["hookSpecificOutput"]["additionalContext"]
+
+    same_project = recall(alpha, "fresh")
+    assert "CEDAR LANTERN 0471" in same_project
+    assert "--- CITATIONS ---\n- [1]" in same_project
+    assert "CEDAR LANTERN 0471" not in recall(beta, "other")

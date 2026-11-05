@@ -191,9 +191,7 @@ class OpenClawAdapter:
             identity = str(event.get("message_id") or event.get("run_id") or query)
             results.append(self._record(event, "user_goal", query, identity, hook))
             context = self.client.recall(
-                screened.content,
-                project_ref=str(event.get("project_ref", "")) or None,
-                branch_ref=str(event.get("branch_ref", "")) or None,
+                screened.content, provenance=self._provenance(event, hook)
             )
             return {"context": context, "results": [asdict(item) for item in results]}
         elif hook == "before_compaction":

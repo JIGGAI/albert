@@ -23,6 +23,7 @@ from albert.db import get_session
 from albert.graph_store import get_graph_store
 from albert.models import Episode
 from albert.portability import export_bundle, import_bundle
+from albert.provenance import normalize_provenance
 from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, span
 from albert.schemas import (
     ContextRequest,
@@ -410,6 +411,18 @@ def session_start_context(
     allowed_sensitivities = auth.allowed_sensitivities()
     if data.sensitivity and not set(data.sensitivity).issubset(allowed_sensitivities):
         raise HTTPException(status_code=403, detail="Requested sensitivity is not authorized")
+    if data.provenance is not None:
+        # Same normalization as capture, so a hook's recall scope matches the
+        # project identity its captured memories were stored under.
+        observed = normalize_provenance(
+            data.provenance,
+            organization_id=auth.organization_id,
+            allow_absolute_path=False,
+        )
+        data = data.model_copy(update={
+            "project_ref": data.project_ref or observed.get("project_id"),
+            "branch_ref": data.branch_ref or observed.get("branch") or observed.get("ref"),
+        })
     # Task and run are ranking signals here, not hard filters: durable project truth
     # remains eligible alongside the most specific current-task evidence.
     request = SearchRequest(

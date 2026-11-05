@@ -126,13 +126,6 @@ class ClaudeAdapter:
         }
 
     @classmethod
-    def _project_refs(cls, event: dict[str, Any]) -> tuple[str | None, str | None]:
-        vcs = cls._vcs(event)
-        project = str(vcs.get("project", ""))[:300] or None
-        branch = str(vcs.get("branch") or vcs.get("ref") or "")[:300] or None
-        return project, branch
-
-    @classmethod
     def _capture_session(cls, event: dict[str, Any]) -> str:
         session = cls._session(event)
         return _operation_key("start", session, session)
@@ -197,9 +190,9 @@ class ClaudeAdapter:
                     hook,
                 )
             )
-            project, branch = self._project_refs(event)
+            project = self._vcs(event).get("project")
             query = f"Approved project context for {project or 'this Claude Code workspace'}"
-            context = self.client.recall(query, project_ref=project, branch_ref=branch)
+            context = self.client.recall(query, provenance=self._provenance(event, hook))
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
@@ -215,8 +208,9 @@ class ClaudeAdapter:
                 return {"results": [asdict(item) for item in results]}
             identity = str(event.get("prompt_id") or hashlib.sha256(prompt.encode()).hexdigest())
             results.append(self._record(event, "user_goal", prompt, identity, hook))
-            project, branch = self._project_refs(event)
-            context = self.client.recall(screened.content, project_ref=project, branch_ref=branch)
+            context = self.client.recall(
+                screened.content, provenance=self._provenance(event, hook)
+            )
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",

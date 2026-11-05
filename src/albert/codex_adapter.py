@@ -185,8 +185,7 @@ class CodexAdapter:
             project = str(vcs.get("project", "unknown"))[:300]
             context = self.client.recall(
                 f"Codex session context for project {project}",
-                project_ref=self.client.session_project_ref(session),
-                branch_ref=str(vcs.get("branch")) if vcs.get("branch") else None,
+                provenance=self._provenance(event),
             )
             response = self._context_response(hook, context)
             response["results"] = [asdict(item) for item in results]
@@ -199,12 +198,7 @@ class CodexAdapter:
                 return {"results": [asdict(item) for item in results]}
             turn_id = str(event.get("turn_id") or hashlib.sha256(prompt.encode()).hexdigest())
             results.append(self._record(event, "user_goal", prompt, turn_id))
-            vcs = self._vcs(event)
-            context = self.client.recall(
-                screened.content,
-                project_ref=self.client.session_project_ref(session),
-                branch_ref=str(vcs.get("branch")) if vcs.get("branch") else None,
-            )
+            context = self.client.recall(screened.content, provenance=self._provenance(event))
             response = self._context_response(hook, context)
             response["results"] = [asdict(item) for item in results]
             return response
