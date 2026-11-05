@@ -263,6 +263,7 @@ def _client_from_environment() -> tuple[CaptureClient, CodexState, str | None]:
     ).expanduser()
     scope = environment.get("ALBERT_CAPTURE_SCOPE", "codex:default")
     timeout = max(0.1, min(5.0, float(environment.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
+    recall_timeout = max(0.1, min(4.5, float(environment.get("ALBERT_RECALL_TIMEOUT", "4.0"))))
     queue = EncryptedQueue(queue_path, queue_key, scope)
     http = httpx.Client(
         base_url=base_url.rstrip("/"),
@@ -275,6 +276,7 @@ def _client_from_environment() -> tuple[CaptureClient, CodexState, str | None]:
         queue,
         local_event_classes=CODEX_EVENTS,
         client=http,
+        recall_timeout=recall_timeout,
     )
     return (
         client,
@@ -295,9 +297,14 @@ def main() -> None:
         result = adapter.handle(value)
         result.pop("results", None)
         print(json.dumps(result, separators=(",", ":")))
-    except Exception:
+    except Exception as exc:
         # Codex command hooks treat an empty successful response as a no-op. Keep
-        # delivery/configuration failures from interrupting the user's turn.
+        # delivery/configuration failures from interrupting the user's turn, but say
+        # what failed (type only, never content) so setup problems can be diagnosed.
+        print(
+            json.dumps({"albert_status": "unavailable", "error": type(exc).__name__}),
+            file=sys.stderr,
+        )
         print("{}")
     finally:
         if client is not None:

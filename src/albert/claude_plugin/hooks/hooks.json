@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "albert-claude-adapter",
-            "timeout": 2
+            "timeout": 5
           }
         ]
       }
@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "albert-claude-adapter",
-            "timeout": 2
+            "timeout": 5
           }
         ]
       }

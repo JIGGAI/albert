@@ -16,8 +16,9 @@ Required secret-backed environment variables:
   `albert.capture_sdk.generate_queue_key()` and stored in the operator's secret store.
 
 Optional variables are `ALBERT_API_URL`, `ALBERT_WORKSPACE_ID`,
-`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, and
-`ALBERT_CAPTURE_TIMEOUT`. The encrypted queue defaults to
+`ALBERT_CAPTURE_SCOPE`, `ALBERT_CAPTURE_QUEUE_PATH`, `ALBERT_CAPTURE_TIMEOUT`
+(capture requests, default 1 second), and `ALBERT_RECALL_TIMEOUT` (recall
+requests, default 4 seconds). The encrypted queue defaults to
 `~/.cursor/albert/capture.db`; the adjacent sequencing database contains only
 hook identities, event classes, and sequence numbers.
 

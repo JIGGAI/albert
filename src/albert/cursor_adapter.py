@@ -281,6 +281,7 @@ def _client_from_environment() -> tuple[CaptureClient, CursorState]:
     ).expanduser()
     scope = os.environ.get("ALBERT_CAPTURE_SCOPE", "cursor:default")
     timeout = max(0.1, min(5.0, float(os.environ.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
+    recall_timeout = max(0.1, min(4.5, float(os.environ.get("ALBERT_RECALL_TIMEOUT", "4.0"))))
     queue = EncryptedQueue(queue_path, queue_key, scope)
     http = httpx.Client(
         base_url=base_url.rstrip("/"),
@@ -293,6 +294,7 @@ def _client_from_environment() -> tuple[CaptureClient, CursorState]:
         queue,
         local_event_classes=CURSOR_EVENTS,
         client=http,
+        recall_timeout=recall_timeout,
     )
     return client, CursorState(queue_path.with_suffix(".cursor-state.db"))
 
@@ -309,7 +311,12 @@ def main() -> None:
         result = adapter.handle(value)
         result.pop("results", None)
         print(json.dumps(result, separators=(",", ":")))
-    except Exception:
+    except Exception as exc:
+        # Fail open, but say what failed (type only, never content) for diagnosis.
+        print(
+            json.dumps({"albert_status": "unavailable", "error": type(exc).__name__}),
+            file=sys.stderr,
+        )
         print("{}")
     finally:
         if client is not None:

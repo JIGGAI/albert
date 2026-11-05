@@ -183,14 +183,16 @@ def test_claude_plugin_fixture_declares_only_supported_minimized_hooks():
         "StopFailure",
         "SessionEnd",
     }
-    for groups in hooks.values():
+    for event, groups in hooks.items():
+        # Recall hooks get time for a search; capture-only hooks stay short.
+        timeout = 5 if event in {"SessionStart", "UserPromptSubmit"} else 2
         assert groups == [
             {
                 "hooks": [
                     {
                         "type": "command",
                         "command": "albert-claude-adapter",
-                        "timeout": 2,
+                        "timeout": timeout,
                     }
                 ]
             }

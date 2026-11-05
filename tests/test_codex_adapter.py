@@ -237,4 +237,7 @@ def test_codex_command_hook_fails_open_when_credentials_are_unavailable(
 
     main()
 
-    assert capsys.readouterr().out == "{}\n"
+    captured = capsys.readouterr()
+    assert captured.out == "{}\n"
+    # The failure is named on stderr (type only) so setup problems can be diagnosed.
+    assert json.loads(captured.err) == {"albert_status": "unavailable", "error": "RuntimeError"}

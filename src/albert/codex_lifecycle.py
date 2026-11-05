@@ -28,6 +28,11 @@ VERSION_PATTERN = re.compile(r"(?:codex-cli\s+|codex\s+)?v?(\d+)\.(\d+)\.(\d+)",
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
+
+# Seconds Codex allows each hook. Recall hooks search (and may embed) on the Brain,
+# so they get longer than the capture-only hooks.
+HOOK_TIMEOUTS = {"SessionStart": 5, "UserPromptSubmit": 5}
+
 @dataclass(frozen=True)
 class CodexInstallPaths:
     root: Path
@@ -170,7 +175,7 @@ def _configured_hooks(source: Path, adapter: Path) -> dict[str, list[dict]]:
         raise InstallError("Codex hook fixture is malformed") from exc
     if set(hooks) != {"PreCompact", "SessionStart", "Stop", "UserPromptSubmit"}:
         raise InstallError("Codex hook fixture contains unsupported events")
-    for matchers in hooks.values():
+    for event, matchers in hooks.items():
         if not isinstance(matchers, list) or len(matchers) != 1:
             raise InstallError("Codex hook fixture is untrusted")
         for matcher in matchers:
@@ -180,7 +185,7 @@ def _configured_hooks(source: Path, adapter: Path) -> dict[str, list[dict]]:
             allowed = {"command", "statusMessage", "timeout", "type"}
             if set(hook) - allowed or hook.get("command") != "albert-codex-adapter":
                 raise InstallError("Codex hook fixture is untrusted")
-            if hook.get("type") != "command" or hook.get("timeout") != 2:
+            if hook.get("type") != "command" or hook.get("timeout") != HOOK_TIMEOUTS.get(event, 2):
                 raise InstallError("Codex hook fixture is untrusted")
             hook["command"] = str(adapter)
     return hooks
