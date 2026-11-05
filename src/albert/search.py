@@ -56,16 +56,17 @@ def _scope_conditions(
 # every term, so a natural-language prompt (what recall hooks send) matched
 # nothing. ts_rank_cd has no IDF and ranks every OR match, so a long query keeps
 # only its rarest terms that occur in this tenant's memories (Hindsight caps
-# terms the same way after long OR queries caused production timeouts).
-MAX_LEXICAL_TERMS = 16
+# terms the same way after long OR queries caused production timeouts). The cap
+# is ALBERT_LEXICAL_MAX_TERMS.
 # Document frequency is counted up to this cap: enough to rank rare terms
 # exactly while a common term costs at most this many index hits.
 TERM_FREQUENCY_CAP = 1000
 
 
 def _rarest_lexemes(session: Session, lexemes: list[str], organization_id: UUID) -> list[str]:
-    """Keep the MAX_LEXICAL_TERMS rarest lexemes that occur in this organization."""
-    if len(lexemes) <= MAX_LEXICAL_TERMS:
+    """Keep the lexical_max_terms rarest lexemes that occur in this organization."""
+    limit = get_settings().lexical_max_terms
+    if len(lexemes) <= limit:
         return lexemes
     rows = session.execute(
         text(
@@ -79,7 +80,7 @@ def _rarest_lexemes(session: Session, lexemes: list[str], organization_id: UUID)
     # A term no memory contains can only waste a slot; longer terms break ties.
     present = [(int(count), term) for term, count in rows if int(count) > 0]
     present.sort(key=lambda item: (item[0], -len(item[1]), item[1]))
-    return [term for _count, term in present[:MAX_LEXICAL_TERMS]]
+    return [term for _count, term in present[:limit]]
 
 
 def _any_term_query(session: Session, query: str, organization_id: UUID):  # type: ignore[no-untyped-def]

@@ -183,6 +183,7 @@ Prefix `ALBERT_`. Secrets and connection strings are omitted here; see
 | `EMBEDDING_REQUEST_DIMENSIONS` | false | Send the dimension count to an OpenAI-compatible embedding endpoint |
 | `PUBLIC_BASE_URL`, `PUBLIC_MCP_URL` | `http://localhost:8080`, `http://localhost:8081/mcp` | Addresses advertised by connection links; set them to what agents actually reach |
 | `MIN_VECTOR_SIMILARITY` | 0.2 | Floor below which a vector match is not returned |
+| `LEXICAL_MAX_TERMS` | 8 | Keyword search matches any query term; long queries keep this many of their rarest terms that occur in the tenant |
 | `CHUNK_CHARACTERS`, `CHUNK_OVERLAP_CHARACTERS`, `MAX_CHUNKS_PER_MEMORY` | 1500, 200, 200 | Chunking |
 | `LINK_NEIGHBORS`, `LINK_SIMILARITY_MIN` | 5, 0.78 | How many `similar` links a memory gets and how alike two memories must be |
 | `HOUSEKEEPING_SECONDS` | 60 | How often recall statistics catch up with traces |

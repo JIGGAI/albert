@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     # Ceiling on `Prefer: wait=N` for episode writes and reads; each wait holds a worker thread.
     max_index_wait_seconds: int = Field(default=30, ge=0, le=120)
     min_vector_similarity: float = Field(default=0.2, ge=-1, le=1)
+    # Keyword search keeps at most this many of a query's rarest terms.
+    lexical_max_terms: int = Field(default=8, ge=1, le=1024)
     chunk_characters: int = Field(default=1500, ge=200, le=20_000)
     chunk_overlap_characters: int = Field(default=200, ge=0, le=5_000)
     max_chunks_per_memory: int = Field(default=200, ge=1, le=5_000)
