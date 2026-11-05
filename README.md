@@ -126,7 +126,9 @@ returns the top results, each labelled with the backends that found it.
 it drops quarantined memories, orders the rest by task, branch and project
 match, then source trust, confidence and recency, labels each item with its
 trust (`[verified]`, `[untrusted]`), and returns a cited, delimited block cut to
-character, token and item budgets.
+character, token and item budgets. The hooks send the same `provenance` they
+capture with, so recall is scoped to the project identity the server derived for
+the captured memories (`prj_...`), not the raw folder name.
 
 ### 4. Learn from use
 

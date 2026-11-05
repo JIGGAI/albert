@@ -114,8 +114,9 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
     assert not any(path.endswith("/end") for path, _ in requests)
     recall_requests = [body for path, body in requests if path == "/v1/context/session-start"]
     assert recall_requests
-    assert all(body["project_ref"] == "prj_brain_normalized" for body in recall_requests)
-    assert all(body["project_ref"] != tmp_path.name for body in recall_requests)
+    # Recall sends the capture provenance; the server derives the project identity from it.
+    assert all(body["project_ref"] is None for body in recall_requests)
+    assert all(body["provenance"]["project"] == tmp_path.name for body in recall_requests)
 
 
 def test_codex_outage_is_fail_open_and_secret_is_never_queued(tmp_path: Path):

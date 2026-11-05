@@ -265,7 +265,6 @@ class CaptureClient:
         self.profile_ttl, self._compatible = profile_ttl_seconds, None
         self._degraded: set[str] = set()
         self._flush_lock = threading.Lock()
-        self._session_project_refs: dict[str, str] = {}
         self._profile = (
             CaptureProfile("safe-default", 1, DEFAULT_EVENTS, expires_at=float("inf"))
             if profile_key == "safe-default"
@@ -363,18 +362,11 @@ class CaptureClient:
         if response is not None and response.status_code in {200, 201}:
             value = response.json()
             identifier = str(value["id"])
-            project_ref = value.get("provenance", {}).get("project_id")
-            if isinstance(project_ref, str) and project_ref:
-                self._session_project_refs[idempotency_key] = project_ref
             self.queue.map_session(idempotency_key, identifier)
             return DeliveryResult("delivered", identifier=identifier)
         if response is not None and response.status_code not in TRANSIENT:
             return DeliveryResult("dropped", f"server_rejected_{response.status_code}")
         return self._queue(f"start:{idempotency_key}", "start", idempotency_key, payload)
-
-    def session_project_ref(self, session_key: str) -> str | None:
-        """Return the Brain-normalized project identity from a delivered session start."""
-        return self._session_project_refs.get(session_key)
 
     def record_event(
         self,
@@ -504,16 +496,24 @@ class CaptureClient:
         self,
         query: str,
         *,
+        provenance: dict[str, Any] | None = None,
         project_ref: str | None = None,
         branch_ref: str | None = None,
         max_characters: int = 12_000,
         max_tokens: int = 3000,
         max_items: int = 20,
     ) -> str:
+        """Recall context scoped like this client's captures.
+
+        Pass the same ``provenance`` the session was captured with: the server derives
+        the project identity from it exactly as it did for the stored memories. An
+        explicit ``project_ref`` must already be a server project identity (``prj_...``).
+        """
         response = self._request(
             "/v1/context/session-start",
             {
                 "query": query,
+                "provenance": provenance,
                 "project_ref": project_ref,
                 "branch_ref": branch_ref,
                 "max_characters": max_characters,

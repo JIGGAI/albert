@@ -389,6 +389,9 @@ class SessionContextRequest(ScopeFields):
     max_tokens: int = Field(default=3_000, ge=16, le=50_000)
     max_items: int = Field(default=20, ge=1, le=100)
     trust_policy: Literal["exclude_untrusted", "label_untrusted", "include"] = "exclude_untrusted"
+    # Capture clients send the provenance they capture with, so recall resolves the
+    # same server-normalized project identity the captured memories were stored under.
+    provenance: CaptureProvenance | None = None
 
 
 class SessionContextResponse(BaseModel):

@@ -185,8 +185,7 @@ class CursorAdapter:
             project = str(vcs.get("project", "unknown"))[:300]
             context = self.client.recall(
                 f"Cursor session context for project {project}",
-                project_ref=project,
-                branch_ref=str(vcs.get("branch")) if vcs.get("branch") else None,
+                provenance=self._provenance(event),
             )
             return {"additional_context": context, "results": [asdict(item) for item in results]}
 
