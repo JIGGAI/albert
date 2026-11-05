@@ -122,9 +122,13 @@ quality lever: a better store does not help a graph nothing fills.
   memory and the classifier's plain extraction is not enough.
 - Costs: several model calls per memory, and a second database.
 
-Graphiti fails closed unless the selected store is FalkorDB or Neo4j and both
-the LLM and embedding providers are `openai-compatible`. It never falls back to
-the classifier or regex builder. Configure it with:
+Graphiti fails closed unless the selected store is FalkorDB or Neo4j, the LLM
+provider is `openai-compatible`, and embeddings are real: either
+`openai-compatible` or the local `sentence-transformers` model (the hashing
+embedder is refused). It never falls back to the classifier or regex builder.
+With local embeddings only the LLM needs a provider; set
+`ALBERT_EMBEDDING_PROVIDER=sentence-transformers` and the local model as for
+semantic search, and drop the hosted embedding model below. Configure it with:
 
 ```bash
 ALBERT_GRAPH_BUILDER=graphiti

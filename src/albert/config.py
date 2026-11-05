@@ -127,10 +127,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_LLM_PROVIDER=openai-compatible"
                 )
-            if self.embedding_provider != "openai-compatible":
+            # Graphiti matches entities and facts by meaning, so it needs real
+            # embeddings: a hosted model or the local sentence-transformers model.
+            # The hashing embedder only fingerprints keywords.
+            if self.embedding_provider not in {"openai-compatible", "sentence-transformers"}:
                 raise ValueError(
                     "ALBERT_GRAPH_BUILDER=graphiti requires "
-                    "ALBERT_EMBEDDING_PROVIDER=openai-compatible"
+                    "ALBERT_EMBEDDING_PROVIDER=openai-compatible or sentence-transformers"
                 )
         return self
 

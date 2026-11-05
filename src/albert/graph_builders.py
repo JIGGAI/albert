@@ -433,14 +433,19 @@ class GraphitiGraphBuilder:
                 database=self.settings.neo4j_database,
             )
         llm = EntityConsistentOpenAIClient(config=model_config)
-        embedder = OpenAIEmbedder(
-            OpenAIEmbedderConfig(
-                api_key=secret,
-                base_url=self.settings.openai_base_url,
-                embedding_model=self.settings.embedding_model,
-                embedding_dim=self.settings.embedding_dimensions,
+        if self.settings.embedding_provider == "openai-compatible":
+            embedder = OpenAIEmbedder(
+                OpenAIEmbedderConfig(
+                    api_key=secret,
+                    base_url=self.settings.openai_base_url,
+                    embedding_model=self.settings.embedding_model,
+                    embedding_dim=self.settings.embedding_dimensions,
+                )
             )
-        )
+        else:
+            # The local model Albert already embeds memories with; only the LLM
+            # needs a provider.
+            embedder = _albert_embedder_client()
         return Graphiti(
             graph_driver=driver,
             llm_client=llm,
@@ -821,6 +826,32 @@ class GraphitiGraphBuilder:
         if len(vector) != self.settings.embedding_dimensions:
             raise ValueError("Embedding provider returned unexpected dimensions")
         return self.version
+
+
+def _albert_embedder_client() -> Any:
+    """Graphiti embedder backed by Albert's configured (local) embedder."""
+    from graphiti_core.embedder.client import EmbedderClient
+
+    class AlbertEmbedderClient(EmbedderClient):
+        def __init__(self) -> None:
+            self.embedder = get_embedder()
+
+        async def create(self, input_data: Any) -> list[float]:
+            if isinstance(input_data, str):
+                text = input_data
+            elif isinstance(input_data, list) and input_data and isinstance(input_data[0], str):
+                # Graphiti's OpenAI client embeds a list and returns the first vector.
+                text = input_data[0]
+            else:
+                raise TypeError("Albert's embedder accepts text only")
+            return await asyncio.to_thread(self.embedder.embed, text)
+
+        async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
+            return [
+                await asyncio.to_thread(self.embedder.embed, text) for text in input_data_list
+            ]
+
+    return AlbertEmbedderClient()
 
 
 _override: GraphBuilder | None = None
