@@ -33,14 +33,6 @@ The release provenance names the full rollback source commit. The package
 contract check rejects a wheel missing the connector, adapter, plugin runtime,
 plugin manifest, ownership marker, or compatibility declaration.
 
-The `pypi` GitHub environment must define the public repository variables
-`ALBERT_ADAPTER_MANIFEST_KEY_ID` and `ALBERT_ADAPTER_MANIFEST_PUBLIC_KEY`. The
-publish workflow injects that Ed25519 public key into the wheel and rejects the
-release before build, attestation, or publication when the key is absent or
-malformed. Rotate by adding the new verifier to a connector release before Cloud
-starts signing manifests with its matching private key; private signing material
-must never enter this repository or package workflow.
-
 ## Connect from Albert Cloud
 
 Copy the private, single-use connection link from Cloud. Avoid shell history and
