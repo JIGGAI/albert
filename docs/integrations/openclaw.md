@@ -5,6 +5,11 @@ bounded cited recall and minimized capture without a core OpenClaw patch. Manual
 MCP and REST connections are custom-client options and do not provide equivalent
 lifecycle capture.
 
+For agent-guided setup, copy the prompt from Albert Cloud or read and follow the
+[Albert connection skill](../../skills/albert-connect/SKILL.md). The skill keeps
+the one-time link out of shell history and logs, verifies the exact package
+attestation, runs the native connector, and proves capture and recall.
+
 ## Requirements and package verification
 
 - OpenClaw `>=2026.9.6,<2027.0.0`.

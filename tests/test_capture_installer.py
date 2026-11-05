@@ -151,6 +151,7 @@ def test_install_is_private_and_never_places_credentials_in_commands(tmp_path: P
     install(paths, runner)
 
     assert paths.marker.exists() and paths.wrapper.exists()
+    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.0"
     assert stat_mode(paths.credentials) == 0o600
     assert stat_mode(paths.wrapper) == 0o700
     assert all(
@@ -427,6 +428,7 @@ def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
     values = json.loads(paths.credentials.read_text())
     marker = json.loads(paths.marker.read_text())
     assert values["ALBERT_CAPTURE_TOKEN"] == credential
+    assert marker["package_version"] == "0.4.0"
     assert marker["cloud"] == {
         "brain_id": "brain-1",
         "connection_id": "connection-1",

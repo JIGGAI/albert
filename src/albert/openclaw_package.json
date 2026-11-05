@@ -6,6 +6,9 @@
   "owner": "JIGGAI/albert",
   "manifest_contract": ">=2,<3",
   "supported_openclaw": ">=2026.9.6,<2027.0.0",
+  "manifest_key_ids": [
+    "albert-cloud-production-2026-11-1"
+  ],
   "install_root": "~/.openclaw/albert",
   "rollback_source_template": "https://github.com/JIGGAI/albert/tree/{source_revision}",
   "components": {

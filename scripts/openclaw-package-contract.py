@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -24,10 +26,36 @@ REQUIRED = {
     "albert/openclaw_plugin/package.json",
 }
 SHA = re.compile(r"[0-9a-f]{40}")
+KEY_ID = re.compile(r"[A-Za-z0-9._:-]{1,200}")
+PUBLIC_KEY = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"OpenClaw package contract failed: {message}")
+
+
+def trust(raw: bytes) -> set[str]:
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid trust JSON: {exc}")
+    if not isinstance(value, dict) or set(value) != {"manifest_keys"}:
+        fail("trust metadata fields drifted")
+    keys = value["manifest_keys"]
+    if not isinstance(keys, dict) or not keys or len(keys) > 8:
+        fail("manifest trust set must contain one to eight keys")
+    for key_id, encoded in keys.items():
+        if not isinstance(key_id, str) or not KEY_ID.fullmatch(key_id):
+            fail("manifest trust key ID is invalid")
+        if not isinstance(encoded, str) or not PUBLIC_KEY.fullmatch(encoded):
+            fail("manifest public key is invalid")
+        try:
+            decoded = base64.b64decode(encoded + "=", altchars=b"-_", validate=True)
+        except (binascii.Error, ValueError):
+            fail("manifest public key is invalid")
+        if len(decoded) != 32:
+            fail("manifest public key is invalid")
+    return set(keys)
 
 
 def descriptor(raw: bytes) -> dict[str, object]:
@@ -40,6 +68,7 @@ def descriptor(raw: bytes) -> dict[str, object]:
     expected = {
         "schema", "package", "package_version", "family", "owner",
         "manifest_contract", "supported_openclaw", "install_root",
+        "manifest_key_ids",
         "rollback_source_template", "components",
     }
     if set(value) != expected:
@@ -52,6 +81,14 @@ def descriptor(raw: bytes) -> dict[str, object]:
         fail("manifest v2 compatibility is missing")
     if value["supported_openclaw"] != ">=2026.9.6,<2027.0.0":
         fail("OpenClaw compatibility declaration drifted")
+    key_ids = value.get("manifest_key_ids")
+    if (
+        not isinstance(key_ids, list)
+        or not key_ids
+        or len(key_ids) != len(set(key_ids))
+        or any(not isinstance(item, str) or not KEY_ID.fullmatch(item) for item in key_ids)
+    ):
+        fail("manifest trust key inventory is invalid")
     components = value.get("components")
     if not isinstance(components, dict) or set(components) != {
         "connector",
@@ -79,6 +116,9 @@ def source(root: Path) -> None:
         fail("connector entry point drifted")
     if scripts.get("albert-openclaw-adapter") != meta["components"]["adapter"]:
         fail("adapter entry point drifted")
+    trust_keys = trust((root / "src/albert/openclaw_adapter_trust.json").read_bytes())
+    if trust_keys != set(meta["manifest_key_ids"]):
+        fail("manifest trust keys differ from the package descriptor")
     plugin = json.loads((root / "src/albert/openclaw_plugin/package.json").read_text())
     if plugin.get("version") != meta["package_version"]:
         fail("plugin and package versions differ")
@@ -102,6 +142,9 @@ def wheel(path: Path) -> tuple[dict[str, object], str]:
         if missing:
             fail(f"wheel is missing: {', '.join(sorted(missing))}")
         meta = descriptor(archive.read(DESCRIPTOR))
+        trust_keys = trust(archive.read("albert/openclaw_adapter_trust.json"))
+        if trust_keys != set(meta["manifest_key_ids"]):
+            fail("wheel trust keys differ from the package descriptor")
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
             fail("wheel must contain one METADATA file")
