@@ -115,7 +115,7 @@ memories it shares, which sensitivities this key may see), three backends run:
 
 | Backend | Finds memories by | Good at |
 |---|---|---|
-| `lexical` | PostgreSQL full-text search. A memory matches if it shares **any** query term, ranked by coverage and proximity; long queries keep their 16 rarest terms that occur in the tenant | Exact names, ids, error strings, the words a user typed |
+| `lexical` | PostgreSQL full-text search. A memory matches if it shares **any** query term, ranked by coverage and proximity; long queries keep their 8 rarest terms that occur in the tenant (`ALBERT_LEXICAL_MAX_TERMS`) | Exact names, ids, error strings, the words a user typed |
 | `vector` | Cosine similarity over chunk embeddings, best chunk per memory, above `ALBERT_MIN_VECTOR_SIMILARITY` | Same meaning, different words |
 | `graph` | Entities and relationships matching the query | "What uses X?", "Who owns Y?" |
 
