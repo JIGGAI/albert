@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
+import os
 import re
 import tomllib
 import zipfile
@@ -24,6 +27,7 @@ REQUIRED = {
     "albert/openclaw_plugin/package.json",
 }
 SHA = re.compile(r"[0-9a-f]{40}")
+TRUST = "albert/openclaw_adapter_trust.json"
 
 
 def fail(message: str) -> None:
@@ -69,9 +73,46 @@ def descriptor(raw: bytes) -> dict[str, object]:
     return value
 
 
-def source(root: Path) -> None:
+def trust(raw: bytes, *, required: bool) -> dict[str, str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        fail(f"invalid manifest trust JSON: {exc}")
+    if not isinstance(value, dict) or set(value) != {"manifest_keys"}:
+        fail("manifest trust fields drifted")
+    keys = value["manifest_keys"]
+    if not isinstance(keys, dict):
+        fail("manifest trust keys must be an object")
+    for key_id, public_key in keys.items():
+        if not isinstance(key_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", key_id):
+            fail("manifest trust key ID is invalid")
+        if not isinstance(public_key, str):
+            fail("manifest trust public key is invalid")
+        try:
+            decoded = base64.b64decode(
+                public_key + "=" * (-len(public_key) % 4), altchars=b"-_", validate=True
+            )
+        except (ValueError, binascii.Error):
+            fail("manifest trust public key is invalid")
+        if len(decoded) != 32:
+            fail("manifest trust public key must be 32 bytes")
+    if required and not keys:
+        fail("a production manifest public key is required")
+    return keys
+
+
+def inject_trust(root: Path) -> None:
+    key_id = os.environ.get("ALBERT_ADAPTER_MANIFEST_KEY_ID", "").strip()
+    public_key = os.environ.get("ALBERT_ADAPTER_MANIFEST_PUBLIC_KEY", "").strip()
+    payload = json.dumps({"manifest_keys": {key_id: public_key}}, indent=2, sort_keys=True) + "\n"
+    trust(payload.encode(), required=True)
+    (root / "src" / TRUST).write_text(payload, encoding="utf-8")
+
+
+def source(root: Path, *, require_manifest_trust: bool = False) -> None:
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     meta = descriptor((root / "src" / DESCRIPTOR).read_bytes())
+    trust((root / "src" / TRUST).read_bytes(), required=require_manifest_trust)
     if project["project"]["version"] != meta["package_version"]:
         fail("project and package descriptor versions differ")
     scripts = project["project"]["scripts"]
@@ -95,13 +136,14 @@ def source(root: Path) -> None:
         fail("host target identity or compatibility drifted")
 
 
-def wheel(path: Path) -> tuple[dict[str, object], str]:
+def wheel(path: Path, *, require_manifest_trust: bool = False) -> tuple[dict[str, object], str]:
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
         missing = REQUIRED - names
         if missing:
             fail(f"wheel is missing: {', '.join(sorted(missing))}")
         meta = descriptor(archive.read(DESCRIPTOR))
+        trust(archive.read(TRUST), required=require_manifest_trust)
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
             fail("wheel must contain one METADATA file")
@@ -111,10 +153,10 @@ def wheel(path: Path) -> tuple[dict[str, object], str]:
     return meta, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def emit(path: Path, revision: str, output: Path) -> None:
+def emit(path: Path, revision: str, output: Path, *, require_manifest_trust: bool = False) -> None:
     if not SHA.fullmatch(revision):
         fail("source revision must be a full lowercase commit SHA")
-    meta, digest = wheel(path)
+    meta, digest = wheel(path, require_manifest_trust=require_manifest_trust)
     payload = {
         "schema": 1,
         "artifact": path.name,
@@ -133,8 +175,8 @@ def emit(path: Path, revision: str, output: Path) -> None:
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def verify(path: Path, provenance: Path) -> None:
-    meta, digest = wheel(path)
+def verify(path: Path, provenance: Path, *, require_manifest_trust: bool = False) -> None:
+    meta, digest = wheel(path, require_manifest_trust=require_manifest_trust)
     value = json.loads(provenance.read_text(encoding="utf-8"))
     revision = value.get("source_revision")
     expected = {
@@ -161,20 +203,32 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     source_parser = commands.add_parser("source")
     source_parser.add_argument("root", type=Path, nargs="?", default=Path("."))
+    source_parser.add_argument("--require-manifest-trust", action="store_true")
+    inject_parser = commands.add_parser("inject-trust")
+    inject_parser.add_argument("root", type=Path, nargs="?", default=Path("."))
     emit_parser = commands.add_parser("emit")
     emit_parser.add_argument("wheel", type=Path)
     emit_parser.add_argument("--source-revision", required=True)
     emit_parser.add_argument("--output", required=True, type=Path)
+    emit_parser.add_argument("--require-manifest-trust", action="store_true")
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("wheel", type=Path)
     verify_parser.add_argument("provenance", type=Path)
+    verify_parser.add_argument("--require-manifest-trust", action="store_true")
     args = parser.parse_args()
     if args.command == "source":
-        source(args.root)
+        source(args.root, require_manifest_trust=args.require_manifest_trust)
+    elif args.command == "inject-trust":
+        inject_trust(args.root)
     elif args.command == "emit":
-        emit(args.wheel, args.source_revision, args.output)
+        emit(
+            args.wheel,
+            args.source_revision,
+            args.output,
+            require_manifest_trust=args.require_manifest_trust,
+        )
     else:
-        verify(args.wheel, args.provenance)
+        verify(args.wheel, args.provenance, require_manifest_trust=args.require_manifest_trust)
 
 
 if __name__ == "__main__":
