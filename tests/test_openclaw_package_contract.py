@@ -36,7 +36,7 @@ def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) ->
         for name in required:
             if name.endswith("openclaw_package.json"):
                 content = descriptor
-            elif name.endswith("host_targets/openclaw.json"):
+            elif name.endswith(("host_targets/openclaw.json", "openclaw_adapter_trust.json")):
                 content = (ROOT / "src" / name).read_bytes()
             else:
                 content = b"x"
@@ -53,6 +53,41 @@ def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) ->
     value["artifact_sha256"] = "0" * 64
     provenance.write_text(json.dumps(value))
     assert run("verify", str(wheel), str(provenance)).returncode != 0
+
+
+def test_source_contract_rejects_empty_malformed_and_drifted_trust(tmp_path: Path) -> None:
+    package_root = tmp_path / "package"
+    (package_root / "src/albert/openclaw_plugin").mkdir(parents=True)
+    (package_root / "src/albert/host_targets").mkdir(parents=True)
+    (package_root / "pyproject.toml").write_text(
+        "[project]\nversion = \"0.4.0\"\n[project.scripts]\n"
+        "albert-capture = \"albert.capture_installer:app\"\n"
+        "albert-openclaw-adapter = \"albert.openclaw_adapter:main\"\n"
+    )
+    for relative in (
+        "src/albert/openclaw_package.json",
+        "src/albert/openclaw_adapter_trust.json",
+        "src/albert/openclaw_plugin/package.json",
+        "src/albert/host_targets/openclaw.json",
+    ):
+        target = package_root / relative
+        target.write_bytes((ROOT / relative).read_bytes())
+
+    trust_path = package_root / "src/albert/openclaw_adapter_trust.json"
+    trust_path.write_text('{"manifest_keys": {}}')
+    assert run("source", str(package_root)).returncode != 0
+
+    trust_path.write_text(
+        json.dumps({"manifest_keys": {"bad key": "A" * 43}}), encoding="utf-8"
+    )
+    assert run("source", str(package_root)).returncode != 0
+
+    trust_path.write_bytes((ROOT / "src/albert/openclaw_adapter_trust.json").read_bytes())
+    descriptor_path = package_root / "src/albert/openclaw_package.json"
+    descriptor = json.loads(descriptor_path.read_text())
+    descriptor["manifest_key_ids"] = ["different-production-key"]
+    descriptor_path.write_text(json.dumps(descriptor))
+    assert run("source", str(package_root)).returncode != 0
 
 
 def test_docs_do_not_regress_to_unsafe_openclaw_examples() -> None:

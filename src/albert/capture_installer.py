@@ -505,8 +505,10 @@ def install_openclaw(
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
     cloud_metadata: dict[str, object] | None = None,
+    package_version: str | None = None,
 ) -> None:
     version = _detect_openclaw(runner)
+    installed_package_version = package_version or _package_version()
     try:
         target = negotiate_host_target(
             "openclaw", version, {"capture", "recall", "reload", "rollback", "uninstall"}
@@ -558,10 +560,10 @@ def install_openclaw(
             os.chmod(staged.queue, 0o600)
         marker = {
             "owner": "albert-memory",
-            "package_version": _package_version(),
             "host": "openclaw",
             "host_target_schema": target.schema_version,
             "host_target_version": target.descriptor_version,
+            "package_version": installed_package_version,
             "api_url": api_url,
             "openclaw_version": ".".join(str(value) for value in version),
         }
@@ -720,6 +722,7 @@ def connect_openclaw(
     from urllib.parse import parse_qs, urlsplit, urlunsplit
 
     link_url = _https_url(_validate_secret(link_url.strip()), "Cloud one-time link")
+    installed_package_version = package_version or _package_version()
     parsed = urlsplit(link_url)
     try:
         query = parse_qs(parsed.query, strict_parsing=True)
@@ -762,7 +765,7 @@ def connect_openclaw(
             link_url=link_url,
             openclaw_version=version,
             trust=trust,
-            package_version=package_version,
+            package_version=installed_package_version,
         )
         compensation_url = manifest.compensation_url
         redemption = {
@@ -871,6 +874,7 @@ def connect_openclaw(
             paths=paths,
             runner=runner,
             cloud_metadata=cloud_metadata,
+            package_version=installed_package_version,
         )
     except Exception as connect_exc:
         if receipt is not None and compensation_url is not None:

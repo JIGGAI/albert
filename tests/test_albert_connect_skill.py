@@ -15,6 +15,12 @@ def test_agent_connect_skill_has_secure_supported_flow() -> None:
     assert "Codex | Not yet supported" in text
     assert "Claude Code | Not yet supported" in text
     assert "Cursor | Not yet supported" in text
+    reuse = text.index("## 3. Reuse a healthy matching OpenClaw connection")
+    install = text.index("## 4. Install the exact verified connector when missing")
+    reuse_contract = text[reuse:install]
+    assert 'importlib.metadata.version("albert-memory")' in reuse_contract
+    assert "installed `albert-memory` version is exactly `0.4.0`" in reuse_contract
+    assert '"package_version": "0.4.0"' in reuse_contract
 
 
 def test_agent_connect_skill_forbids_secret_bearing_shortcuts() -> None:

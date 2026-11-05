@@ -40,26 +40,26 @@ Do not install the OpenClaw adapter into another host.
 
 ## 3. Reuse a healthy matching OpenClaw connection
 
-If `albert-capture` already exists, inspect only the owned marker at
-`~/.openclaw/albert/install.json`. A reusable installation must record both
-`"owner": "albert-memory"` and `"package_version": "0.4.0"`. A missing or different
-package version requires the verified installation step below; do not trust executable names or
+If `albert-capture` already exists, inspect both the installed distribution metadata and the owned marker at `~/.openclaw/albert/install.json` without using the link:
+
+```bash
+python -c 'import importlib.metadata; print(importlib.metadata.version("albert-memory"))'
+```
+
+A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.0` and record both `"owner": "albert-memory"` and `"package_version": "0.4.0"` in the marker. A missing or different package version requires the verified installation step below; do not trust executable names or
 the Brain origin alone.
 
-Only when the marker records the exact package version, run:
+Only when both exact-version checks pass, run:
 
 ```bash
 albert-capture doctor --smoke
 ```
 
-If doctor passes and the marker has the same Brain API origin encoded by the link (the portion
-before `/onboard/`), keep the existing connection and do not redeem the new link. Inspect only
-`install.json`; never read or print `credentials.env`.
+If doctor passes and the marker has the same Brain API origin encoded by the link (the portion before `/onboard/`), keep the existing connection and do not redeem the new link. Inspect only `install.json`; never read or print `credentials.env`.
 
-If doctor fails, the Brain differs, or the user explicitly requested reconnection/rotation, continue. Do not uninstall the working connection first; `connect` performs transactional replacement and rollback.
+If doctor fails, either exact-version check fails, the Brain differs, or the user explicitly requested reconnection/rotation, continue. Do not uninstall the working connection first; `connect` performs transactional replacement and rollback.
 
-**Complete when:** a healthy matching exact-version connection is reused, or replacement is
-confirmed necessary.
+**Complete when:** a healthy matching exact-version connection is reused, or replacement is confirmed necessary.
 
 ## 4. Install the exact verified connector when missing
 

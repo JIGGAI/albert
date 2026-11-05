@@ -151,6 +151,7 @@ def test_install_is_private_and_never_places_credentials_in_commands(tmp_path: P
     install(paths, runner)
 
     assert paths.marker.exists() and paths.wrapper.exists()
+    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.0"
     assert stat_mode(paths.credentials) == 0o600
     assert stat_mode(paths.wrapper) == 0o700
     assert all(
