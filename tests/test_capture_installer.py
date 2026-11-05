@@ -427,6 +427,7 @@ def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
     values = json.loads(paths.credentials.read_text())
     marker = json.loads(paths.marker.read_text())
     assert values["ALBERT_CAPTURE_TOKEN"] == credential
+    assert marker["package_version"] == "0.4.0"
     assert marker["cloud"] == {
         "brain_id": "brain-1",
         "connection_id": "connection-1",

@@ -25,3 +25,13 @@ def test_agent_connect_skill_forbids_secret_bearing_shortcuts() -> None:
     assert "Never fall back to an unpinned package" in text
     assert "albert-capture connect <" not in text
     assert "--link " not in text
+
+
+def test_agent_connect_skill_reuses_only_the_exact_package_version() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+
+    version_check = text.index('"package_version": "0.4.0"')
+    doctor = text.index("albert-capture doctor --smoke")
+    reuse = text.index("keep the existing connection")
+    assert version_check < doctor < reuse
+    assert "do not trust executable names or\nthe Brain origin alone" in text

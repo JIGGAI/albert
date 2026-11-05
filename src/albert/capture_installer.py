@@ -558,6 +558,7 @@ def install_openclaw(
             os.chmod(staged.queue, 0o600)
         marker = {
             "owner": "albert-memory",
+            "package_version": _package_version(),
             "host": "openclaw",
             "host_target_schema": target.schema_version,
             "host_target_version": target.descriptor_version,
