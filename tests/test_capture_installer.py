@@ -31,7 +31,9 @@ def encoded(value: bytes) -> str:
     return urlsafe_b64encode(value).decode().rstrip("=")
 
 
-def cloud_contract() -> tuple[str, dict[str, object], dict[str, object]]:
+def cloud_contract(
+    *, authorization: str = "Bearer"
+) -> tuple[str, dict[str, object], dict[str, object]]:
     link = (
         "https://console.example.com/api/brain-gateway/brain-1/rest/"
         "onboard/abcdefghijklmnopqrstuvwxyz123456?adapter_context=signed-context"
@@ -56,7 +58,7 @@ def cloud_contract() -> tuple[str, dict[str, object], dict[str, object]]:
             "receipt_ttl_seconds": 600,
             "url": f"{rest}/onboard/compensate",
         },
-        "connection": {"authorization": "***", "rest_url": rest},
+        "connection": {"authorization": authorization, "rest_url": rest},
         "expires_at": (now + timedelta(minutes=15)).isoformat().replace("+00:00", "Z"),
         "identity": {
             "brain_id": "brain-1",
@@ -547,6 +549,19 @@ def test_manifest_rejects_tampering_and_untrusted_release():
     ):
         with pytest.raises(InstallError, match="public HTTPS"):
             _https_url(endpoint, "Adapter endpoint")
+
+
+def test_manifest_requires_bearer_authorization_scheme():
+    link, manifest, trust = cloud_contract(authorization="Basic")
+
+    with pytest.raises(InstallError, match="endpoint binding"):
+        _verify_manifest(
+            manifest,
+            link_url=link,
+            openclaw_version=(2026, 9, 6),
+            trust=trust,
+            package_version="0.4.0",
+        )
 
 
 def stat_mode(path: Path) -> int:
