@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -35,10 +36,18 @@ class Settings(BaseSettings):
     neo4j_password: SecretStr | None = None
     neo4j_database: str = "neo4j"
 
-    llm_provider: Literal["none", "openai-compatible"] = "none"
+    # "chatgpt-oauth" signs in with a ChatGPT account instead of an API key;
+    # see docs/GRAPH_BACKENDS.md. It drives the classifier and Graphiti's LLM;
+    # embeddings stay with ``embedding_provider``.
+    llm_provider: Literal["none", "openai-compatible", "chatgpt-oauth"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: SecretStr | None = None
     classification_model: str | None = None
+    # The Brain-owned credential file `albert-admin chatgpt-login` writes. Every
+    # Albert process of the Brain must see the same file: refresh tokens rotate.
+    chatgpt_credentials_file: Path | None = None
+    chatgpt_base_url: str = "https://chatgpt.com/backend-api/codex"
+    chatgpt_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
 
     worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     lock_default_ttl_seconds: int = Field(default=900, ge=10, le=86400)
@@ -89,6 +98,8 @@ class Settings(BaseSettings):
         "classification_model",
         "neo4j_password",
         "graph_builder",
+        "chatgpt_credentials_file",
+        "chatgpt_reasoning_effort",
         mode="before",
     )
     @classmethod
@@ -114,18 +125,30 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ALBERT_CLASSIFICATION_MODEL is required for openai-compatible classification"
                 )
-        if self.graph_builder == "llm-classifier" and self.llm_provider != "openai-compatible":
+        if self.llm_provider == "chatgpt-oauth":
+            if self.chatgpt_credentials_file is None:
+                raise ValueError(
+                    "ALBERT_CHATGPT_CREDENTIALS_FILE is required for "
+                    "ALBERT_LLM_PROVIDER=chatgpt-oauth"
+                )
+            if self.classification_model is None:
+                raise ValueError(
+                    "ALBERT_CLASSIFICATION_MODEL is required for ALBERT_LLM_PROVIDER=chatgpt-oauth"
+                )
+        if self.graph_builder == "llm-classifier" and self.llm_provider == "none":
             raise ValueError(
-                "ALBERT_GRAPH_BUILDER=llm-classifier requires ALBERT_LLM_PROVIDER=openai-compatible"
+                "ALBERT_GRAPH_BUILDER=llm-classifier requires ALBERT_LLM_PROVIDER="
+                "openai-compatible or chatgpt-oauth"
             )
         if self.graph_builder == "graphiti":
             if self.graph_store not in {"falkordb", "neo4j"}:
                 raise ValueError(
                     "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_GRAPH_STORE=falkordb or neo4j"
                 )
-            if self.llm_provider != "openai-compatible":
+            if self.llm_provider == "none":
                 raise ValueError(
-                    "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_LLM_PROVIDER=openai-compatible"
+                    "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_LLM_PROVIDER="
+                    "openai-compatible or chatgpt-oauth"
                 )
             # Graphiti matches entities and facts by meaning, so it needs real
             # embeddings: a hosted model or the local sentence-transformers model.

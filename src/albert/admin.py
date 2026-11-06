@@ -22,6 +22,10 @@ app = typer.Typer(help="Albert administrative commands", no_args_is_help=True)
 ADMIN_CONTRACT_VERSION = "1"
 JSON_COMMANDS = frozenset(
     {
+        "chatgpt-login-poll",
+        "chatgpt-login-start",
+        "chatgpt-logout",
+        "chatgpt-status",
         "contract",
         "create-key",
         "create-principal",
@@ -462,8 +466,15 @@ def validate_runtime(
             raise typer.Exit(code=1)
         typer.echo(f"embedding probe succeeded ({len(vector)} dimensions)")
     if settings.graph_builder == "graphiti":
+        from albert.chatgpt_oauth import ChatGPTAuthError
+
         try:
             builder_version = get_graph_builder().readiness()
+        except ChatGPTAuthError:
+            # Everything but the model is checked by now. A Brain is created
+            # before its owner signs in to ChatGPT; indexing waits until then.
+            typer.echo("graph builder is waiting for a ChatGPT sign-in")
+            return
         except Exception as exc:
             typer.echo(f"graph builder probe failed ({type(exc).__name__})", err=True)
             raise typer.Exit(code=1) from exc
@@ -526,6 +537,129 @@ def rebuild_links_command(
     typer.echo(
         f"memories={result['memories']} similar={result['similar']} sequence={result['sequence']}"
     )
+
+
+# --- ChatGPT sign-in (ALBERT_LLM_PROVIDER=chatgpt-oauth) ----------------------
+#
+# Device-code sign-in in two steps, so a control plane can show the code and poll
+# without a long-running process. The credential lands in the Brain's own
+# ALBERT_CHATGPT_CREDENTIALS_FILE and is never printed: refresh tokens rotate, so
+# the Brain must be its only holder.
+
+
+def _chatgpt_file(json_mode: bool) -> Any:
+    from albert.config import get_settings
+
+    settings = get_settings()
+    if settings.llm_provider != "chatgpt-oauth" or settings.chatgpt_credentials_file is None:
+        _fail(
+            json_mode,
+            "chatgpt_not_configured",
+            "This Brain does not use ALBERT_LLM_PROVIDER=chatgpt-oauth",
+        )
+    return settings.chatgpt_credentials_file
+
+
+def _chatgpt_state(state: str, account_id: str | None = None) -> None:
+    _emit({"chatgpt": {"state": state, "account_id": account_id}})
+
+
+@app.command("chatgpt-login-start")
+def chatgpt_login_start(json_mode: bool = JSON_OPTION) -> None:
+    """Start a ChatGPT device sign-in; show the user code at the verification URL."""
+    import httpx
+
+    from albert.chatgpt_oauth import ChatGPTAuthError, start_device_login
+
+    _chatgpt_file(json_mode)
+    try:
+        with httpx.Client() as client:
+            login = start_device_login(client)
+    except (ChatGPTAuthError, httpx.HTTPError) as exc:
+        _fail(
+            json_mode,
+            "chatgpt_auth_failed",
+            str(exc)
+            if isinstance(exc, ChatGPTAuthError)
+            else f"OpenAI is unreachable ({type(exc).__name__})",
+        )
+    if not json_mode:
+        typer.echo(f"Open {login.verification_url} and enter {login.user_code}")
+        return
+    _emit(
+        {
+            "login": {
+                "device_auth_id": login.device_auth_id,
+                "user_code": login.user_code,
+                "verification_url": login.verification_url,
+                "interval_seconds": login.interval_seconds,
+            }
+        }
+    )
+
+
+@app.command("chatgpt-login-poll")
+def chatgpt_login_poll(
+    device_auth_id: str = typer.Option(..., help="From chatgpt-login-start"),
+    user_code: str = typer.Option(..., help="From chatgpt-login-start"),
+    json_mode: bool = JSON_OPTION,
+) -> None:
+    """Check once whether the sign-in was approved; store the credential if so."""
+    import httpx
+
+    from albert.chatgpt_oauth import ChatGPTAuthError, poll_device_login, write_credential
+
+    path = _chatgpt_file(json_mode)
+    try:
+        with httpx.Client() as client:
+            credential = poll_device_login(client, device_auth_id, user_code)
+    except (ChatGPTAuthError, httpx.HTTPError) as exc:
+        _fail(
+            json_mode,
+            "chatgpt_auth_failed",
+            str(exc)
+            if isinstance(exc, ChatGPTAuthError)
+            else f"OpenAI is unreachable ({type(exc).__name__})",
+        )
+    if credential is None:
+        if json_mode:
+            _chatgpt_state("pending")
+        else:
+            typer.echo("waiting for approval")
+        return
+    write_credential(path, credential)
+    if json_mode:
+        _chatgpt_state("connected", credential.account_id)
+    else:
+        typer.echo(f"connected ChatGPT account {credential.account_id}")
+
+
+@app.command("chatgpt-status")
+def chatgpt_status(json_mode: bool = JSON_OPTION) -> None:
+    """Report whether a ChatGPT account is connected (never prints tokens)."""
+    from albert.chatgpt_oauth import ChatGPTAuthError, read_credential
+
+    path = _chatgpt_file(json_mode)
+    try:
+        account: str | None = read_credential(path).account_id
+    except ChatGPTAuthError:
+        account = None
+    state = "connected" if account else "disconnected"
+    if json_mode:
+        _chatgpt_state(state, account)
+    else:
+        typer.echo(state if account is None else f"{state} ({account})")
+
+
+@app.command("chatgpt-logout")
+def chatgpt_logout(json_mode: bool = JSON_OPTION) -> None:
+    """Remove this Brain's ChatGPT credential."""
+    path = _chatgpt_file(json_mode)
+    path.unlink(missing_ok=True)
+    if json_mode:
+        _chatgpt_state("disconnected")
+    else:
+        typer.echo("disconnected")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from albert.capture_promotion import promote_capture_checkpoint
 from albert.capture_retention import expire_capture_events
+from albert.chatgpt_oauth import provider_wait_seconds
 from albert.config import get_settings
 from albert.db import SessionLocal
 from albert.graph_builders import get_graph_builder
@@ -103,6 +104,23 @@ def process_job(session: Session, job: Job) -> None:
         if job is None:
             raise
         job.last_error = f"{type(exc).__name__}: {exc}"[:10_000]
+        wait = provider_wait_seconds(exc)
+        if wait is not None:
+            # Waiting on the ChatGPT account (sign-in or usage limit), not a
+            # fault in this job: keep its retries for real failures.
+            job.attempts = max(0, job.attempts - 1)
+            job.status = "pending"
+            job.available_at = utcnow() + timedelta(seconds=wait)
+            session.commit()
+            logger.warning(
+                "Job waiting for the ChatGPT account",
+                extra={
+                    "job_id": str(job.id),
+                    "job_type": job.job_type,
+                    "error": type(exc).__name__,
+                },
+            )
+            return
         if job.attempts >= MAX_JOB_ATTEMPTS:
             job.status = "failed"
             if job.job_type == "enrich_episode":
