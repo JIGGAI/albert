@@ -44,6 +44,28 @@
           }
         ]
       }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "albert-codex-adapter",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "albert-codex-adapter",
+            "timeout": 2
+          }
+        ]
+      }
     ]
   }
 }

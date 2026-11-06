@@ -19,19 +19,23 @@ import typer
 
 from albert.capture_installer import InstallError, _brain_check, _validate_secret
 from albert.capture_sdk import generate_queue_key
-from albert.codex_adapter import CODEX_EVENTS
-from albert.host_targets import HostTargetError, assert_owned_install_root, negotiate_host_target
+from albert.codex_adapter import CODEX_EVENTS, SUPPORTED_HOOKS
+from albert.host_targets import (
+    HostTargetError,
+    assert_owned_install_root,
+    load_host_target,
+    negotiate_host_target,
+)
 
 app = typer.Typer(help="Securely install and operate Albert for Codex.")
 PLUGIN_ID = "albert-memory"
 VERSION_PATTERN = re.compile(r"(?:codex-cli\s+|codex\s+)?v?(\d+)\.(\d+)\.(\d+)", re.I)
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
-
-
 # Seconds Codex allows each hook. Recall hooks search (and may embed) on the Brain,
 # so they get longer than the capture-only hooks.
 HOOK_TIMEOUTS = {"SessionStart": 5, "UserPromptSubmit": 5}
+
 
 @dataclass(frozen=True)
 class CodexInstallPaths:
@@ -173,7 +177,7 @@ def _configured_hooks(source: Path, adapter: Path) -> dict[str, list[dict]]:
         hooks = payload["hooks"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise InstallError("Codex hook fixture is malformed") from exc
-    if set(hooks) != {"PreCompact", "SessionStart", "Stop", "UserPromptSubmit"}:
+    if set(hooks) != SUPPORTED_HOOKS:
         raise InstallError("Codex hook fixture contains unsupported events")
     for event, matchers in hooks.items():
         if not isinstance(matchers, list) or len(matchers) != 1:
@@ -347,7 +351,7 @@ def doctor_codex(
     if marker.get("hooks_config") != str(paths.hooks_config):
         raise InstallError("Codex hook ownership marker does not match this configuration")
     commands = _owned_commands(_load_hooks(paths.hooks_config))
-    if len(commands) != 4 or set(commands) != {str(paths.adapter)}:
+    if len(commands) != len(SUPPORTED_HOOKS) or set(commands) != {str(paths.adapter)}:
         raise InstallError("Codex hooks are missing or modified")
     check = brain_check or (
         lambda url, secret, key, workspace: _brain_check(
@@ -364,7 +368,9 @@ def doctor_codex(
 
 def revoke_codex(paths: CodexInstallPaths) -> None:
     try:
-        target = negotiate_host_target("codex", (0, 154, 0), {"revoke"})
+        tested = load_host_target("codex").host["tested"]
+        version = tuple(int(part) for part in tested.split("."))
+        target = negotiate_host_target("codex", version, {"revoke"})
         assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None

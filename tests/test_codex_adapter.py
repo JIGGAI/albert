@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from albert.api import app
 from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
-from albert.codex_adapter import CODEX_EVENTS, CodexAdapter, CodexState, main
+from albert.codex_adapter import CODEX_EVENTS, SUPPORTED_HOOKS, CodexAdapter, CodexState, main
 
 from .conftest import create_identity, drain_jobs
 
@@ -85,6 +85,14 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
     )
     adapter.handle(stopped)
     adapter.handle(stopped)
+    interrupted = envelope("Interrupt", tmp_path, turn_id="turn-2")
+    adapter.handle(interrupted)
+    adapter.handle(interrupted)
+    ended = envelope("SessionEnd", tmp_path, reason="other")
+    for key in ("turn_id", "model", "permission_mode"):
+        ended.pop(key)
+    adapter.handle(ended)
+    adapter.handle(ended)
 
     for result in (started, recalled):
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -98,8 +106,10 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
         "user_goal",
         "pre_compaction_checkpoint",
         "assistant_outcome",
+        "failure_summary",
+        "session_ended",
     ]
-    assert [item["sequence"] for item in unique_events.values()] == [1, 2, 3, 4]
+    assert [item["sequence"] for item in unique_events.values()] == [1, 2, 3, 4, 5, 6]
     assert all(item["body_kind"] == "summary" for item in unique_events.values())
     assert all("prompt" not in item and "transcript" not in item for item in unique_events.values())
     assert all(
@@ -107,11 +117,15 @@ def test_codex_golden_lifecycle_is_bounded_cited_and_idempotent(tmp_path: Path):
     )
 
     checkpoints = [body for path, body in requests if path.endswith("/checkpoints")]
-    assert len(checkpoints) == 4
-    assert checkpoints[0]["idempotency_key"] == checkpoints[1]["idempotency_key"]
-    assert checkpoints[2]["idempotency_key"] == checkpoints[3]["idempotency_key"]
-    assert checkpoints[0]["idempotency_key"] != checkpoints[2]["idempotency_key"]
-    assert not any(path.endswith("/end") for path, _ in requests)
+    # PreCompact, Stop, Interrupt and SessionEnd each checkpoint once; retries reuse keys.
+    assert len(checkpoints) == 8
+    keys = [item["idempotency_key"] for item in checkpoints]
+    assert keys[0::2] == keys[1::2]
+    assert len(set(keys)) == 4
+    assert checkpoints[-1]["through_sequence"] == 6
+    ends = [body for path, body in requests if path.endswith("/end")]
+    assert [item["final_sequence"] for item in ends] == [6, 6]
+    assert ends[0]["idempotency_key"] == ends[1]["idempotency_key"]
     recall_requests = [body for path, body in requests if path == "/v1/context/session-start"]
     assert recall_requests
     # Recall sends the capture provenance; the server derives the project identity from it.
@@ -193,9 +207,7 @@ def test_codex_capture_is_recalled_in_a_fresh_session_by_brain_project_id(tmp_pa
     )
     drain_jobs()
 
-    adapter("fresh-start").handle(
-        envelope("SessionStart", tmp_path, session_id="fresh-session")
-    )
+    adapter("fresh-start").handle(envelope("SessionStart", tmp_path, session_id="fresh-session"))
     fresh = adapter("fresh-prompt").handle(
         envelope(
             "UserPromptSubmit",
@@ -216,14 +228,22 @@ def test_codex_fixture_declares_only_supported_hooks_and_reduced_fidelity():
     docs = (root / "docs/integrations/codex.md").read_text()
     hooks = fixture["hooks"]
 
-    assert set(hooks) == {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
+    assert set(hooks) == SUPPORTED_HOOKS
+    assert set(hooks) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreCompact",
+        "Stop",
+        "Interrupt",
+        "SessionEnd",
+    }
     assert all(
         group["hooks"][0]["command"] == "albert-codex-adapter"
         for groups in hooks.values()
         for group in groups
     )
-    assert "0.154.0" in docs
-    assert "does not expose a session-end or failure hook" in docs
+    assert "0.167.0" in docs
+    assert "does not expose a failure hook" in docs
     assert "transcript_path" in docs
 
 

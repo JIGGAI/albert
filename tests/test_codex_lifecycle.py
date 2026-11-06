@@ -23,7 +23,7 @@ HOOKS = ROOT / "src/albert/codex_hooks/hooks.json"
 
 
 class CodexRunner:
-    def __init__(self, version: str = "0.154.0") -> None:
+    def __init__(self, version: str = "0.167.0") -> None:
         self.version = version
         self.commands: list[list[str]] = []
 
@@ -56,13 +56,14 @@ def _install(
 
 
 def test_codex_exact_version_and_reduced_fidelity_are_truthful() -> None:
-    target = negotiate_host_target("codex", (0, 154, 0), {"capture", "recall"})
+    target = negotiate_host_target("codex", (0, 166, 0), {"capture", "recall"})
     package = json.loads((ROOT / "src/albert/codex_package.json").read_text())
     assert target.hooks["fidelity"] == "reduced"
-    assert target.hooks["absent"] == ["failure", "session_end"]
+    assert target.hooks["absent"] == ["failure"]
+    assert {"interrupt", "session_end"} <= set(target.hooks["present"])
     assert target.package["artifact_provenance"] == "github-oidc-dsse+sha256"
     assert package["package_version"] == target.package["version"] == "0.4.0"
-    assert package["tested_codex"] == target.host["tested"] == "0.154.0"
+    assert package["tested_codex"] == target.host["tested"] == "0.167.0"
     assert package["supported_codex"] == target.host["supported"]
     assert package["provenance"] == target.package["artifact_provenance"]
 
@@ -74,9 +75,7 @@ def test_install_doctor_rotate_revoke_and_uninstall_preserve_unrelated_hooks(
     paths.hooks_config.parent.mkdir(parents=True)
     unrelated = {
         "hooks": {
-            "Stop": [
-                {"matcher": "other", "hooks": [{"type": "command", "command": "other-hook"}]}
-            ]
+            "Stop": [{"matcher": "other", "hooks": [{"type": "command", "command": "other-hook"}]}]
         },
         "unrelated": True,
     }
@@ -137,11 +136,7 @@ def test_collisions_symlinks_and_unsupported_versions_fail_before_changes(tmp_pa
             {
                 "hooks": {
                     "Stop": [
-                        {
-                            "hooks": [
-                                {"type": "command", "command": "/foreign/albert-codex-adapter"}
-                            ]
-                        }
+                        {"hooks": [{"type": "command", "command": "/foreign/albert-codex-adapter"}]}
                     ]
                 }
             }
@@ -161,7 +156,10 @@ def test_collisions_symlinks_and_unsupported_versions_fail_before_changes(tmp_pa
 
     paths.hooks_config.unlink()
     with pytest.raises(InstallError, match="version is unsupported"):
-        _install(paths, CodexRunner("0.155.0"))
+        _install(paths, CodexRunner("0.165.0"))
+    assert not paths.root.exists()
+    with pytest.raises(InstallError, match="version is unsupported"):
+        _install(paths, CodexRunner("0.168.0"))
     assert not paths.root.exists()
 
 
