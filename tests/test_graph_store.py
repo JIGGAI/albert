@@ -76,6 +76,16 @@ def test_graph_builder_is_explicit_and_graphiti_fails_closed() -> None:
             openai_api_key="test-key",
             classification_model="test-model",
         )
+    # The local embedding model works too: only Graphiti's LLM needs a provider.
+    local = Settings(
+        graph_builder="graphiti",
+        graph_store="falkordb",
+        llm_provider="openai-compatible",
+        embedding_provider="sentence-transformers",
+        openai_api_key="test-key",
+        classification_model="test-model",
+    )
+    assert local.graph_builder == "graphiti"
     graphiti = Settings(
         graph_builder="graphiti",
         graph_store="falkordb",

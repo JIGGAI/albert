@@ -754,3 +754,46 @@ def test_graphiti_live_worker_api_relationship_journey() -> None:
     finally:
         set_graph_builder(None)
         set_graph_store(None)
+
+
+def test_graphiti_uses_albert_local_embedder_when_embeddings_are_local(monkeypatch) -> None:
+    """With sentence-transformers, Graphiti embeds through Albert's local model; only
+    its LLM uses the provider."""
+    calls: list[str] = []
+
+    class StubEmbedder:
+        name, dimensions = "stub", 3
+
+        def embed(self, text: str) -> list[float]:
+            calls.append(text)
+            return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(graph_builders, "get_embedder", lambda: StubEmbedder())
+    client = graph_builders._albert_embedder_client()
+
+    assert asyncio.run(client.create("one")) == [0.1, 0.2, 0.3]
+    assert asyncio.run(client.create(["two", "ignored"])) == [0.1, 0.2, 0.3]
+    assert asyncio.run(client.create_batch(["a", "b"])) == [[0.1, 0.2, 0.3]] * 2
+    assert calls == ["one", "two", "a", "b"]
+    with pytest.raises(TypeError):
+        asyncio.run(client.create([1, 2, 3]))
+
+
+def test_graphiti_client_picks_embedder_by_provider(monkeypatch) -> None:
+    local = Settings(
+        graph_builder="graphiti",
+        graph_store="neo4j",
+        neo4j_password="test-only",
+        llm_provider="openai-compatible",
+        embedding_provider="sentence-transformers",
+        openai_api_key="test-only-placeholder",
+        classification_model="test-model",
+    )
+    stub = SimpleNamespace(name="stub", dimensions=384, embed=lambda _text: [0.0] * 384)
+    monkeypatch.setattr(graph_builders, "get_embedder", lambda: stub)
+    client = GraphitiGraphBuilder(local)._client()
+    try:
+        assert type(client.embedder).__name__ == "AlbertEmbedderClient"
+        assert client.embedder.embedder is stub
+    finally:
+        asyncio.run(GraphitiGraphBuilder._close_client(client))
