@@ -335,7 +335,7 @@ def _verify_manifest(
     )
     if (
         rest_url != expected_rest
-        or connection.get("authorization") != "***"
+        or connection.get("authorization") != "Bearer"
         or redemption.get("method") != "POST"
         or redemption.get("single_use") is not True
         or redemption.get("identity_bound") is not True
