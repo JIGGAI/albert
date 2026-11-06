@@ -44,9 +44,7 @@ def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) ->
         archive.writestr("albert_memory-0.4.0.dist-info/METADATA", "Version: 0.4.0\n")
     provenance = tmp_path / "provenance.json"
     revision = "a" * 40
-    emitted = run(
-        "emit", str(wheel), "--source-revision", revision, "--output", str(provenance)
-    )
+    emitted = run("emit", str(wheel), "--source-revision", revision, "--output", str(provenance))
     assert emitted.returncode == 0
     assert run("verify", str(wheel), str(provenance)).returncode == 0
     value = json.loads(provenance.read_text())
@@ -60,9 +58,9 @@ def test_source_contract_rejects_empty_malformed_and_drifted_trust(tmp_path: Pat
     (package_root / "src/albert/openclaw_plugin").mkdir(parents=True)
     (package_root / "src/albert/host_targets").mkdir(parents=True)
     (package_root / "pyproject.toml").write_text(
-        "[project]\nversion = \"0.4.0\"\n[project.scripts]\n"
-        "albert-capture = \"albert.capture_installer:app\"\n"
-        "albert-openclaw-adapter = \"albert.openclaw_adapter:main\"\n"
+        '[project]\nversion = "0.4.0"\n[project.scripts]\n'
+        'albert-capture = "albert.capture_installer:app"\n'
+        'albert-openclaw-adapter = "albert.openclaw_adapter:main"\n'
     )
     for relative in (
         "src/albert/openclaw_package.json",
@@ -77,9 +75,7 @@ def test_source_contract_rejects_empty_malformed_and_drifted_trust(tmp_path: Pat
     trust_path.write_text('{"manifest_keys": {}}')
     assert run("source", str(package_root)).returncode != 0
 
-    trust_path.write_text(
-        json.dumps({"manifest_keys": {"bad key": "A" * 43}}), encoding="utf-8"
-    )
+    trust_path.write_text(json.dumps({"manifest_keys": {"bad key": "A" * 43}}), encoding="utf-8")
     assert run("source", str(package_root)).returncode != 0
 
     trust_path.write_bytes((ROOT / "src/albert/openclaw_adapter_trust.json").read_bytes())

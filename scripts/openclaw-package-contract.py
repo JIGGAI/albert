@@ -66,10 +66,17 @@ def descriptor(raw: bytes) -> dict[str, object]:
     if not isinstance(value, dict):
         fail("descriptor must be an object")
     expected = {
-        "schema", "package", "package_version", "family", "owner",
-        "manifest_contract", "supported_openclaw", "install_root",
+        "schema",
+        "package",
+        "package_version",
+        "family",
+        "owner",
+        "manifest_contract",
+        "supported_openclaw",
+        "install_root",
         "manifest_key_ids",
-        "rollback_source_template", "components",
+        "rollback_source_template",
+        "components",
     }
     if set(value) != expected:
         fail("descriptor fields drifted")
@@ -169,9 +176,7 @@ def emit(path: Path, revision: str, output: Path) -> None:
         "supported_openclaw": meta["supported_openclaw"],
         "manifest_contract": meta["manifest_contract"],
         "source_revision": revision,
-        "rollback_source": str(meta["rollback_source_template"]).format(
-            source_revision=revision
-        ),
+        "rollback_source": str(meta["rollback_source_template"]).format(source_revision=revision),
     }
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -191,9 +196,9 @@ def verify(path: Path, provenance: Path) -> None:
         "supported_openclaw": meta["supported_openclaw"],
         "manifest_contract": meta["manifest_contract"],
         "source_revision": revision,
-        "rollback_source": str(meta["rollback_source_template"]).format(
-            source_revision=revision
-        ) if isinstance(revision, str) else "",
+        "rollback_source": str(meta["rollback_source_template"]).format(source_revision=revision)
+        if isinstance(revision, str)
+        else "",
     }
     if not isinstance(revision, str) or not SHA.fullmatch(revision) or value != expected:
         fail("provenance is incomplete, mutable, or does not match the wheel")

@@ -275,19 +275,15 @@ def _verify_manifest(
         raise InstallError("Cloud adapter manifest identity or capabilities are invalid")
 
     adapter = unsigned.get("adapter")
-    if (
-        not isinstance(adapter, dict)
-        or set(adapter)
-        != {
-            "artifact_sha256",
-            "artifact_signature",
-            "artifact_url",
-            "family",
-            "package",
-            "package_version",
-            "supported_openclaw",
-        }
-    ):
+    if not isinstance(adapter, dict) or set(adapter) != {
+        "artifact_sha256",
+        "artifact_signature",
+        "artifact_url",
+        "family",
+        "package",
+        "package_version",
+        "supported_openclaw",
+    }:
         raise InstallError("Cloud adapter package provenance is malformed")
     local_version = package_version or _package_version()
     artifact_sha256 = adapter.get("artifact_sha256")
@@ -297,8 +293,7 @@ def _verify_manifest(
         or adapter.get("package_version") != local_version
         or not isinstance(artifact_sha256, str)
         or not SHA256_PATTERN.fullmatch(artifact_sha256)
-        or adapter.get("artifact_signature")
-        != f"github-oidc-dsse:sha256:{artifact_sha256}"
+        or adapter.get("artifact_signature") != f"github-oidc-dsse:sha256:{artifact_sha256}"
         or not isinstance(adapter.get("supported_openclaw"), str)
         or not _version_in_range(openclaw_version, adapter["supported_openclaw"])
     ):
