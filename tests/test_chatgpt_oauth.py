@@ -589,3 +589,38 @@ def test_admin_chatgpt_commands_refuse_other_providers(monkeypatch) -> None:
     result = CliRunner().invoke(admin_app, ["chatgpt-status", "--json"])
     assert result.exit_code == 2
     assert json.loads(result.stderr)["error"]["code"] == "chatgpt_not_configured"
+
+
+@pytest.mark.parametrize(
+    ("error", "exit_code", "message"),
+    [
+        (ChatGPTAuthError("No ChatGPT account is connected"), 0, "waiting for a ChatGPT sign-in"),
+        (
+            ChatGPTRequestError("boom", status=500),
+            1,
+            "graph builder probe failed (ChatGPTRequestError)",
+        ),
+    ],
+)
+def test_validate_runtime_accepts_a_brain_awaiting_sign_in(
+    monkeypatch, error, exit_code, message
+) -> None:
+    from albert import config
+    from albert.graph_builders import set_graph_builder
+
+    real = config.get_settings()
+    monkeypatch.setattr(
+        config, "get_settings", lambda: real.model_copy(update={"graph_builder": "graphiti"})
+    )
+
+    class Builder:
+        def readiness(self) -> str:
+            raise error
+
+    set_graph_builder(Builder())  # type: ignore[arg-type]
+    try:
+        result = CliRunner().invoke(admin_app, ["validate-runtime"])
+    finally:
+        set_graph_builder(None)
+    assert result.exit_code == exit_code, result.output
+    assert message in result.output

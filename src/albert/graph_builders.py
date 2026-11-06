@@ -876,10 +876,10 @@ class GraphitiGraphBuilder:
         # paths, so exercise Albert's normal abstractions before claiming the
         # builder is ready. The caller reports exception types only, keeping
         # provider URLs, responses, and credentials out of operator telemetry.
-        classify("Albert runtime readiness probe.")
         vector = get_embedder().embed("Albert runtime readiness probe")
         if len(vector) != self.settings.embedding_dimensions:
             raise ValueError("Embedding provider returned unexpected dimensions")
+        classify("Albert runtime readiness probe.")
         return self.version
 
 

@@ -466,8 +466,15 @@ def validate_runtime(
             raise typer.Exit(code=1)
         typer.echo(f"embedding probe succeeded ({len(vector)} dimensions)")
     if settings.graph_builder == "graphiti":
+        from albert.chatgpt_oauth import ChatGPTAuthError
+
         try:
             builder_version = get_graph_builder().readiness()
+        except ChatGPTAuthError:
+            # Everything but the model is checked by now. A Brain is created
+            # before its owner signs in to ChatGPT; indexing waits until then.
+            typer.echo("graph builder is waiting for a ChatGPT sign-in")
+            return
         except Exception as exc:
             typer.echo(f"graph builder probe failed ({type(exc).__name__})", err=True)
             raise typer.Exit(code=1) from exc
