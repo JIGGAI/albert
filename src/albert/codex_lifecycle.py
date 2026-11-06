@@ -78,6 +78,22 @@ def _detect_codex(runner: Runner) -> tuple[int, int, int]:
     return version
 
 
+def _render(version: tuple[int, int, int]) -> str:
+    return ".".join(str(value) for value in version)
+
+
+def unverified_warning(version: tuple[int, int, int]) -> str | None:
+    """Describe a supported Codex release newer than the one verified with Albert."""
+    verified = load_host_target("codex").host["tested"]
+    if version <= tuple(int(part) for part in verified.split(".")):
+        return None
+    return (
+        f"Warning: Codex {_render(version)} is not yet verified with Albert "
+        f"(last verified: {verified}). Capture and recall use the same hook contract and "
+        "are expected to work; Albert verifies new Codex releases and will update this check."
+    )
+
+
 def _write_private(path: Path, content: str, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(content, encoding="utf-8")
@@ -248,8 +264,11 @@ def install_codex(
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
     hook_source: Path | None = None,
-) -> None:
-    """Validate, stage, atomically replace, and prove a Codex installation."""
+) -> tuple[int, int, int]:
+    """Validate, stage, atomically replace, and prove a Codex installation.
+
+    Returns the detected Codex version so callers can report verification status.
+    """
     version = _detect_codex(runner)
     try:
         target = negotiate_host_target(
@@ -290,7 +309,7 @@ def install_codex(
         _write_private(staged.adapter, _adapter_text(paths.credentials), 0o700)
         marker = {
             "api_url": api_url,
-            "codex_version": ".".join(str(value) for value in version),
+            "codex_version": _render(version),
             "hook_fidelity": target.hooks["fidelity"],
             "hooks_config": str(paths.hooks_config),
             "host": "codex",
@@ -332,6 +351,7 @@ def install_codex(
     else:
         if backup.exists():
             shutil.rmtree(backup)
+    return version
 
 
 def doctor_codex(
@@ -340,7 +360,7 @@ def doctor_codex(
     smoke: bool = False,
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
-) -> None:
+) -> tuple[int, int, int]:
     version = _detect_codex(runner)
     try:
         target = negotiate_host_target("codex", version, {"capture", "recall"})
@@ -364,6 +384,7 @@ def doctor_codex(
         values["ALBERT_CAPTURE_QUEUE_KEY"],
         values.get("ALBERT_WORKSPACE_ID"),
     )
+    return version
 
 
 def revoke_codex(paths: CodexInstallPaths) -> None:
@@ -409,6 +430,12 @@ def _default_paths() -> CodexInstallPaths:
     return CodexInstallPaths(codex_home / "albert", codex_home / "hooks.json")
 
 
+def _echo_verification(version: tuple[int, int, int]) -> None:
+    warning = unverified_warning(version)
+    if warning:
+        typer.echo(warning, err=True)
+
+
 @app.command("install")
 def install_command(
     api_url: str = typer.Option(..., "--api-url"),
@@ -428,12 +455,13 @@ def install_command(
             token = getpass.getpass("Albert capture token: ")
         if len(token) > 8192:
             raise InstallError("credential is too long")
-        install_codex(
+        version = install_codex(
             api_url=api_url,
             token=token.strip(),
             workspace_id=workspace_id,
             paths=_default_paths(),
         )
+        _echo_verification(version)
         typer.echo("Albert Memory installed. Review and trust the new Codex hooks normally.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
@@ -443,7 +471,8 @@ def install_command(
 @app.command("doctor")
 def doctor_command(smoke: bool = typer.Option(False, "--smoke")) -> None:
     try:
-        doctor_codex(_default_paths(), smoke=smoke)
+        version = doctor_codex(_default_paths(), smoke=smoke)
+        _echo_verification(version)
         typer.echo("Albert Memory Codex doctor passed.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Doctor failed: {exc}", err=True)

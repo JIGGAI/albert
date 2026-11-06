@@ -69,9 +69,15 @@ bounded encrypted queue for later idempotent replay.
 
 | Codex CLI version | Hook evidence | Status |
 | --- | --- | --- |
-| 0.167.0 | Native fixture, lifecycle/security suites, hook input schemas read from the release binary, and a normal-auth `gpt-5.6-sol` fresh-session proof | Tested |
-| >=0.166.0, <0.168.0 | Stable `hooks` feature with the same command schemas, including `Interrupt` and `SessionEnd` | Supported contract; rerun the fixture for each release |
-| <0.166.0 or >=0.168.0 | Not validated by this adapter release | Unsupported until conformance passes |
+| 0.167.0 | Native fixture, lifecycle/security suites, hook input schemas read from the release binary, and a normal-auth fresh-session capture/recall proof | Verified |
+| >=0.166.0, newer than the verified release | Stable `hooks` feature with the same command schemas, including `Interrupt` and `SessionEnd` | Installs with a "not yet verified with Albert" warning from `install` and `doctor` |
+| <0.166.0 | No stable `hooks` feature with these schemas | Refused |
+
+The verified release is the `tested` field of `src/albert/host_targets/codex.json`
+(mirrored in `codex_package.json` and `automatic_memory_release.json`). The
+development team's host-compatibility check reruns the conformance suite when
+Codex publishes a release and opens a pull request that moves this field with
+`scripts/set-verified-host-version.py codex <version>`.
 
 Codex CLI 0.167.0 does not expose a failure hook, so Albert never emits a
 `failure_summary` for model or tool errors; it uses that class only for a turn the
@@ -102,8 +108,8 @@ To revoke local use without changing Codex hooks, run
 recorded by the ownership marker and the `~/.codex/albert` tree. If the commands
 were modified, uninstall fails closed instead of deleting foreign state.
 
-Release `albert-memory==0.4.0` targets Codex `0.167.0` and supports only
-`>=0.166.0,<0.168.0`. The installed marker records host-target descriptor
+Release `albert-memory==0.4.0` is verified with Codex `0.167.0` and installs on
+`>=0.166.0`; newer, not yet verified releases install with a warning. The installed marker records host-target descriptor
 version `1.0.0`. Immutable release provenance is GitHub OIDC DSSE plus SHA-256,
 declared in `src/albert/codex_package.json` and
 `src/albert/host_targets/codex.json`. Codex still has no failure hook;

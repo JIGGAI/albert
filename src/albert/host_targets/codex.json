@@ -12,7 +12,7 @@
   "host": {
     "family": "codex",
     "tested": "0.167.0",
-    "supported": ">=0.166.0,<0.168.0"
+    "supported": ">=0.166.0"
   },
   "hooks": {
     "fidelity": "reduced",

@@ -242,7 +242,8 @@ def test_codex_fixture_declares_only_supported_hooks_and_reduced_fidelity():
         for groups in hooks.values()
         for group in groups
     )
-    assert "0.167.0" in docs
+    verified = json.loads((root / "src/albert/host_targets/codex.json").read_text())
+    assert verified["host"]["tested"] in docs
     assert "does not expose a failure hook" in docs
     assert "transcript_path" in docs
 
