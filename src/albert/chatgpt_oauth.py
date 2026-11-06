@@ -401,6 +401,10 @@ class ChatGPTClient:
         schema_name: str = "response",
     ) -> dict[str, Any]:
         """Send system ``instructions`` and user ``messages``; return the JSON reply."""
+        inputs = list(messages)
+        if schema is None and not any("json" in text.casefold() for text in inputs):
+            # The backend refuses json_object output unless the input names JSON.
+            inputs.append("Respond with a JSON object.")
         body: dict[str, Any] = {
             "model": self.model,
             "store": False,
@@ -408,7 +412,7 @@ class ChatGPTClient:
             "instructions": instructions or "You are a helpful assistant.",
             "input": [
                 {"role": "user", "content": [{"type": "input_text", "text": text}]}
-                for text in messages
+                for text in inputs
             ],
             "text": {
                 "verbosity": "low",
@@ -480,8 +484,10 @@ class ChatGPTClient:
                     detail = event.get("response") if kind != "error" else event
                     error = detail.get("error") if isinstance(detail, dict) else None
                     code = error.get("code") if isinstance(error, dict) else None
+                    message = error.get("message") if isinstance(error, dict) else None
+                    reason = f": {str(message)[:300]}" if message else ""
                     raise ChatGPTRequestError(
-                        f"ChatGPT request failed ({kind}, {code or 'no code'})", code=code
+                        f"ChatGPT request failed ({kind}, {code or 'no code'}){reason}", code=code
                     )
             if deltas:
                 return "".join(deltas)

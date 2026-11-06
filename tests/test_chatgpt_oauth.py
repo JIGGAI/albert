@@ -290,7 +290,13 @@ def test_complete_json_falls_back_to_streamed_deltas(tmp_path: Path) -> None:
     _credential(path)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert json.loads(request.content)["text"]["format"] == {"type": "json_object"}
+        body = json.loads(request.content)
+        assert body["text"]["format"] == {"type": "json_object"}
+        # The backend refuses json_object output unless the input names JSON.
+        assert [item["content"][0]["text"] for item in body["input"]] == [
+            "x",
+            "Respond with a JSON object.",
+        ]
         return httpx.Response(
             200,
             content=_sse(
@@ -304,6 +310,28 @@ def test_complete_json_falls_back_to_streamed_deltas(tmp_path: Path) -> None:
         path, "gpt-test", client=httpx.Client(transport=httpx.MockTransport(handler))
     )
     assert client.complete_json("", ["x"]) == {"ok": True}
+
+
+def test_stream_error_reports_the_backend_message(tmp_path: Path) -> None:
+    path = tmp_path / "chatgpt.json"
+    _credential(path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_sse(
+                {
+                    "type": "error",
+                    "error": {"message": "model is not supported", "code": None},
+                }
+            ),
+        )
+
+    client = ChatGPTClient(
+        path, "gpt-test", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    with pytest.raises(ChatGPTRequestError, match="model is not supported"):
+        client.complete_json("Reply in JSON.", ["json please"])
 
 
 def test_rejected_access_token_is_refreshed_once_and_retried(tmp_path: Path) -> None:
