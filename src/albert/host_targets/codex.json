@@ -11,13 +11,13 @@
   },
   "host": {
     "family": "codex",
-    "tested": "0.154.0",
-    "supported": ">=0.154.0,<0.155.0"
+    "tested": "0.167.0",
+    "supported": ">=0.166.0"
   },
   "hooks": {
     "fidelity": "reduced",
-    "present": ["session_start", "user_prompt", "pre_compaction", "run_complete"],
-    "absent": ["failure", "session_end"]
+    "present": ["session_start", "user_prompt", "pre_compaction", "run_complete", "interrupt", "session_end"],
+    "absent": ["failure"]
   },
   "install": {
     "root": "~/.codex/albert",

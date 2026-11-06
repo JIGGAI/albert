@@ -19,19 +19,23 @@ import typer
 
 from albert.capture_installer import InstallError, _brain_check, _validate_secret
 from albert.capture_sdk import generate_queue_key
-from albert.codex_adapter import CODEX_EVENTS
-from albert.host_targets import HostTargetError, assert_owned_install_root, negotiate_host_target
+from albert.codex_adapter import CODEX_EVENTS, SUPPORTED_HOOKS
+from albert.host_targets import (
+    HostTargetError,
+    assert_owned_install_root,
+    load_host_target,
+    negotiate_host_target,
+)
 
 app = typer.Typer(help="Securely install and operate Albert for Codex.")
 PLUGIN_ID = "albert-memory"
 VERSION_PATTERN = re.compile(r"(?:codex-cli\s+|codex\s+)?v?(\d+)\.(\d+)\.(\d+)", re.I)
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
-
-
 # Seconds Codex allows each hook. Recall hooks search (and may embed) on the Brain,
 # so they get longer than the capture-only hooks.
 HOOK_TIMEOUTS = {"SessionStart": 5, "UserPromptSubmit": 5}
+
 
 @dataclass(frozen=True)
 class CodexInstallPaths:
@@ -72,6 +76,22 @@ def _detect_codex(runner: Runner) -> tuple[int, int, int]:
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None
     return version
+
+
+def _render(version: tuple[int, int, int]) -> str:
+    return ".".join(str(value) for value in version)
+
+
+def unverified_warning(version: tuple[int, int, int]) -> str | None:
+    """Describe a supported Codex release newer than the one verified with Albert."""
+    verified = load_host_target("codex").host["tested"]
+    if version <= tuple(int(part) for part in verified.split(".")):
+        return None
+    return (
+        f"Warning: Codex {_render(version)} is not yet verified with Albert "
+        f"(last verified: {verified}). Capture and recall use the same hook contract and "
+        "are expected to work; Albert verifies new Codex releases and will update this check."
+    )
 
 
 def _write_private(path: Path, content: str, mode: int) -> None:
@@ -173,7 +193,7 @@ def _configured_hooks(source: Path, adapter: Path) -> dict[str, list[dict]]:
         hooks = payload["hooks"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise InstallError("Codex hook fixture is malformed") from exc
-    if set(hooks) != {"PreCompact", "SessionStart", "Stop", "UserPromptSubmit"}:
+    if set(hooks) != SUPPORTED_HOOKS:
         raise InstallError("Codex hook fixture contains unsupported events")
     for event, matchers in hooks.items():
         if not isinstance(matchers, list) or len(matchers) != 1:
@@ -244,8 +264,11 @@ def install_codex(
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
     hook_source: Path | None = None,
-) -> None:
-    """Validate, stage, atomically replace, and prove a Codex installation."""
+) -> tuple[int, int, int]:
+    """Validate, stage, atomically replace, and prove a Codex installation.
+
+    Returns the detected Codex version so callers can report verification status.
+    """
     version = _detect_codex(runner)
     try:
         target = negotiate_host_target(
@@ -286,7 +309,7 @@ def install_codex(
         _write_private(staged.adapter, _adapter_text(paths.credentials), 0o700)
         marker = {
             "api_url": api_url,
-            "codex_version": ".".join(str(value) for value in version),
+            "codex_version": _render(version),
             "hook_fidelity": target.hooks["fidelity"],
             "hooks_config": str(paths.hooks_config),
             "host": "codex",
@@ -328,6 +351,7 @@ def install_codex(
     else:
         if backup.exists():
             shutil.rmtree(backup)
+    return version
 
 
 def doctor_codex(
@@ -336,7 +360,7 @@ def doctor_codex(
     smoke: bool = False,
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
-) -> None:
+) -> tuple[int, int, int]:
     version = _detect_codex(runner)
     try:
         target = negotiate_host_target("codex", version, {"capture", "recall"})
@@ -347,7 +371,7 @@ def doctor_codex(
     if marker.get("hooks_config") != str(paths.hooks_config):
         raise InstallError("Codex hook ownership marker does not match this configuration")
     commands = _owned_commands(_load_hooks(paths.hooks_config))
-    if len(commands) != 4 or set(commands) != {str(paths.adapter)}:
+    if len(commands) != len(SUPPORTED_HOOKS) or set(commands) != {str(paths.adapter)}:
         raise InstallError("Codex hooks are missing or modified")
     check = brain_check or (
         lambda url, secret, key, workspace: _brain_check(
@@ -360,11 +384,14 @@ def doctor_codex(
         values["ALBERT_CAPTURE_QUEUE_KEY"],
         values.get("ALBERT_WORKSPACE_ID"),
     )
+    return version
 
 
 def revoke_codex(paths: CodexInstallPaths) -> None:
     try:
-        target = negotiate_host_target("codex", (0, 154, 0), {"revoke"})
+        tested = load_host_target("codex").host["tested"]
+        version = tuple(int(part) for part in tested.split("."))
+        target = negotiate_host_target("codex", version, {"revoke"})
         assert_owned_install_root(paths.root, expected_marker=target.ownership["marker"])
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None
@@ -403,6 +430,12 @@ def _default_paths() -> CodexInstallPaths:
     return CodexInstallPaths(codex_home / "albert", codex_home / "hooks.json")
 
 
+def _echo_verification(version: tuple[int, int, int]) -> None:
+    warning = unverified_warning(version)
+    if warning:
+        typer.echo(warning, err=True)
+
+
 @app.command("install")
 def install_command(
     api_url: str = typer.Option(..., "--api-url"),
@@ -422,12 +455,13 @@ def install_command(
             token = getpass.getpass("Albert capture token: ")
         if len(token) > 8192:
             raise InstallError("credential is too long")
-        install_codex(
+        version = install_codex(
             api_url=api_url,
             token=token.strip(),
             workspace_id=workspace_id,
             paths=_default_paths(),
         )
+        _echo_verification(version)
         typer.echo("Albert Memory installed. Review and trust the new Codex hooks normally.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
@@ -437,7 +471,8 @@ def install_command(
 @app.command("doctor")
 def doctor_command(smoke: bool = typer.Option(False, "--smoke")) -> None:
     try:
-        doctor_codex(_default_paths(), smoke=smoke)
+        version = doctor_codex(_default_paths(), smoke=smoke)
+        _echo_verification(version)
         typer.echo("Albert Memory Codex doctor passed.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Doctor failed: {exc}", err=True)

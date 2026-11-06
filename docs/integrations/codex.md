@@ -48,10 +48,16 @@ The adapter uses these documented hooks:
 - `UserPromptSubmit` captures the bounded current user goal and injects similarly
   bounded turn-relevant recall.
 - `PreCompact` records an idempotent minimized checkpoint through the shared SDK.
-
-The two recall hooks have a five-second command budget; the others have two seconds.
 - `Stop` records the bounded final assistant message when present and creates an
   idempotent turn-end checkpoint.
+- `Interrupt` fires instead of `Stop` when the user cancels a turn. It records a
+  `failure_summary` ("Codex turn interrupted by the user.") and the same idempotent
+  turn-end checkpoint, so an interrupted turn is not left unconsolidated.
+- `SessionEnd` records `session_ended`, checkpoints through the final sequence, and
+  calls the capture session-end endpoint, matching the Claude Code and OpenClaw
+  adapters.
+
+The two recall hooks have a five-second command budget; the others have two seconds.
 
 The adapter ignores `transcript_path`, never reads a transcript, and does not send
 the absolute `cwd`. Provenance uses only bounded Git/project facts from the shared
@@ -63,21 +69,27 @@ bounded encrypted queue for later idempotent replay.
 
 | Codex CLI version | Hook evidence | Status |
 | --- | --- | --- |
-| 0.154.0 | Native fixture, lifecycle/security suites, and a normal-auth `gpt-5.6-sol` fresh-session proof | Tested |
-| >=0.154.0, <0.155.0 | Stable `hooks` feature with the same command schemas | Supported contract; rerun the fixture for each release |
-| <0.154.0 or >=0.155.0 | Not validated by this adapter release | Unsupported until conformance passes |
+| 0.167.0 | Native fixture, lifecycle/security suites, hook input schemas read from the release binary, and a normal-auth fresh-session capture/recall proof | Verified |
+| >=0.166.0, newer than the verified release | Stable `hooks` feature with the same command schemas, including `Interrupt` and `SessionEnd` | Installs with a "not yet verified with Albert" warning from `install` and `doctor` |
+| <0.166.0 | No stable `hooks` feature with these schemas | Refused |
 
-Codex CLI 0.154.0 does not expose a session-end or failure hook. Consequently,
-Albert creates turn-end checkpoints at `Stop`, but it cannot truthfully emit a
-`session_ended` or `failure_summary` event or call the capture session-end
-endpoint. This is an explicit reduced-fidelity state, not an inferred event.
-`PreCompact` exposes its trigger but no message/token counts, so the checkpoint
-stores only the trigger.
+The verified release is the `tested` field of `src/albert/host_targets/codex.json`
+(mirrored in `codex_package.json` and `automatic_memory_release.json`). The
+development team's host-compatibility check reruns the conformance suite when
+Codex publishes a release and opens a pull request that moves this field with
+`scripts/set-verified-host-version.py codex <version>`.
+
+Codex CLI 0.167.0 does not expose a failure hook, so Albert never emits a
+`failure_summary` for model or tool errors; it uses that class only for a turn the
+user interrupted. Codex's `SessionEnd` input reports `reason` as `other` for every
+exit, so the recorded reason carries no more detail than that. `PreCompact`
+exposes its trigger but no message/token counts, so the checkpoint stores only
+the trigger.
 
 The end-to-end fixture is `tests/test_codex_adapter.py`. It proves bounded cited
 recall, sequence and checkpoint idempotency, minimized provenance, outage
-continuity, denied-secret non-retention, supported hook declarations, and the
-disclosed unavailable lifecycle behavior.
+continuity, denied-secret non-retention, supported hook declarations, and session-end
+and interrupt handling.
 
 The lifecycle fixture is `tests/test_codex_lifecycle.py`. It covers clean
 install, private credentials, atomic hook merging, doctor, rotation/reconnect,
@@ -96,12 +108,12 @@ To revoke local use without changing Codex hooks, run
 recorded by the ownership marker and the `~/.codex/albert` tree. If the commands
 were modified, uninstall fails closed instead of deleting foreign state.
 
-Release `albert-memory==0.4.0` targets Codex `0.154.0` and supports only
-`>=0.154.0,<0.155.0`. The installed marker records host-target descriptor
+Release `albert-memory==0.4.0` is verified with Codex `0.167.0` and installs on
+`>=0.166.0`; newer, not yet verified releases install with a warning. The installed marker records host-target descriptor
 version `1.0.0`. Immutable release provenance is GitHub OIDC DSSE plus SHA-256,
 declared in `src/albert/codex_package.json` and
-`src/albert/host_targets/codex.json`. Codex still has no session-end or failure
-hook; installation does not claim otherwise.
+`src/albert/host_targets/codex.json`. Codex still has no failure hook;
+installation does not claim otherwise.
 
 ## MCP tools
 

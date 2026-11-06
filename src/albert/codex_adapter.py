@@ -24,8 +24,17 @@ CODEX_EVENTS = {
     "user_goal",
     "assistant_outcome",
     "pre_compaction_checkpoint",
+    "failure_summary",
+    "session_ended",
 }
-SUPPORTED_HOOKS = {"SessionStart", "UserPromptSubmit", "PreCompact", "Stop"}
+SUPPORTED_HOOKS = {
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreCompact",
+    "Stop",
+    "Interrupt",
+    "SessionEnd",
+}
 
 
 def _operation_key(kind: str, session: str, identity: str) -> str:
@@ -232,6 +241,36 @@ class CodexAdapter:
                     self.state.final_sequence(session),
                     _operation_key("turn-checkpoint", session, turn_id),
                 )
+            )
+        elif hook == "Interrupt":
+            # Codex sends Interrupt instead of Stop when the user cancels a turn, so
+            # this is the only signal that the turn ended without an outcome.
+            results.append(
+                self._record(
+                    event, "failure_summary", "Codex turn interrupted by the user.", turn_id
+                )
+            )
+            results.append(
+                self.client.checkpoint(
+                    session,
+                    self.state.final_sequence(session),
+                    _operation_key("turn-checkpoint", session, turn_id),
+                )
+            )
+        elif hook == "SessionEnd":
+            reason = str(event.get("reason") or "other")[:100]
+            source = self._session(event)
+            results.append(
+                self._record(event, "session_ended", f"Codex session ended: {reason}.", source)
+            )
+            sequence = self.state.final_sequence(session)
+            results.append(
+                self.client.checkpoint(
+                    session, sequence, _operation_key("end-checkpoint", source, source)
+                )
+            )
+            results.append(
+                self.client.end_session(session, sequence, _operation_key("end", source, source))
             )
 
         return {"results": [asdict(item) for item in results]}
