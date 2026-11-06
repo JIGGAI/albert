@@ -240,6 +240,13 @@ secrets."""
 
 def classify(text: str) -> Classification:
     settings = get_settings()
+    if settings.llm_provider == "chatgpt-oauth":
+        from albert.chatgpt_oauth import get_chatgpt_client
+
+        reply = get_chatgpt_client().complete_json(
+            CLASSIFIER_INSTRUCTION, [text[:100_000]], schema_name="classification"
+        )
+        return _parse_model_classification(reply)
     if settings.llm_provider != "openai-compatible":
         return heuristic_classify(text)
     if settings.openai_api_key is None or not settings.classification_model:

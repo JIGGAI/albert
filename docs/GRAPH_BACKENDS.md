@@ -122,8 +122,8 @@ quality lever: a better store does not help a graph nothing fills.
   memory and the classifier's plain extraction is not enough.
 - Costs: several model calls per memory, and a second database.
 
-Graphiti fails closed unless the selected store is FalkorDB or Neo4j, the LLM
-provider is `openai-compatible`, and embeddings are real: either
+Graphiti fails closed unless the selected store is FalkorDB or Neo4j, an LLM
+provider is set (`openai-compatible` or `chatgpt-oauth`), and embeddings are real: either
 `openai-compatible` or the local `sentence-transformers` model (the hashing
 embedder is refused). It never falls back to the classifier or regex builder.
 With local embeddings only the LLM needs a provider; set
@@ -140,6 +140,51 @@ ALBERT_OPENAI_API_KEY=<secret>
 ALBERT_CLASSIFICATION_MODEL=<chat-model>
 ALBERT_EMBEDDING_MODEL=<embedding-model>
 ```
+
+### Graphiti (or the classifier) on a ChatGPT account
+
+`ALBERT_LLM_PROVIDER=chatgpt-oauth` uses a ChatGPT sign-in instead of an API
+key. ChatGPT tokens only work against the ChatGPT Codex backend
+(`ALBERT_CHATGPT_BASE_URL`, default `https://chatgpt.com/backend-api/codex`),
+so Albert calls it directly with the Responses API; usage counts against the
+account's ChatGPT plan. Pair it with local embeddings:
+
+```bash
+ALBERT_GRAPH_BUILDER=graphiti
+ALBERT_GRAPH_STORE=falkordb              # or neo4j
+ALBERT_LLM_PROVIDER=chatgpt-oauth
+ALBERT_EMBEDDING_PROVIDER=sentence-transformers
+ALBERT_CHATGPT_CREDENTIALS_FILE=/var/lib/albert/secrets/chatgpt.json
+ALBERT_CLASSIFICATION_MODEL=<a model the ChatGPT plan offers in Codex>
+ALBERT_CHATGPT_REASONING_EFFORT=low     # optional
+```
+
+Sign in with the device flow. Each step prints one JSON object and never a token:
+
+```bash
+albert-admin chatgpt-login-start --json   # shows user_code and verification_url
+albert-admin chatgpt-login-poll --device-auth-id <id> --user-code <code> --json
+albert-admin chatgpt-status --json        # connected / disconnected
+albert-admin chatgpt-logout --json
+```
+
+The account owner opens the verification URL and enters the code; poll every
+`interval_seconds` until the state is `connected`. The credential file is
+written with mode 0600. OpenAI rotates the refresh token on every refresh and
+revokes a token that is used twice, so:
+
+- The Brain must be the credential's only holder. Do not copy it to another
+  Brain or keep a backup that a second process might refresh from.
+- Every Albert process of the Brain (API, worker, MCP) must see the same file,
+  for example a shared volume. Refreshes take a lock beside the file and
+  re-read it first, so only one process refreshes.
+
+While no account is connected, or the plan's usage limit is reached, indexing
+jobs wait and retry every five minutes without using up their attempts.
+Nothing is lost, but new memories and episodes are not indexed (embedded and
+added to the graph) until the account is connected or the limit resets. Albert never
+searches through Graphiti, so its reranker (which needs log-probabilities the
+ChatGPT backend does not offer) is not used.
 
 For FalkorDB, Graphiti's private episode graph is stored in
 `<ALBERT_FALKORDB_GRAPH>_graphiti`; resolved facts are copied into Albert's

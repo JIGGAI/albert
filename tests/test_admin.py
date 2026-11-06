@@ -332,6 +332,10 @@ def test_contract_command() -> None:
             "package": "albert-memory",
             "package_version": albert.__version__,
             "json_commands": [
+                "chatgpt-login-poll",
+                "chatgpt-login-start",
+                "chatgpt-logout",
+                "chatgpt-status",
                 "contract",
                 "create-key",
                 "create-principal",

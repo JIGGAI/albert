@@ -252,7 +252,41 @@ class GraphitiGraphBuilder:
         from graphiti_core.llm_client import LLMConfig
         from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
-        class EntityConsistentOpenAIClient(OpenAIGenericClient):
+        class ChatGPTGraphitiClient(OpenAIGenericClient):
+            """Graphiti's LLM through a ChatGPT sign-in (the Codex backend)."""
+
+            def __init__(self, config: Any, chatgpt: Any) -> None:
+                # Passing the ChatGPT client keeps the parent from building an
+                # OpenAI API client that would need an API key.
+                super().__init__(config=config, client=chatgpt)
+
+            async def _generate_response(
+                self,
+                messages: list[Any],
+                response_model: Any = None,
+                max_tokens: int = 0,
+                model_size: Any = None,
+            ) -> dict[str, Any]:
+                instructions = "\n\n".join(
+                    self._clean_input(m.content) for m in messages if m.role == "system"
+                )
+                user = [self._clean_input(m.content) for m in messages if m.role == "user"]
+                schema = response_model.model_json_schema() if response_model else None
+                return await asyncio.to_thread(
+                    self.client.complete_json,
+                    instructions,
+                    user,
+                    schema,
+                    schema_name=getattr(response_model, "__name__", "response"),
+                )
+
+        base_client: type[Any] = (
+            ChatGPTGraphitiClient
+            if self.settings.llm_provider == "chatgpt-oauth"
+            else OpenAIGenericClient
+        )
+
+        class EntityConsistentOpenAIClient(base_client):  # type: ignore[misc,valid-type]
             """Keep Graphiti's separate node/edge extraction calls consistent."""
 
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -305,9 +339,12 @@ class GraphitiGraphBuilder:
                     }
                 return response
 
-        assert self.settings.openai_api_key is not None
         assert self.settings.classification_model is not None
-        secret = self.settings.openai_api_key.get_secret_value()
+        secret = (
+            self.settings.openai_api_key.get_secret_value()
+            if self.settings.openai_api_key is not None
+            else None
+        )
         model_config = LLMConfig(
             api_key=secret,
             model=self.settings.classification_model,
@@ -432,7 +469,25 @@ class GraphitiGraphBuilder:
                 self.settings.neo4j_password.get_secret_value(),
                 database=self.settings.neo4j_database,
             )
-        llm = EntityConsistentOpenAIClient(config=model_config)
+        if self.settings.llm_provider == "chatgpt-oauth":
+            from albert.chatgpt_oauth import ChatGPTClient
+
+            assert self.settings.chatgpt_credentials_file is not None
+            llm = EntityConsistentOpenAIClient(
+                model_config,
+                ChatGPTClient(
+                    self.settings.chatgpt_credentials_file,
+                    self.settings.classification_model,
+                    base_url=self.settings.chatgpt_base_url,
+                    reasoning_effort=self.settings.chatgpt_reasoning_effort,
+                ),
+            )
+            # Albert builds with Graphiti but never searches through it, so the
+            # reranker is never called; the ChatGPT backend has no logprobs.
+            cross_encoder: Any = _unused_cross_encoder()
+        else:
+            llm = EntityConsistentOpenAIClient(config=model_config)
+            cross_encoder = OpenAIRerankerClient(config=model_config)
         if self.settings.embedding_provider == "openai-compatible":
             embedder = OpenAIEmbedder(
                 OpenAIEmbedderConfig(
@@ -450,7 +505,7 @@ class GraphitiGraphBuilder:
             graph_driver=driver,
             llm_client=llm,
             embedder=embedder,
-            cross_encoder=OpenAIRerankerClient(config=model_config),
+            cross_encoder=cross_encoder,
             store_raw_episode_content=False,
         )
 
@@ -828,6 +883,17 @@ class GraphitiGraphBuilder:
         return self.version
 
 
+def _unused_cross_encoder() -> Any:
+    """A Graphiti reranker for builds that never rerank (Albert does not search via Graphiti)."""
+    from graphiti_core.cross_encoder.client import CrossEncoderClient
+
+    class UnusedCrossEncoder(CrossEncoderClient):
+        async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+            raise NotImplementedError("Albert does not rerank through Graphiti")
+
+    return UnusedCrossEncoder()
+
+
 def _albert_embedder_client() -> Any:
     """Graphiti embedder backed by Albert's configured (local) embedder."""
     from graphiti_core.embedder.client import EmbedderClient
@@ -847,9 +913,7 @@ def _albert_embedder_client() -> Any:
             return await asyncio.to_thread(self.embedder.embed, text)
 
         async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
-            return [
-                await asyncio.to_thread(self.embedder.embed, text) for text in input_data_list
-            ]
+            return [await asyncio.to_thread(self.embedder.embed, text) for text in input_data_list]
 
     return AlbertEmbedderClient()
 

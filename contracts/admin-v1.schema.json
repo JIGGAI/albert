@@ -11,6 +11,8 @@
     { "$ref": "#/$defs/list_keys" },
     { "$ref": "#/$defs/revoke_key" },
     { "$ref": "#/$defs/contract" },
+    { "$ref": "#/$defs/chatgpt_login" },
+    { "$ref": "#/$defs/chatgpt_state" },
     { "$ref": "#/$defs/error" }
   ],
   "$defs": {
@@ -171,6 +173,44 @@
         }
       }
     },
+    "chatgpt_login": {
+      "description": "chatgpt-login-start: show user_code at verification_url, then call chatgpt-login-poll every interval_seconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "login"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "login": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device_auth_id", "user_code", "verification_url", "interval_seconds"],
+          "properties": {
+            "device_auth_id": { "type": "string" },
+            "user_code": { "type": "string" },
+            "verification_url": { "type": "string" },
+            "interval_seconds": { "type": "number" }
+          }
+        }
+      }
+    },
+    "chatgpt_state": {
+      "description": "chatgpt-login-poll, chatgpt-status and chatgpt-logout. Never carries tokens.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_contract", "chatgpt"],
+      "properties": {
+        "admin_contract": { "$ref": "#/$defs/contract_version" },
+        "chatgpt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "account_id"],
+          "properties": {
+            "state": { "enum": ["pending", "connected", "disconnected"] },
+            "account_id": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+          }
+        }
+      }
+    },
     "error": {
       "description": "Written to stderr; the process exits with code 2.",
       "type": "object",
@@ -191,7 +231,9 @@
                 "api_key_not_found",
                 "unknown_capabilities",
                 "invalid_principal_type",
-                "invalid_id"
+                "invalid_id",
+                "chatgpt_not_configured",
+                "chatgpt_auth_failed"
               ]
             },
             "message": { "type": "string" }
