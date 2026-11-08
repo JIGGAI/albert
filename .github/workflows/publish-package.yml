@@ -1,11 +1,11 @@
-name: Release albert-memory to PyPI
-run-name: Release albert-memory v${{ inputs.version }} to PyPI
+name: Prepare or release albert-memory to PyPI
+run-name: Prepare or release albert-memory v${{ inputs.version }}
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Exact version already committed on main (for example, 0.4.1)"
+        description: "Version to prepare or release (for example, 0.4.1)"
         required: true
         type: string
 
@@ -17,7 +17,88 @@ permissions:
   contents: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    outputs:
+      release_ready: ${{ steps.version.outputs.release_ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install version tooling
+        run: python -m pip install --constraint constraints.txt packaging
+      - name: Prepare or validate the requested package version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Run this workflow from the main branch." >&2
+            exit 1
+          }
+
+          package_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          normalized_version=$(python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$RELEASE_VERSION")
+          test "$RELEASE_VERSION" = "$normalized_version" || {
+            echo "Version must use its normalized PEP 440 form: $normalized_version" >&2
+            exit 1
+          }
+
+          if test "$RELEASE_VERSION" = "$package_version"; then
+            echo "release_ready=true" >> "$GITHUB_OUTPUT"
+            echo "Version $RELEASE_VERSION is already reviewed on main; continuing to publication."
+          else
+            python scripts/bump-package-version.py "$RELEASE_VERSION"
+            python scripts/openclaw-package-contract.py source
+            python scripts/claude-package-contract.py source
+            echo "release_ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit the version bump and open its review PR
+        if: steps.version.outputs.release_ready == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          title="chore: bump albert-memory to $RELEASE_VERSION"
+          existing_pr=$(gh pr list --base main --state open --search "$title in:title" \
+            --json url --jq '.[0].url')
+          if test -n "$existing_pr"; then
+            echo "An open version-bump PR already exists: $existing_pr"
+            {
+              echo "### Version bump already prepared"
+              echo
+              echo "Merge $existing_pr, then run this action again for $RELEASE_VERSION to publish."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          release_branch="release/albert-memory-v$RELEASE_VERSION-$GITHUB_RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$release_branch"
+          git add -u
+          git commit -m "$title"
+          git push origin "HEAD:refs/heads/$release_branch"
+          pr_url=$(gh pr create --base main --head "$release_branch" --title "$title" \
+            --body "Prepared by the PyPI release action. Merge after CI passes, then run the action again for version $RELEASE_VERSION to publish the reviewed main revision.")
+          gh workflow run ci.yml --ref "$release_branch"
+          {
+            echo "### Version bump prepared"
+            echo
+            echo "Merge $pr_url after CI passes, then run this action again for $RELEASE_VERSION to publish."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   release:
+    needs: prepare
+    if: needs.prepare.outputs.release_ready == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
