@@ -11,7 +11,7 @@ records real opt-in deployment feedback beyond synthetic and internal fixtures.
 | Host | Tested | Supported contract | Fidelity |
 | --- | --- | --- | --- |
 | OpenClaw | 2026.9.6 | `>=2026.9.6,<2027` | Full |
-| Codex CLI | 0.154.0 | `>=0.154.0,<0.155.0` | No true session-end/failure hook |
+| Codex CLI | 0.167.0 | `>=0.166.0` (newer releases warn until verified) | No failure hook; session end and interrupts are captured |
 | Claude Code | 2.1.312 | `>=2.1.268,<2.2` | Failure hook is best effort on affected 2.1.x builds |
 | Cursor | Desktop 3.27.22; Agent CLI 2026.10.22-27dcf5f | Tested hooks-v1 surfaces | Cloud agents lack start/end hooks |
 
@@ -81,7 +81,7 @@ while retaining linked derivatives. Keep only body-free audit evidence required 
 
 ## Known limitations
 
-- Codex cannot truthfully emit session-end or failure events on the tested hooks.
+- Codex has no failure hook; it emits session-end and interrupt events on the tested hooks.
 - Claude Code failure delivery is best effort on affected 2.1.x versions.
 - Cursor cloud agents lack automatic start recall and true session-end capture.
 - Only OpenClaw has the transactional one-command installer in 0.4.0.
