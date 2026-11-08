@@ -1,56 +1,168 @@
-name: Publish Python package
+name: Release albert-memory to PyPI
+run-name: Release albert-memory v${{ inputs.version }} to PyPI
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact version already committed on main (for example, 0.4.1)"
+        required: true
+        type: string
+
+concurrency:
+  group: albert-memory-pypi-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  openclaw-package:
-    if: startsWith(github.event.release.tag_name, 'albert-memory-v')
+  release:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      actions: read
+      attestations: write
       contents: write
       id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --constraint constraints.txt build
-      - name: Require the immutable tag to match package metadata
+      - name: Install release tooling
+        run: python -m pip install --constraint constraints.txt build
+      - name: Require a green main revision and matching package version
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: albert-memory-v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          test "$RELEASE_TAG" = "albert-memory-v$version"
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Run this workflow from the main branch." >&2
+            exit 1
+          }
+
+          package_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          normalized_version=$(python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$RELEASE_VERSION")
+          test "$RELEASE_VERSION" = "$normalized_version" || {
+            echo "Version must use its normalized PEP 440 form: $normalized_version" >&2
+            exit 1
+          }
+          test "$RELEASE_VERSION" = "$package_version" || {
+            echo "Requested version $RELEASE_VERSION does not match pyproject.toml version $package_version." >&2
+            echo "Bump and review the package version in a normal PR before releasing." >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if test "$(git rev-parse origin/main)" != "$GITHUB_SHA"; then
+            test "$(git rev-parse "$RELEASE_TAG^{commit}" 2>/dev/null)" = "$GITHUB_SHA" || {
+              echo "The selected revision is no longer current on main and has no matching release tag." >&2
+              exit 1
+            }
+            echo "Continuing a previously tagged release after main advanced."
+          fi
+
+          ci_run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --commit "$GITHUB_SHA" --event push --limit 10 \
+            --json conclusion,status,url \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success")][0].url')
+          test -n "$ci_run" || {
+            echo "No successful main CI run exists for $GITHUB_SHA." >&2
+            exit 1
+          }
+          echo "Releasing the revision proven by $ci_run"
           python scripts/openclaw-package-contract.py source
       - name: Build exact wheel and provenance
         run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
           python -m build --wheel
           wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          test -n "$wheel"
           python scripts/openclaw-package-contract.py emit "$wheel" \
             --source-revision "$GITHUB_SHA" --output openclaw-package-provenance.json
           python scripts/openclaw-package-contract.py verify \
             "$wheel" openclaw-package-provenance.json
+      - name: Refuse an existing PyPI version with different bytes
+        id: pypi
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          wheel = next(Path("dist").glob("*.whl"))
+          digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          try:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/albert-memory/{version}/json", timeout=30
+              ) as response:
+                  release = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              print("needs_publish=true")
+          else:
+              matches = [item for item in release["urls"] if item["filename"] == wheel.name]
+              if len(matches) != 1 or matches[0]["digests"]["sha256"] != digest:
+                  raise SystemExit(
+                      f"PyPI already has {version}, but its wheel does not match this build"
+                  )
+              print("needs_publish=false")
+          PY
+      - name: Create the immutable tag and draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: albert-memory-v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse --verify --quiet "$RELEASE_TAG^{commit}" >/dev/null; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA" || {
+              echo "$RELEASE_TAG already points to a different revision." >&2
+              exit 1
+            }
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" "$GITHUB_SHA" -m "albert-memory $RELEASE_VERSION"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+          if release=$(gh release view "$RELEASE_TAG" --json isDraft 2>/dev/null); then
+            test "$(jq -r .isDraft <<< "$release")" = "true" || {
+              echo "GitHub release $RELEASE_TAG is already published." >&2
+              exit 1
+            }
+            gh release upload "$RELEASE_TAG" --clobber \
+              dist/*.whl openclaw-package-provenance.json
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes \
+              --title "albert-memory $RELEASE_VERSION" \
+              dist/*.whl openclaw-package-provenance.json
+          fi
       - name: Attest the immutable wheel
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/*.whl
       - name: Publish immutable version to PyPI with attestations
+        if: steps.pypi.outputs.needs_publish == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
           attestations: true
           print-hash: true
-      - name: Attach digest-pinned provenance to the release
+      - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" openclaw-package-provenance.json
+          RELEASE_TAG: albert-memory-v${{ inputs.version }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
