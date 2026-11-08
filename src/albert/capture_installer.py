@@ -150,7 +150,7 @@ def _package_version() -> str:
     try:
         return importlib.metadata.version("albert-memory")
     except importlib.metadata.PackageNotFoundError:
-        return "0.4.0"
+        return "0.4.1"
 
 
 def _version_in_range(version: tuple[int, int, int], declared: str) -> bool:

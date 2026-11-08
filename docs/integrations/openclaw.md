@@ -23,9 +23,9 @@ not use an unversioned VCS URL or a floating branch. Before production use,
 verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.0
-python -m pip hash albert_memory-0.4.0-py3-none-any.whl
-gh attestation verify albert_memory-0.4.0-py3-none-any.whl --repo JIGGAI/albert
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.1
+python -m pip hash albert_memory-0.4.1-py3-none-any.whl
+gh attestation verify albert_memory-0.4.1-py3-none-any.whl --repo JIGGAI/albert
 python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 

@@ -16,7 +16,7 @@ REVISION, TREE = "a" * 40, "b" * 40
 COMPAT = {
     "compatibility_manifest": "1",
     "package": "albert-memory",
-    "package_version": "0.4.0",
+    "package_version": "0.4.1",
     "contracts": {"rest_api": ["v1"], "capture": ["1"], "export_format": ["albert-export-v1"]},
     "migrations": {"heads": ["0014"], "known_revisions": ["0014"]},
 }

@@ -1,6 +1,6 @@
 # Automatic-memory release gate
 
-Albert 0.4.0 ships automatic-memory adapters as an explicit opt-in beta. The
+Albert 0.4.1 ships automatic-memory adapters as an explicit opt-in beta. The
 machine-readable source of truth is `src/albert/automatic_memory_release.json`;
 `albert-automatic-memory-release-gate` validates it and emits a content-addressed
 JSON receipt. General availability remains disabled until a later release
@@ -84,7 +84,7 @@ while retaining linked derivatives. Keep only body-free audit evidence required 
 - Codex has no failure hook; it emits session-end and interrupt events on the tested hooks.
 - Claude Code failure delivery is best effort on affected 2.1.x versions.
 - Cursor cloud agents lack automatic start recall and true session-end capture.
-- Only OpenClaw has the transactional one-command installer in 0.4.0.
+- Only OpenClaw has the transactional one-command installer in 0.4.1.
 - The public benchmark is a deterministic internal baseline, not a matched third-party comparison.
 
 ## Opt-in beta
