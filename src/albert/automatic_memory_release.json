@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release": {"package": "albert-memory", "version": "0.4.0", "channel": "opt-in-beta", "general_availability": false},
+  "release": {"package": "albert-memory", "version": "0.4.1", "channel": "opt-in-beta", "general_availability": false},
   "slos": {"hook_budget_ms": 2000, "recall_max_characters": 6000, "queue_max_items": 1000, "queue_max_bytes": 8000000, "queue_max_age_seconds": 604800, "queue_max_retries": 12, "recovery": "bounded encrypted replay; idempotency keys prevent duplicate server writes"},
   "hosts": {
     "openclaw": {"tested": "2026.9.6", "supported": ">=2026.9.6,<2027", "fidelity": "full", "fixture": "tests/test_openclaw_adapter.py", "documentation": "docs/integrations/openclaw.md", "golden_flow": ["start_recall", "capture", "checkpoint", "consolidation", "searchability", "deletion"]},

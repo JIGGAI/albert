@@ -42,10 +42,10 @@ def cloud_contract(
     adapter = {
         "artifact_sha256": "a" * 64,
         "artifact_signature": f"github-oidc-dsse:sha256:{'a' * 64}",
-        "artifact_url": "https://releases.example.com/albert-memory-0.4.0.whl",
+        "artifact_url": "https://releases.example.com/albert-memory-0.4.1.whl",
         "family": "openclaw",
         "package": "albert-memory",
-        "package_version": "0.4.0",
+        "package_version": "0.4.1",
         "supported_openclaw": ">=2026.9.6,<2027.0.0",
     }
     now = datetime.now(UTC)
@@ -153,7 +153,7 @@ def test_install_is_private_and_never_places_credentials_in_commands(tmp_path: P
     install(paths, runner)
 
     assert paths.marker.exists() and paths.wrapper.exists()
-    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.0"
+    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.1"
     assert stat_mode(paths.credentials) == 0o600
     assert stat_mode(paths.wrapper) == 0o700
     assert all(
@@ -423,14 +423,14 @@ def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
         paths=paths,
         runner=runner,
         trust=trust,
-        package_version="0.4.0",
+        package_version="0.4.1",
         http=client,
     )
 
     values = json.loads(paths.credentials.read_text())
     marker = json.loads(paths.marker.read_text())
     assert values["ALBERT_CAPTURE_TOKEN"] == credential
-    assert marker["package_version"] == "0.4.0"
+    assert marker["package_version"] == "0.4.1"
     assert marker["cloud"] == {
         "brain_id": "brain-1",
         "connection_id": "connection-1",
@@ -509,7 +509,7 @@ def test_connect_failure_restores_predecessor_and_compensates_only_replacement(
             paths=paths,
             runner=failing,
             trust=trust,
-            package_version="0.4.0",
+            package_version="0.4.1",
             http=httpx.Client(transport=httpx.MockTransport(handler)),
         )
 
@@ -528,7 +528,7 @@ def test_manifest_rejects_tampering_and_untrusted_release():
             link_url=link,
             openclaw_version=(2026, 9, 6),
             trust=trust,
-            package_version="0.4.0",
+            package_version="0.4.1",
         )
 
     _, clean_manifest, clean_trust = cloud_contract()
@@ -538,7 +538,9 @@ def test_manifest_rejects_tampering_and_untrusted_release():
             link_url=link,
             openclaw_version=(2026, 9, 6),
             trust=clean_trust,
-            package_version="0.4.1",
+            # Keep this deliberately unrelated to release versions so the
+            # package-version bump script cannot make the mismatch valid.
+            package_version="9999.0.0",
         )
 
     for endpoint in (
@@ -560,7 +562,7 @@ def test_manifest_requires_bearer_authorization_scheme():
             link_url=link,
             openclaw_version=(2026, 9, 6),
             trust=trust,
-            package_version="0.4.0",
+            package_version="0.4.1",
         )
 
 

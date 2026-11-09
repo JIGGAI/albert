@@ -46,7 +46,7 @@ If `albert-capture` already exists, inspect both the installed distribution meta
 python -c 'import importlib.metadata; print(importlib.metadata.version("albert-memory"))'
 ```
 
-A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.0` and record both `"owner": "albert-memory"` and `"package_version": "0.4.0"` in the marker. A missing or different package version requires the verified installation step below; do not trust executable names or
+A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.1` and record both `"owner": "albert-memory"` and `"package_version": "0.4.1"` in the marker. A missing or different package version requires the verified installation step below; do not trust executable names or
 the Brain origin alone.
 
 Only when both exact-version checks pass, run:
@@ -63,7 +63,7 @@ If doctor fails, either exact-version check fails, the Brain differs, or the use
 
 ## 4. Install the exact verified connector when missing
 
-The supported connector package for this skill revision is `albert-memory==0.4.0`. The copied Albert Cloud prompt must name the same expected package version. Stop on a mismatch.
+The supported connector package for this skill revision is `albert-memory==0.4.1`. The copied Albert Cloud prompt must name the same expected package version. Stop on a mismatch.
 
 If `albert-capture` is missing or its installed package version differs:
 
@@ -71,7 +71,7 @@ If `albert-capture` is missing or its installed package version differs:
 2. Download only the exact wheel, without installing it:
 
    ```bash
-   python -m pip download --no-deps --only-binary=:all: --dest <private-temp-dir> albert-memory==0.4.0
+   python -m pip download --no-deps --only-binary=:all: --dest <private-temp-dir> albert-memory==0.4.1
    ```
 
 3. Verify its GitHub build attestation before installation:
@@ -82,7 +82,7 @@ If `albert-capture` is missing or its installed package version differs:
 
 4. Install that verified local wheel with `uv tool install <downloaded-wheel>` or `pipx install <downloaded-wheel>`.
 5. Remove only the temporary download directory after installation.
-6. Confirm `albert-capture --help` succeeds and the installed `albert-memory` version is exactly `0.4.0`.
+6. Confirm `albert-capture --help` succeeds and the installed `albert-memory` version is exactly `0.4.1`.
 
 If the exact wheel is unpublished, unavailable, unattested, or cannot be verified, stop. Never fall back to an unpinned package, a floating Git branch, or source copied from the one-time-link endpoint.
 

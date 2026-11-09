@@ -3,7 +3,7 @@
 **Shared memory for AI agents that's safe to trust: self-hosted, multi-tenant, and built so untrusted content can't steer your agents.**
 
 [![CI](https://github.com/JIGGAI/albert/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JIGGAI/albert/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.4.0-blue)
+![Version](https://img.shields.io/badge/version-0.4.1-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-22%20tools-5A45FF)

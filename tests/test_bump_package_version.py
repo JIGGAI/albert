@@ -46,6 +46,9 @@ def test_bump_updates_every_release_coupled_version(tmp_path: Path) -> None:
         assert old not in text, relative
         assert new in text, relative
 
+    negative_fixture = (tmp_path / "tests/test_capture_installer.py").read_text()
+    assert 'package_version="9999.0.0"' in negative_fixture
+
 
 def test_bump_rejects_non_normalized_or_older_versions(tmp_path: Path) -> None:
     copy_version_tree(tmp_path)
