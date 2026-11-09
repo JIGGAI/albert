@@ -19,7 +19,7 @@ async function sharedMemory(request: import("@playwright/test").APIRequestContex
 }
 
 test("the side menu says what this console's key can see", async ({ page }) => {
-  await page.goto("/ops");
+  await page.goto("/agents");
   // The e2e console runs on the bootstrap administrator key.
   await expect(page.getByTestId("console-scope")).toContainText("Every tenant (admin)");
 });
@@ -47,7 +47,7 @@ test("workspaces creates and renames a workspace that settings issues a key into
   page,
 }) => {
   const name = `Research ${Date.now()}`;
-  await page.goto("/ops");
+  await page.goto("/agents");
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Workspaces" }).click();
   await expect(page).toHaveURL(/\/workspaces$/);
   await expect(page.getByRole("link", { name: "Workspaces" })).toHaveAttribute("aria-current", "page");
@@ -79,7 +79,7 @@ test("workspaces creates and renames a workspace that settings issues a key into
 test("operations and live can be narrowed to a workspace", async ({ page, request }) => {
   await seedTopics(request);
   await request.post(`${api}/v1/search`, { headers, data: { query: "brand voice" } });
-  await page.goto("/ops?view=memory");
+  await page.goto("/memory");
   const picker = page.getByLabel("Workspace");
   await expect(picker.locator("option", { hasText: "Default" })).toHaveCount(1);
   await expect(picker.locator("option", { hasText: SHARED })).toHaveCount(1);

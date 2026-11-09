@@ -1,16 +1,21 @@
-import { Suspense } from "react";
-import { OpsPanel } from "@/components/OpsPanel";
+import { redirect } from "next/navigation";
+import { VIEWS } from "@/lib/ops-views";
 
-export default function OpsPage() {
-  return (
-    <>
-      <div className="page-head">
-        <h1>Operations</h1>
-        <span className="sub">Who is using memory, what it holds, and how well it is working.</span>
-      </div>
-      <Suspense fallback={<p className="muted">Loading…</p>}>
-        <OpsPanel />
-      </Suspense>
-    </>
-  );
+// Operations used to be one page with tabs. Its views are top-level pages now;
+// old links and bookmarks land on the right one with their other filters kept.
+export default async function OpsRedirect({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const requested = typeof params.view === "string" ? params.view : "";
+  const view = VIEWS.find((v) => v.id === requested)?.id ?? "agents";
+  const rest = new URLSearchParams();
+  for (const [name, value] of Object.entries(params)) {
+    if (name === "view") continue;
+    if (typeof value === "string") rest.set(name, value);
+  }
+  const query = rest.toString();
+  redirect(query ? `/${view}?${query}` : `/${view}`);
 }

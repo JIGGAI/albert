@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { scopeLabel, useConsoleScope } from "@/lib/scope";
+import { VIEWS } from "@/lib/ops-views";
 
 const links = [
-  { href: "/ops", label: "Operations" },
+  ...VIEWS.map((view) => ({ href: `/${view.id}`, label: view.label })),
   { href: "/map", label: "Map" },
   { href: "/live", label: "Live" },
   { href: "/backends", label: "Backends" },

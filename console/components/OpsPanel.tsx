@@ -27,18 +27,11 @@ import type {
   ServiceHealth,
   Workspace,
 } from "@/lib/types";
+import type { ViewId } from "@/lib/ops-views";
 import { AgentsView, GraphView, MemoryView, RetrievalView, ServiceView } from "./OpsViews";
 import { SearchProbe } from "./SearchProbe";
 import { WorkspacePicker } from "./WorkspacePicker";
 
-const VIEWS = [
-  { id: "agents", label: "Agents" },
-  { id: "memory", label: "Memory" },
-  { id: "retrieval", label: "Retrieval" },
-  { id: "graph", label: "Graph" },
-  { id: "service", label: "Service" },
-] as const;
-type ViewId = (typeof VIEWS)[number]["id"];
 const WINDOWS = [
   { hours: 1, label: "Last hour" },
   { hours: 24, label: "Last 24 hours" },
@@ -53,12 +46,10 @@ type Loaded =
   | { key: string; view: "graph"; data: Backends }
   | { key: string; view: "service"; data: ServiceHealth };
 
-export function OpsPanel() {
+export function OpsPanel({ view }: { view: ViewId }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const requested = params.get("view");
-  const view: ViewId = VIEWS.some((v) => v.id === requested) ? (requested as ViewId) : "agents";
   const hours = Number(params.get("hours")) || 24;
   const tenantParam = params.get("tenant") ?? "";
   const workspace = params.get("workspace") ?? "";
@@ -156,19 +147,6 @@ export function OpsPanel() {
   return (
     <div className="ops">
       <div className="toolbar">
-        <div className="tabs" role="tablist" aria-label="Operations views">
-          {VIEWS.map((v) => (
-            <button
-              key={v.id}
-              type="button"
-              role="tab"
-              aria-selected={v.id === view}
-              onClick={() => update({ view: v.id === "agents" ? "" : v.id })}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
         <span className="spacer" />
         {view === "service" || view === "graph" || !(seesAllTenants(scope) || organizations.length > 1) ? (
           <span className="muted" data-testid="ops-scope">

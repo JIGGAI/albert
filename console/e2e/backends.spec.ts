@@ -24,9 +24,11 @@ test("backends shows what is in use, that it works, and how to switch", async ({
   await expect(page.getByTestId("builder-regex")).toContainText("in use");
   await expect(page.getByTestId("builder-graphiti")).toContainText("available, not in use");
 
-  await page.getByRole("link", { name: "Operations → Graph" }).click();
-  await expect(page).toHaveURL(/\/ops\?view=graph/);
-  await expect(page.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("main").getByRole("link", { name: "Graph" }).click();
+  await expect(page).toHaveURL(/\/graph$/);
+  await expect(
+    page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Graph" }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("ops-graph")).toContainText("is writing to PostgreSQL");
   await expect(page.getByTestId("stat-edges-written")).not.toHaveText("0", { timeout: 20_000 });
   await expect(page.getByTestId("stat-graph-queries")).not.toHaveText("0");
