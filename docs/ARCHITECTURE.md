@@ -78,8 +78,8 @@ and rebuilt; `albert-admin rebuild-links` recomputes the links.
    rejection or redaction.
 2. The worker claims the job and runs these spans:
    - `classify`: memory type, sensitivity, entities and relationships. The
-     regex extractor needs no model; with `ALBERT_LLM_PROVIDER=openai-compatible`
-     a model does it. A label outside the vocabulary falls back to a safe
+     regex extractor needs no model; with `ALBERT_LLM_PROVIDER` set to
+     `openai-compatible`, `chatgpt-oauth` or `openclaw` a model does it. A label outside the vocabulary falls back to a safe
      default, so a model's wording cannot fail indexing. Sensitivity can only
      be raised by classification, never lowered.
    - `chunk`: paragraph-aware chunks of `ALBERT_CHUNK_CHARACTERS` with overlap.
@@ -177,7 +177,7 @@ Prefix `ALBERT_`. Secrets and connection strings are omitted here; see
 |---|---|---|
 | `EMBEDDING_PROVIDER` | `hashing` | `hashing`, `sentence-transformers` or `openai-compatible` |
 | `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` | `BAAI/bge-small-en-v1.5`, 384 | The embedding model and its vector size |
-| `LLM_PROVIDER`, `CLASSIFICATION_MODEL` | `none` | The graph builder: regex, or an OpenAI-compatible model |
+| `LLM_PROVIDER`, `CLASSIFICATION_MODEL` | `none` | The classifier's model: `none` (regex), `openai-compatible`, `chatgpt-oauth` or `openclaw` (a gateway agent; `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_AGENT_ID`) |
 | `GRAPH_STORE` | `postgres` | `postgres`, `falkordb` or `neo4j` |
 | `GRAPH_BUILDER` | unset | `regex`, `llm-classifier` or `graphiti`; unset picks regex without a model, the LLM classifier with one |
 | `EMBEDDING_REQUEST_DIMENSIONS` | false | Send the dimension count to an OpenAI-compatible embedding endpoint |

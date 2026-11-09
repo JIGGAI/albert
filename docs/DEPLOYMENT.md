@@ -250,6 +250,13 @@ ALBERT_OPENAI_BASE_URL=https://provider.example/v1
 ALBERT_OPENAI_API_KEY=<secret>
 ```
 
+Two credential-free alternatives: `ALBERT_LLM_PROVIDER=chatgpt-oauth` signs in
+with a ChatGPT account (docs/GRAPH_BACKENDS.md), and `ALBERT_LLM_PROVIDER=openclaw`
+classifies through an OpenClaw gateway agent that `albert-capture
+classifier-agent` installs on the OpenClaw host (docs/PROVIDERS.md). The latter
+needs only `ALBERT_OPENCLAW_GATEWAY_TOKEN` (the gateway's own bearer token) and,
+from Compose, `ALBERT_OPENCLAW_GATEWAY_URL=http://host.docker.internal:<port>`.
+
 Provider output is parsed into a constrained schema before it reaches storage.
 Never configure an untrusted endpoint for confidential memories.
 

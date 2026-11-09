@@ -124,6 +124,28 @@ Uninstall requires Albert's ownership marker and removes only Albert-owned
 OpenClaw configuration and `~/.openclaw/albert`. It preserves unrelated plugins
 and settings. Revoke the corresponding credential separately.
 
+## OpenClaw as the Brain's model (classifier agent)
+
+The connection above lets OpenClaw agents remember and recall. The reverse is
+also available: the Brain can use OpenClaw's model sign-in for its own memory
+classifier instead of holding an API key. On the OpenClaw host:
+
+```bash
+albert-capture classifier-agent
+```
+
+This adds a tool-less `albert-classifier` agent with an Albert-owned workspace,
+pins it to the OpenClaw agent runtime, enables the gateway's `/v1/responses`
+endpoint and proves one live JSON call. It works on OpenClaw releases from
+2026.6.35, older than the capture plugin's range. Then, on the Brain, set
+`ALBERT_LLM_PROVIDER=openclaw`, `ALBERT_OPENCLAW_GATEWAY_URL` (from Compose,
+`http://host.docker.internal:<gateway port>`) and `ALBERT_OPENCLAW_GATEWAY_TOKEN`
+(`gateway.auth.token` in `openclaw.json`; the command never prints it), restart
+api and worker, and run `albert-admin reindex-memories`. Details and the wait
+behaviour while the gateway is down are in [PROVIDERS.md](../PROVIDERS.md).
+`albert-capture classifier-agent --remove` deletes the agent and workspace, and
+refuses anything Albert did not create.
+
 ## Migration from manual MCP
 
 1. Leave the manual connection in place while installing and verifying the

@@ -31,6 +31,9 @@ from typing import Any
 
 import httpx
 
+from albert.llm_text import output_text as _output_text
+from albert.llm_text import strip_code_fences as _strip_code_fences
+
 AUTH_BASE_URL = "https://auth.openai.com"
 # The public OAuth client of OpenAI's Codex apps; device sign-in and the Codex
 # backend are only available to it.
@@ -326,15 +329,6 @@ class CredentialStore:
 # --- one structured-output call ---------------------------------------------
 
 
-def _strip_code_fences(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.split("\n", 1)[1] if "\n" in stripped else ""
-        if stripped.rstrip().endswith("```"):
-            stripped = stripped.rstrip()[:-3]
-    return stripped.strip()
-
-
 def _sse_events(response: httpx.Response) -> Iterator[dict[str, Any]]:
     data: list[str] = []
     for line in response.iter_lines():
@@ -357,17 +351,6 @@ def _sse_events(response: httpx.Response) -> Iterator[dict[str, Any]]:
             event = json.loads("\n".join(data))
             if isinstance(event, dict):
                 yield event
-
-
-def _output_text(response: Mapping[str, Any]) -> str:
-    parts: list[str] = []
-    for item in response.get("output") or []:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        for content in item.get("content") or []:
-            if isinstance(content, dict) and content.get("type") == "output_text":
-                parts.append(str(content.get("text", "")))
-    return "".join(parts)
 
 
 class ChatGPTClient:

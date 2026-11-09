@@ -309,8 +309,9 @@ GRAPH_BUILDERS: dict[str, BackendOption] = {
         ),
         available=True,
         enable=(
-            "Set ALBERT_LLM_PROVIDER=openai-compatible, ALBERT_OPENAI_API_KEY and "
-            "ALBERT_CLASSIFICATION_MODEL in .env.",
+            "Set ALBERT_LLM_PROVIDER to openai-compatible (with ALBERT_OPENAI_API_KEY and "
+            "ALBERT_CLASSIFICATION_MODEL), chatgpt-oauth, or openclaw (an OpenClaw gateway "
+            "agent; see docs/PROVIDERS.md) in .env.",
             "Restart: docker compose up -d api worker",
             "Re-index existing memories: docker compose exec api albert-admin "
             "reindex-memories --all",

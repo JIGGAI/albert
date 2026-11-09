@@ -384,15 +384,32 @@ def _checked(runner: Runner, command: list[str], label: str) -> subprocess.Compl
     return result
 
 
-def _detect_openclaw(runner: Runner) -> tuple[int, int, int]:
+def _render_version(version: tuple[int, ...]) -> str:
+    return ".".join(str(value) for value in version)
+
+
+def _config_file_path(runner: Runner) -> Path:
+    """`openclaw config file` prints health notices first; the path is the last line."""
+    stdout = _checked(runner, ["openclaw", "config", "file"], "config discovery").stdout
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise InstallError("OpenClaw did not report its config file path")
+    return Path(lines[-1]).expanduser()
+
+
+def _detect_openclaw(
+    runner: Runner, *, minimum: tuple[int, int, int] = MIN_OPENCLAW
+) -> tuple[int, int, int]:
     result = _checked(runner, ["openclaw", "--version"], "OpenClaw detection")
     match = VERSION_PATTERN.search(result.stdout)
     if not match:
         raise InstallError("unsupported OpenClaw version output")
     version = tuple(int(value) for value in match.groups())
-    if not MIN_OPENCLAW <= version < MAX_OPENCLAW:
-        rendered = ".".join(str(value) for value in version)
-        raise InstallError(f"OpenClaw {rendered} is unsupported; require >=2026.9.6 and <2027")
+    if not minimum <= version < MAX_OPENCLAW:
+        raise InstallError(
+            f"OpenClaw {_render_version(version)} is unsupported; require "
+            f">={_render_version(minimum)} and <{MAX_OPENCLAW[0]}"
+        )
     return version
 
 
@@ -531,9 +548,7 @@ def install_openclaw(
     )
     check(api_url, token, queue_key, workspace_id)
 
-    config_path = Path(
-        _checked(runner, ["openclaw", "config", "file"], "config discovery").stdout.strip()
-    ).expanduser()
+    config_path = _config_file_path(runner)
     config_existed = config_path.exists()
     config_before = config_path.read_bytes() if config_existed else None
     config_mode = stat.S_IMODE(config_path.stat().st_mode) if config_existed else 0o600
@@ -911,6 +926,274 @@ def connect_openclaw(
             client.close()
 
 
+# --- Classifier agent (ALBERT_LLM_PROVIDER=openclaw) ----------------------------
+#
+# A Brain can classify memories through an OpenClaw gateway agent instead of its
+# own model credential: Albert posts to `/v1/responses` as `openclaw/<agent>` and
+# OpenClaw supplies the model and sign-in. The agent is deliberately tiny: no
+# tools, no plugins, a workspace that only says "reply with one JSON object".
+# Everything written here carries Albert's ownership marker so that only
+# Albert-made agents and workspaces are ever changed or removed.
+
+CLASSIFIER_AGENT_ID = "albert-classifier"
+# The agent needs only `openclaw agents add --non-interactive`, `openclaw config
+# set` and the gateway's `/v1/responses` endpoint, all present well before the
+# capture plugin's host-target range; verified on 2026.6.35.
+CLASSIFIER_MIN_OPENCLAW = (2026, 6, 35)
+CLASSIFIER_AGENT_NAME = "Albert classifier"
+CLASSIFIER_WORKSPACE = Path("~/.openclaw/workspace-albert-classifier")
+CLASSIFIER_OWNED_MARKER = ".albert-owned.json"
+# The embedded runner refuses an agent whose allowlist leaves no callable tool,
+# and this agent gets none from its requests, so it keeps the read-only
+# `session_status`: no plugin tools (no memory access), no messaging.
+CLASSIFIER_TOOLS = {"profile": "minimal", "deny": ["group:plugins", "message"]}
+AGENT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+Probe = Callable[[str, str, str], None]
+
+CLASSIFIER_AGENTS_MD = """# AGENTS.md
+
+## What this agent is
+
+`{agent_id}` serves Albert's memory classifier. The Albert worker
+(`ALBERT_LLM_PROVIDER=openclaw`) posts one memory at a time to the gateway
+Responses endpoint (`model: openclaw/{agent_id}`) with the classification
+instruction in `instructions` and the memory text as `input`.
+
+## Rules
+
+- Reply with exactly one JSON object and nothing else: no prose, no code
+  fences, no explanation. The per-request `instructions` define the keys.
+- Never try to read files, run commands, browse, message anyone or reach other
+  agents. You have no such tools and must not ask for them.
+- Keep nothing in this workspace. There is no memory, status or notes file.
+
+This workspace is installed and owned by Albert (`albert-capture
+classifier-agent`); edits are overwritten on reinstall.
+"""
+
+CLASSIFIER_SOUL_MD = """# SOUL.md
+
+You are a JSON-only classifier for Albert, the shared memory service.
+
+Each request's `instructions` tell you what to label and which values are
+allowed. The `input` is the text of one memory. Return exactly one JSON object
+and nothing else. Never include credentials or secrets in the output.
+"""
+
+CLASSIFIER_HEARTBEAT_MD = (
+    "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->\n"
+)
+
+
+def _read_openclaw_config(runner: Runner) -> tuple[Path, dict[str, object]]:
+    config_path = _config_file_path(runner)
+    if not config_path.exists():
+        raise InstallError(f"OpenClaw config {config_path} does not exist")
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise InstallError(f"OpenClaw config is unreadable ({type(exc).__name__})") from None
+    if not isinstance(data, dict):
+        raise InstallError("OpenClaw config is not a JSON object")
+    return config_path, data
+
+
+def _agent_index(data: dict[str, object], agent_id: str) -> int | None:
+    agents = data.get("agents")
+    entries = agents.get("list") if isinstance(agents, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for index, entry in enumerate(entries):
+        if isinstance(entry, dict) and entry.get("id") == agent_id:
+            return index
+    return None
+
+
+def _gateway_target(data: dict[str, object]) -> tuple[str, str]:
+    gateway = data.get("gateway")
+    if not isinstance(gateway, dict):
+        raise InstallError("OpenClaw config has no gateway section")
+    port = gateway.get("port", 18789)
+    auth = gateway.get("auth")
+    token = auth.get("token") if isinstance(auth, dict) else None
+    if not isinstance(token, str) or not token:
+        raise InstallError(
+            "gateway.auth.token is not set in openclaw.json; the Brain authenticates "
+            "to the gateway with it"
+        )
+    return f"http://127.0.0.1:{port}", token
+
+
+def _workspace_owned(workspace: Path) -> bool:
+    marker = workspace / CLASSIFIER_OWNED_MARKER
+    try:
+        return json.loads(marker.read_text(encoding="utf-8")).get("owner") == PLUGIN_ID
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _assert_workspace_ownable(workspace: Path) -> None:
+    if workspace.exists() and any(workspace.iterdir()) and not _workspace_owned(workspace):
+        raise InstallError(f"workspace {workspace} exists and is not owned by Albert")
+
+
+def _write_classifier_workspace(workspace: Path, agent_id: str) -> None:
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "AGENTS.md").write_text(
+        CLASSIFIER_AGENTS_MD.format(agent_id=agent_id), encoding="utf-8"
+    )
+    _write_private(workspace / "SOUL.md", CLASSIFIER_SOUL_MD, 0o600)
+    _write_private(workspace / "HEARTBEAT.md", CLASSIFIER_HEARTBEAT_MD, 0o600)
+    _write_private(
+        workspace / CLASSIFIER_OWNED_MARKER,
+        json.dumps({"owner": PLUGIN_ID, "agent_id": agent_id}, sort_keys=True) + "\n",
+        0o600,
+    )
+
+
+def probe_classifier_agent(gateway_url: str, token: str, agent_id: str) -> None:
+    """One live JSON-only call through the gateway; raises InstallError on any problem."""
+    from albert.openclaw_llm import OpenClawClient, OpenClawRequestError
+
+    client = OpenClawClient(gateway_url, token, agent_id)
+    try:
+        reply = client.complete_json(
+            "Reply with exactly one JSON object and nothing else.",
+            'Return {"ok": true}.',
+        )
+    except OpenClawRequestError as exc:
+        raise InstallError(f"classifier agent probe failed: {exc}") from None
+    finally:
+        client.close()
+    if reply.get("ok") is not True:
+        raise InstallError(f"classifier agent probe returned an unexpected object: {reply!r}")
+
+
+def install_classifier_agent(
+    *,
+    agent_id: str = CLASSIFIER_AGENT_ID,
+    workspace: Path = CLASSIFIER_WORKSPACE,
+    model: str | None = None,
+    runner: Runner = _run,
+    probe: Probe | None = probe_classifier_agent,
+) -> str:
+    """Create (or repair) the tool-less classifier agent; return the gateway URL.
+
+    Rolls the config file, the agent and the workspace back if any step fails.
+    """
+    if not AGENT_ID_PATTERN.match(agent_id):
+        raise InstallError("agent id must be lowercase letters, digits, '-' or '_'")
+    _detect_openclaw(runner, minimum=CLASSIFIER_MIN_OPENCLAW)
+    workspace = workspace.expanduser()
+    _assert_workspace_ownable(workspace)
+    config_path, data = _read_openclaw_config(runner)
+    config_before = config_path.read_bytes()
+    config_mode = stat.S_IMODE(config_path.stat().st_mode)
+    gateway_url, token = _gateway_target(data)
+    if model is None:
+        defaults = data.get("agents", {}).get("defaults", {}) if isinstance(data, dict) else {}
+        primary = defaults.get("model", {}).get("primary") if isinstance(defaults, dict) else None
+        if not isinstance(primary, str) or not primary:
+            raise InstallError(
+                "agents.defaults.model.primary is not set in openclaw.json; pass --model"
+            )
+        model = primary
+
+    created_agent = False
+    created_workspace = not workspace.exists()
+    try:
+        _write_classifier_workspace(workspace, agent_id)
+        if _agent_index(data, agent_id) is None:
+            _checked(
+                runner,
+                [
+                    "openclaw",
+                    "agents",
+                    "add",
+                    agent_id,
+                    "--workspace",
+                    str(workspace),
+                    "--model",
+                    model,
+                    "--non-interactive",
+                    "--json",
+                ],
+                "OpenClaw agent creation",
+            )
+            created_agent = True
+            _, data = _read_openclaw_config(runner)
+        index = _agent_index(data, agent_id)
+        if index is None:
+            raise InstallError(f"OpenClaw did not record agent {agent_id} in agents.list")
+        settings = {
+            f"agents.list.{index}.workspace": str(workspace),
+            f"agents.list.{index}.identity": {"name": CLASSIFIER_AGENT_NAME},
+            f"agents.list.{index}.tools": CLASSIFIER_TOOLS,
+            # The default Codex harness for openai/* models ignores per-request
+            # instructions on the Responses endpoint; the OpenClaw runtime honours them.
+            f"agents.list.{index}.models": {model: {"agentRuntime": {"id": "openclaw"}}},
+            "gateway.http.endpoints.responses.enabled": True,
+        }
+        for path, value in settings.items():
+            _checked(
+                runner,
+                [
+                    "openclaw",
+                    "config",
+                    "set",
+                    path,
+                    json.dumps(value, separators=(",", ":")),
+                    "--strict-json",
+                ],
+                f"OpenClaw config {path}",
+            )
+        _checked(runner, ["openclaw", "config", "validate"], "OpenClaw config validation")
+        if probe is not None:
+            probe(gateway_url, token, agent_id)
+    except Exception:
+        if created_agent:
+            runner(["openclaw", "agents", "delete", agent_id, "--force", "--json"])
+            _remove_empty_agent_state(config_path, agent_id)
+        temporary = config_path.with_name(f".{config_path.name}.albert-rollback")
+        temporary.write_bytes(config_before)
+        os.chmod(temporary, config_mode)
+        os.replace(temporary, config_path)
+        if created_workspace and workspace.exists():
+            shutil.rmtree(workspace)
+        raise
+    return gateway_url
+
+
+def remove_classifier_agent(
+    *,
+    agent_id: str = CLASSIFIER_AGENT_ID,
+    workspace: Path = CLASSIFIER_WORKSPACE,
+    runner: Runner = _run,
+) -> None:
+    """Delete the classifier agent and its workspace, only if Albert installed them."""
+    _detect_openclaw(runner, minimum=CLASSIFIER_MIN_OPENCLAW)
+    workspace = workspace.expanduser()
+    if not _workspace_owned(workspace):
+        raise InstallError(f"workspace {workspace} is not owned by Albert; nothing removed")
+    config_path, data = _read_openclaw_config(runner)
+    if _agent_index(data, agent_id) is not None:
+        _checked(
+            runner,
+            ["openclaw", "agents", "delete", agent_id, "--force", "--json"],
+            "OpenClaw agent removal",
+        )
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    _remove_empty_agent_state(config_path, agent_id)
+
+
+def _remove_empty_agent_state(config_path: Path, agent_id: str) -> None:
+    """`openclaw agents delete` leaves an empty state directory behind; drop it."""
+    state = config_path.parent / "agents" / agent_id
+    if state.is_dir() and not any(state.iterdir()):
+        state.rmdir()
+
+
 def _default_paths() -> InstallPaths:
     return InstallPaths(Path("~/.openclaw/albert").expanduser())
 
@@ -966,6 +1249,46 @@ def install_command(
         typer.echo("Albert Memory installed for OpenClaw; live capture and recall passed.")
     except InstallError as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+
+@app.command("classifier-agent")
+def classifier_agent_command(
+    agent_id: str = typer.Option(CLASSIFIER_AGENT_ID, "--agent-id"),
+    workspace: Path = typer.Option(CLASSIFIER_WORKSPACE, "--workspace"),
+    model: str | None = typer.Option(
+        None, "--model", help="Model id for the agent; defaults to agents.defaults.model.primary."
+    ),
+    remove: bool = typer.Option(False, "--remove", help="Delete the Albert-owned agent instead."),
+    skip_probe: bool = typer.Option(
+        False, "--skip-probe", help="Do not make one live call through the gateway."
+    ),
+) -> None:
+    """Install the tool-less agent a Brain uses with ALBERT_LLM_PROVIDER=openclaw."""
+    try:
+        if remove:
+            remove_classifier_agent(agent_id=agent_id, workspace=workspace)
+            typer.echo(f"Removed OpenClaw agent {agent_id} and its Albert-owned workspace.")
+            return
+        gateway_url = install_classifier_agent(
+            agent_id=agent_id,
+            workspace=workspace,
+            model=model,
+            probe=None if skip_probe else probe_classifier_agent,
+        )
+        typer.echo(
+            f"OpenClaw agent {agent_id} is ready"
+            + ("." if skip_probe else "; a live JSON classification passed.")
+        )
+        typer.echo(
+            "On the Brain set ALBERT_LLM_PROVIDER=openclaw, "
+            f"ALBERT_OPENCLAW_AGENT_ID={agent_id}, ALBERT_OPENCLAW_GATEWAY_URL to this host's "
+            f"gateway ({gateway_url} here; http://host.docker.internal:<port> from Compose) and "
+            "ALBERT_OPENCLAW_GATEWAY_TOKEN to gateway.auth.token from openclaw.json, then "
+            "restart api and worker."
+        )
+    except (InstallError, OSError) as exc:
+        typer.echo(f"Classifier agent setup failed safely: {exc}", err=True)
         raise typer.Exit(1) from None
 
 

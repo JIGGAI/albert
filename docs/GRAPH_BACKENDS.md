@@ -123,7 +123,8 @@ quality lever: a better store does not help a graph nothing fills.
 - Costs: several model calls per memory, and a second database.
 
 Graphiti fails closed unless the selected store is FalkorDB or Neo4j, an LLM
-provider is set (`openai-compatible` or `chatgpt-oauth`), and embeddings are real: either
+provider is set (`openai-compatible` or `chatgpt-oauth`; the `openclaw` gateway
+provider serves only the LLM classifier), and embeddings are real: either
 `openai-compatible` or the local `sentence-transformers` model (the hashing
 embedder is refused). It never falls back to the classifier or regex builder.
 With local embeddings only the LLM needs a provider; set
