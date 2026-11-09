@@ -538,7 +538,9 @@ def test_manifest_rejects_tampering_and_untrusted_release():
             link_url=link,
             openclaw_version=(2026, 9, 6),
             trust=clean_trust,
-            package_version="0.4.1",
+            # Keep this deliberately unrelated to release versions so the
+            # package-version bump script cannot make the mismatch valid.
+            package_version="9999.0.0",
         )
 
     for endpoint in (
