@@ -90,7 +90,9 @@ Tune it with a representative evaluation corpus when changing embedding models.
 
 ## Model-based classification and graph extraction
 
-Classification can use the same or another OpenAI-compatible endpoint:
+Classification can use the same or another OpenAI-compatible endpoint, a ChatGPT
+sign-in (`chatgpt-oauth`, see docs/GRAPH_BACKENDS.md) or an OpenClaw gateway
+agent (`openclaw`, below):
 
 ```dotenv
 ALBERT_LLM_PROVIDER=openai-compatible
@@ -114,6 +116,52 @@ common relationships such as `uses`, `depends_on`, `integrates_with`, `runs_on`,
 `works_on`.
 
 Never put provider credentials in memory, Git, or agent instructions.
+
+### Classify through an OpenClaw gateway agent
+
+Where OpenClaw already runs beside Albert, it already holds the operator's model
+sign-in (for example a ChatGPT account through its Codex OAuth profile) and
+exposes it on the gateway's OpenResponses endpoint. `ALBERT_LLM_PROVIDER=openclaw`
+makes the classifier post each memory to that endpoint as a dedicated,
+tool-less agent, so Albert needs no model credential of its own, only the
+gateway's bearer token:
+
+```dotenv
+ALBERT_LLM_PROVIDER=openclaw
+ALBERT_OPENCLAW_GATEWAY_URL=http://host.docker.internal:18789   # the Compose host
+ALBERT_OPENCLAW_GATEWAY_TOKEN=<gateway.auth.token from openclaw.json>
+ALBERT_OPENCLAW_AGENT_ID=albert-classifier
+```
+
+Install the agent on the OpenClaw host first:
+
+```bash
+albert-capture classifier-agent            # add --model <id> to override agents.defaults
+albert-capture classifier-agent --remove   # deletes only an Albert-owned agent
+```
+
+The command creates `~/.openclaw/workspace-albert-classifier` (an `AGENTS.md`
+and `SOUL.md` that say "reply with one JSON object", marked as Albert-owned),
+adds the agent with `tools.profile: minimal`, denies plugin tools (so it cannot
+reach Albert's own memory tools) and messaging, leaving only the read-only
+`session_status` tool because OpenClaw refuses to run an agent with no callable
+tool at all, pins the model to the `openclaw` agent runtime (the default Codex
+harness ignores per-request `instructions`), enables
+`gateway.http.endpoints.responses`, validates the config and makes one live
+JSON call through the gateway. Any failure rolls the config, agent and workspace
+back. It never prints the gateway token; copy it into the Brain's `.env` yourself.
+
+Every classification runs in its own gateway session (`x-openclaw-session-key:
+agent:<id>:albert:<uuid>`), so no earlier memory's text is in the transcript when
+the next one is labelled. The gateway rejects `response_format`, so the
+instruction asks for JSON and the reply is parsed leniently (code fences and
+surrounding prose are tolerated); a label outside the vocabulary still falls
+back as described above. While the gateway is down, restarting, or refusing the
+token (connection errors, HTTP 401/403/429/5xx), indexing jobs wait five minutes
+and retry without using up their attempts, the same way `chatgpt-oauth` waits for
+its sign-in. `ALBERT_CLASSIFICATION_MODEL` is not used: the agent's model in
+`openclaw.json` decides. Graphiti cannot use this provider; it drives its own
+OpenAI client.
 
 ## Changing providers
 

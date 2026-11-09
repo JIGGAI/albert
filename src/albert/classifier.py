@@ -240,6 +240,11 @@ secrets."""
 
 def classify(text: str) -> Classification:
     settings = get_settings()
+    if settings.llm_provider == "openclaw":
+        from albert.openclaw_llm import get_openclaw_client
+
+        reply = get_openclaw_client().complete_json(CLASSIFIER_INSTRUCTION, text[:100_000])
+        return _parse_model_classification(reply)
     if settings.llm_provider == "chatgpt-oauth":
         from albert.chatgpt_oauth import get_chatgpt_client
 

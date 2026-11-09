@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from albert.capture_promotion import promote_capture_checkpoint
 from albert.capture_retention import expire_capture_events
-from albert.chatgpt_oauth import provider_wait_seconds
+from albert.chatgpt_oauth import provider_wait_seconds as chatgpt_wait_seconds
 from albert.config import get_settings
 from albert.db import SessionLocal
 from albert.graph_builders import get_graph_builder
@@ -29,6 +29,7 @@ from albert.models import (
     WorkingMemory,
     utcnow,
 )
+from albert.openclaw_llm import provider_wait_seconds as openclaw_wait_seconds
 from albert.services import MAX_JOB_ATTEMPTS, enrich_episode, enrich_memory
 from albert.trace_writer import get_trace_writer
 from albert.tracing import traced_job
@@ -104,16 +105,19 @@ def process_job(session: Session, job: Job) -> None:
         if job is None:
             raise
         job.last_error = f"{type(exc).__name__}: {exc}"[:10_000]
-        wait = provider_wait_seconds(exc)
+        wait = chatgpt_wait_seconds(exc)
+        if wait is None:
+            wait = openclaw_wait_seconds(exc)
         if wait is not None:
-            # Waiting on the ChatGPT account (sign-in or usage limit), not a
-            # fault in this job: keep its retries for real failures.
+            # Waiting on the LLM provider (ChatGPT sign-in or usage limit, or an
+            # OpenClaw gateway that is down or refusing its token), not a fault
+            # in this job: keep its retries for real failures.
             job.attempts = max(0, job.attempts - 1)
             job.status = "pending"
             job.available_at = utcnow() + timedelta(seconds=wait)
             session.commit()
             logger.warning(
-                "Job waiting for the ChatGPT account",
+                "Job waiting for the LLM provider",
                 extra={
                     "job_id": str(job.id),
                     "job_type": job.job_type,

@@ -566,3 +566,248 @@ def test_manifest_requires_bearer_authorization_scheme():
 
 def stat_mode(path: Path) -> int:
     return os.stat(path).st_mode & 0o777
+
+
+# --- albert-capture classifier-agent -------------------------------------------
+
+
+class AgentRunner:
+    """OpenClaw CLI double for the classifier-agent command.
+
+    Keeps a JSON config file like the real `openclaw config set` would, so the
+    command's index lookups and the rollback can be checked against a file.
+    """
+
+    def __init__(
+        self,
+        config: Path,
+        *,
+        agents: tuple[str, ...] = ("main",),
+        fail_on=None,
+        version: str = "2026.9.6",
+    ) -> None:
+        self.config = config
+        self.fail_on = fail_on
+        self.version = version
+        self.commands: list[list[str]] = []
+        self.deleted: list[str] = []
+        config.write_text(
+            json.dumps(
+                {
+                    "agents": {
+                        "defaults": {"model": {"primary": "openai/test-model"}},
+                        "list": [{"id": agent, "workspace": f"/ws/{agent}"} for agent in agents],
+                    },
+                    "gateway": {"port": 18789, "auth": {"mode": "token", "token": "gw-secret"}},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def _load(self) -> dict:
+        return json.loads(self.config.read_text(encoding="utf-8"))
+
+    def _save(self, data: dict) -> None:
+        self.config.write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        self.commands.append(command)
+        if self.fail_on and tuple(command[1 : 1 + len(self.fail_on)]) == self.fail_on:
+            return subprocess.CompletedProcess(command, 1, "", "injected failure\n")
+        if command == ["openclaw", "--version"]:
+            return subprocess.CompletedProcess(command, 0, f"OpenClaw {self.version} (test)\n", "")
+        if command == ["openclaw", "config", "file"]:
+            return subprocess.CompletedProcess(command, 0, f"{self.config}\n", "")
+        if command[1:3] == ["agents", "add"]:
+            data = self._load()
+            data["agents"]["list"].append(
+                {"id": command[3], "workspace": command[command.index("--workspace") + 1]}
+            )
+            self._save(data)
+            return subprocess.CompletedProcess(command, 0, f'{{"id":"{command[3]}"}}\n', "")
+        if command[1:3] == ["agents", "delete"]:
+            data = self._load()
+            data["agents"]["list"] = [a for a in data["agents"]["list"] if a["id"] != command[3]]
+            self._save(data)
+            self.deleted.append(command[3])
+            return subprocess.CompletedProcess(command, 0, "{}\n", "")
+        if command[1:3] == ["config", "set"]:
+            data = self._load()
+            node: object = data
+            parts = command[3].split(".")
+            for part in parts[:-1]:
+                node = node[int(part)] if isinstance(node, list) else node.setdefault(part, {})
+            value = json.loads(command[4])
+            if isinstance(node, list):
+                node[int(parts[-1])] = value
+            else:
+                node[parts[-1]] = value
+            self._save(data)
+        return subprocess.CompletedProcess(command, 0, "{}\n", "")
+
+
+def test_classifier_agent_install_adds_an_owned_agent_and_pins_its_runtime(tmp_path: Path):
+    from albert.capture_installer import install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+    runner = AgentRunner(config)
+    workspace = tmp_path / "workspace-albert-classifier"
+    probes: list[tuple[str, str, str]] = []
+
+    install_classifier_agent(
+        agent_id="albert-classifier",
+        workspace=workspace,
+        model=None,
+        runner=runner,
+        probe=lambda url, token, agent: probes.append((url, token, agent)),
+    )
+
+    data = json.loads(config.read_text(encoding="utf-8"))
+    agent = next(a for a in data["agents"]["list"] if a["id"] == "albert-classifier")
+    assert agent["workspace"] == str(workspace)
+    # No plugin tools (so no memory access) and no messaging; `session_status`
+    # stays because OpenClaw refuses to run an agent with no callable tool at all.
+    assert agent["tools"] == {"profile": "minimal", "deny": ["group:plugins", "message"]}
+    # Default model comes from agents.defaults; the OpenClaw runtime pin makes the
+    # Responses endpoint honour per-request instructions for an openai/* model.
+    assert agent["models"] == {"openai/test-model": {"agentRuntime": {"id": "openclaw"}}}
+    assert agent["identity"] == {"name": "Albert classifier"}
+    assert data["gateway"]["http"]["endpoints"]["responses"]["enabled"] is True
+    assert ["openclaw", "config", "validate"] in runner.commands
+    # Workspace is Albert-owned and says what the agent is for.
+    assert (workspace / "AGENTS.md").read_text(encoding="utf-8").startswith("# AGENTS.md")
+    assert json.loads((workspace / ".albert-owned.json").read_text(encoding="utf-8"))["owner"] == (
+        "albert-memory"
+    )
+    assert "openclaw/albert-classifier" not in (workspace / "SOUL.md").read_text()
+    # The live probe used the gateway token from the config file, read in-process.
+    assert probes == [("http://127.0.0.1:18789", "gw-secret", "albert-classifier")]
+    # The token itself never appears on a command line.
+    assert all("gw-secret" not in " ".join(command) for command in runner.commands)
+
+
+def test_classifier_agent_install_is_idempotent_and_honours_model_override(tmp_path: Path):
+    from albert.capture_installer import install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+    runner = AgentRunner(config)
+    workspace = tmp_path / "ws"
+    for _ in range(2):
+        install_classifier_agent(
+            agent_id="albert-classifier",
+            workspace=workspace,
+            model="openai/other-model",
+            runner=runner,
+            probe=lambda *_: None,
+        )
+    data = json.loads(config.read_text(encoding="utf-8"))
+    matching = [a for a in data["agents"]["list"] if a["id"] == "albert-classifier"]
+    assert len(matching) == 1
+    assert matching[0]["models"] == {"openai/other-model": {"agentRuntime": {"id": "openclaw"}}}
+    assert sum(1 for c in runner.commands if c[1:3] == ["agents", "add"]) == 1
+
+
+def test_classifier_agent_install_rolls_back_when_the_probe_fails(tmp_path: Path):
+    from albert.capture_installer import InstallError, install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+    runner = AgentRunner(config)
+    before = config.read_bytes()
+    workspace = tmp_path / "ws"
+
+    def failing_probe(*_: object) -> None:
+        raise InstallError("gateway answered 404")
+
+    with pytest.raises(InstallError, match="gateway answered 404"):
+        install_classifier_agent(
+            agent_id="albert-classifier",
+            workspace=workspace,
+            model=None,
+            runner=runner,
+            probe=failing_probe,
+        )
+    assert config.read_bytes() == before
+    assert runner.deleted == ["albert-classifier"]
+    assert not workspace.exists()
+
+
+def test_classifier_agent_install_refuses_a_workspace_it_does_not_own(tmp_path: Path):
+    from albert.capture_installer import InstallError, install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+    runner = AgentRunner(config)
+    workspace = tmp_path / "someone-elses"
+    workspace.mkdir()
+    (workspace / "SOUL.md").write_text("mine", encoding="utf-8")
+    with pytest.raises(InstallError, match="not owned by Albert"):
+        install_classifier_agent(
+            agent_id="albert-classifier",
+            workspace=workspace,
+            model=None,
+            runner=runner,
+            probe=lambda *_: None,
+        )
+    assert (workspace / "SOUL.md").read_text(encoding="utf-8") == "mine"
+    assert runner.commands == [] or all(c[1:3] != ["agents", "add"] for c in runner.commands)
+
+
+def test_classifier_agent_remove_deletes_only_an_owned_agent(tmp_path: Path):
+    from albert.capture_installer import (
+        InstallError,
+        install_classifier_agent,
+        remove_classifier_agent,
+    )
+
+    config = tmp_path / "openclaw.json"
+    runner = AgentRunner(config)
+    workspace = tmp_path / "ws"
+    install_classifier_agent(
+        agent_id="albert-classifier",
+        workspace=workspace,
+        model=None,
+        runner=runner,
+        probe=lambda *_: None,
+    )
+    remove_classifier_agent(agent_id="albert-classifier", workspace=workspace, runner=runner)
+    assert runner.deleted == ["albert-classifier"]
+    assert not workspace.exists()
+
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    with pytest.raises(InstallError, match="not owned by Albert"):
+        remove_classifier_agent(agent_id="main", workspace=foreign, runner=runner)
+    assert runner.deleted == ["albert-classifier"]
+
+
+def test_classifier_agent_accepts_openclaw_releases_older_than_the_capture_plugin(tmp_path: Path):
+    from albert.capture_installer import InstallError, install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+    install_classifier_agent(
+        workspace=tmp_path / "ws",
+        runner=AgentRunner(config, version="2026.6.35"),
+        probe=lambda *_: None,
+    )
+    assert any(
+        a["id"] == "albert-classifier" for a in json.loads(config.read_text())["agents"]["list"]
+    )
+
+    with pytest.raises(InstallError, match=r"unsupported; require >=2026\.6\.35"):
+        install_classifier_agent(
+            workspace=tmp_path / "ws2",
+            runner=AgentRunner(tmp_path / "old.json", version="2026.5.9"),
+            probe=lambda *_: None,
+        )
+
+
+def test_config_file_path_ignores_the_cli_health_banner(tmp_path: Path):
+    from albert.capture_installer import _config_file_path
+
+    config = tmp_path / "openclaw.json"
+
+    def chatty(command: list[str]) -> subprocess.CompletedProcess[str]:
+        banner = "│ Left legacy config health state in place │\n╰──────╯\n"
+        return subprocess.CompletedProcess(command, 0, f"{banner}{config}\n", "")
+
+    assert _config_file_path(chatty) == config

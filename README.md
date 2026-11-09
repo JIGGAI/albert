@@ -376,7 +376,7 @@ PostgreSQL is the baseline every install has. The rest is configuration.
 | Choice | Options | Setting |
 |---|---|---|
 | Embeddings | `hashing` (no download, for development), `sentence-transformers` (local), `openai-compatible` | `ALBERT_EMBEDDING_PROVIDER` |
-| Classification | regex, or an LLM | `ALBERT_LLM_PROVIDER`, `ALBERT_CLASSIFICATION_MODEL` |
+| Classification | regex, or an LLM: an OpenAI-compatible API, a ChatGPT sign-in, or an OpenClaw gateway agent | `ALBERT_LLM_PROVIDER`, `ALBERT_CLASSIFICATION_MODEL` |
 | Graph builder | regex, LLM classifier, Graphiti temporal extraction | `ALBERT_GRAPH_BUILDER` |
 | Graph store | PostgreSQL (default), FalkorDB, Neo4j | `ALBERT_GRAPH_STORE` |
 | Vector floor | default 0.2 | `ALBERT_MIN_VECTOR_SIMILARITY` |

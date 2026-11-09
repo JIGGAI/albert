@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     # "chatgpt-oauth" signs in with a ChatGPT account instead of an API key;
     # see docs/GRAPH_BACKENDS.md. It drives the classifier and Graphiti's LLM;
     # embeddings stay with ``embedding_provider``.
-    llm_provider: Literal["none", "openai-compatible", "chatgpt-oauth"] = "none"
+    # "openclaw" posts to an OpenClaw gateway agent (``openclaw/<agent>`` on
+    # ``/v1/responses``) and lets OpenClaw supply the model and its sign-in; see
+    # docs/PROVIDERS.md. Graphiti needs a real OpenAI client and cannot use it.
+    llm_provider: Literal["none", "openai-compatible", "chatgpt-oauth", "openclaw"] = "none"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: SecretStr | None = None
     classification_model: str | None = None
@@ -48,6 +51,11 @@ class Settings(BaseSettings):
     chatgpt_credentials_file: Path | None = None
     chatgpt_base_url: str = "https://chatgpt.com/backend-api/codex"
     chatgpt_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
+    # ``host.docker.internal`` is the Compose host, where the gateway listens on
+    # loopback; the token is ``gateway.auth.token`` in that host's openclaw.json.
+    openclaw_gateway_url: str = "http://host.docker.internal:18789"
+    openclaw_gateway_token: SecretStr | None = None
+    openclaw_agent_id: str = "albert-classifier"
 
     worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     lock_default_ttl_seconds: int = Field(default=900, ge=10, le=86400)
@@ -100,6 +108,7 @@ class Settings(BaseSettings):
         "graph_builder",
         "chatgpt_credentials_file",
         "chatgpt_reasoning_effort",
+        "openclaw_gateway_token",
         mode="before",
     )
     @classmethod
@@ -135,17 +144,21 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ALBERT_CLASSIFICATION_MODEL is required for ALBERT_LLM_PROVIDER=chatgpt-oauth"
                 )
+        if self.llm_provider == "openclaw" and self.openclaw_gateway_token is None:
+            raise ValueError(
+                "ALBERT_OPENCLAW_GATEWAY_TOKEN is required for ALBERT_LLM_PROVIDER=openclaw"
+            )
         if self.graph_builder == "llm-classifier" and self.llm_provider == "none":
             raise ValueError(
                 "ALBERT_GRAPH_BUILDER=llm-classifier requires ALBERT_LLM_PROVIDER="
-                "openai-compatible or chatgpt-oauth"
+                "openai-compatible, chatgpt-oauth or openclaw"
             )
         if self.graph_builder == "graphiti":
             if self.graph_store not in {"falkordb", "neo4j"}:
                 raise ValueError(
                     "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_GRAPH_STORE=falkordb or neo4j"
                 )
-            if self.llm_provider == "none":
+            if self.llm_provider not in {"openai-compatible", "chatgpt-oauth"}:
                 raise ValueError(
                     "ALBERT_GRAPH_BUILDER=graphiti requires ALBERT_LLM_PROVIDER="
                     "openai-compatible or chatgpt-oauth"
