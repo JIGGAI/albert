@@ -69,9 +69,10 @@ The console is an operator UI shipped with Albert: a live feed of every request
 and worker job, a step-by-step replay of any trace with the fusion math behind
 each result, and a memory map: every memory as a node, linked to the ones it
 resembles, follows or is recalled with, gathered into named clusters, pulsing
-as agents recall and store. Selecting a memory opens it in full. An Operations
-page reports who is using memory, what it holds, how well retrieval is working
-and how the service itself is doing. It sees what its key can see: give the
+as agents recall and store. Selecting a memory opens it in full. The Agents,
+Memory, Retrieval, Graph and Service pages report who is using memory, what it
+holds, how well retrieval is working, how the graph is being built and how the
+service itself is doing. It sees what its key can see: give the
 console principal no workspace to see the whole organization, a workspace to
 limit it to that workspace and the organization-wide memories it shares, or
 give the key `admin` if one console should see every tenant on the instance.

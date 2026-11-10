@@ -300,6 +300,7 @@ links, which is why it never reaches further than the key that issued it.
 
 ### Operations views
 
+Behind the console's Agents, Memory, Retrieval, Graph and Service pages.
 Computed on request from traces, jobs and the link and recall tables. `hours`
 is the window (1 to 720, default 24); at most the newest 20,000 traces in it are
 read (3,000 for retrieval, which reads spans), and `truncated` says when that

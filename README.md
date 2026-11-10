@@ -67,7 +67,7 @@ flowchart LR
         M["recall counts<br/>recalled-together links"]
     end
     subgraph S5["5 · See it"]
-        N["Live · Replay · Map<br/>Operations · Backends"]
+        N["Live · Replay · Map<br/>Agents · Memory · Retrieval · Graph · Service · Backends"]
     end
     A --> B
     F --> G
@@ -349,9 +349,10 @@ and the fusion math behind the final ranking.
 or is recalled with, gathered into named clusters. Nodes pulse as agents recall
 and store. Click one to read it in full.
 
-**Operations** answers five questions: who is using memory, what does it hold,
-are searches finding things, is the knowledge graph being built, and is the
-service healthy.
+**Agents**, **Memory**, **Retrieval**, **Graph** and **Service** each answer one
+question: who is using memory, what does it hold, are searches finding things,
+is the knowledge graph being built, and is the service healthy. Each is its own
+page in the side menu; the console opens on Agents.
 
 ![Retrieval quality: which backend earns the hits, which searches found nothing](docs/images/console-operations.png)
 
@@ -493,7 +494,7 @@ memory rather than stuck. Setup per host: [integration handbook](docs/integratio
 - **Upgrades.** Back up, migrate, and check the compatibility manifest
   (`albert-admin compat --json`) before switching traffic ([upgrades](docs/DEPLOYMENT.md#upgrades)).
 - **Health.** `/v1/health/live` and `/v1/health/ready`, plus the console's Live
-  and Operations screens.
+  and Service screens.
 
 ---
 

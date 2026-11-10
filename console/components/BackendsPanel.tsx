@@ -158,7 +158,7 @@ export function BackendsPanel() {
 
       <p className="muted">
         How the graph is being built and queried is under{" "}
-        <Link href="/ops?view=graph">Operations → Graph</Link>.
+        <Link href="/graph">Graph</Link>.
       </p>
 
       <section>
