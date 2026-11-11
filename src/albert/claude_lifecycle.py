@@ -15,9 +15,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import typer
 
-from albert.capture_installer import InstallError, _brain_check, _validate_secret
+from albert.capture_installer import (
+    InstallError,
+    _brain_check,
+    _package_version,
+    _validate_secret,
+    read_private_link,
+    redeem_cloud_link,
+)
 from albert.capture_sdk import generate_queue_key
 from albert.claude_adapter import CLAUDE_EVENTS
 from albert.host_targets import HostTargetError, assert_owned_install_root, negotiate_host_target
@@ -193,6 +201,7 @@ def install_claude(
     paths: ClaudeInstallPaths,
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
+    cloud_metadata: dict[str, object] | None = None,
     plugin_source: Path | None = None,
 ) -> None:
     """Validate, stage, atomically replace, and prove a Claude Code installation."""
@@ -254,6 +263,8 @@ def install_claude(
             "host_target_version": target.descriptor_version,
             "owner": PLUGIN_ID,
         }
+        if cloud_metadata is not None:
+            marker["cloud"] = cloud_metadata
         _write_private(staged.marker, json.dumps(marker, sort_keys=True) + "\n", 0o600)
         for filename in ("capture.db", "capture.claude-state.db"):
             existing = paths.root / filename
@@ -290,6 +301,40 @@ def install_claude(
     else:
         if backup.exists():
             shutil.rmtree(backup)
+
+
+def connect_claude(
+    *,
+    link_url: str,
+    paths: ClaudeInstallPaths,
+    runner: Runner = _run,
+    trust: dict[str, object] | None = None,
+    package_version: str | None = None,
+    http: httpx.Client | None = None,
+    brain_check: Callable[[str, str, str, str | None], None] | None = None,
+    plugin_source: Path | None = None,
+) -> None:
+    """Redeem a Cloud one-time link made for Claude Code and install with it."""
+    # Detect before redeeming so an unsupported host never consumes the link.
+    _detect_claude(runner)
+    redeem_cloud_link(
+        link_url=link_url,
+        family="claude-code",
+        agent_name="Claude Code",
+        install=lambda rest_url, credential, workspace_id, cloud: install_claude(
+            api_url=rest_url,
+            token=credential,
+            workspace_id=workspace_id,
+            paths=paths,
+            runner=runner,
+            brain_check=brain_check,
+            plugin_source=plugin_source,
+            cloud_metadata={**cloud, "package_version": package_version or _package_version()},
+        ),
+        trust=trust,
+        package_version=package_version,
+        http=http,
+    )
 
 
 def doctor_claude(
@@ -386,6 +431,30 @@ def install_command(
         typer.echo("Albert Memory installed; use ~/.claude/albert/bin/albert-claude.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+
+@app.command("connect")
+def connect_command(
+    link_stdin: bool = typer.Option(
+        False, "--link-stdin", help="Read the one-time link from private standard input."
+    ),
+    link_fd: int | None = typer.Option(
+        None,
+        "--link-fd",
+        min=0,
+        help="Read the one-time link from an already-open private file descriptor.",
+    ),
+) -> None:
+    """Connect Claude Code with an Albert Cloud one-time link."""
+    try:
+        connect_claude(link_url=read_private_link(link_stdin, link_fd), paths=_default_paths())
+        typer.echo(
+            "Albert Memory connected; capture and recall passed. "
+            "Start Claude Code with ~/.claude/albert/bin/albert-claude."
+        )
+    except (InstallError, OSError) as exc:
+        typer.echo(f"Connect failed safely: {exc}", err=True)
         raise typer.Exit(1) from None
 
 

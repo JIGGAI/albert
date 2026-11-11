@@ -27,6 +27,7 @@ from albert.capture_sdk import CaptureClient, EncryptedQueue, generate_queue_key
 from albert.host_targets import (
     HostTargetError,
     assert_owned_install_root,
+    load_host_target,
     negotiate_host_target,
 )
 from albert.openclaw_adapter import OPENCLAW_EVENTS
@@ -140,9 +141,9 @@ def _load_trust() -> dict[str, object]:
     try:
         trust = json.loads(TRUST_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise InstallError("OpenClaw adapter trust metadata is unavailable") from exc
+        raise InstallError("Cloud adapter trust metadata is unavailable") from exc
     if not isinstance(trust, dict):
-        raise InstallError("OpenClaw adapter trust metadata is invalid")
+        raise InstallError("Cloud adapter trust metadata is invalid")
     return trust
 
 
@@ -153,35 +154,21 @@ def _package_version() -> str:
         return "0.4.1"
 
 
-def _version_in_range(version: tuple[int, int, int], declared: str) -> bool:
-    clauses = [part.strip() for part in declared.split(",") if part.strip()]
-    if not clauses:
-        return False
-    for clause in clauses:
-        match = re.fullmatch(r"(>=|>|<=|<|==)(\d+)\.(\d+)\.(\d+)", clause)
-        if not match:
-            return False
-        target = tuple(int(value) for value in match.groups()[1:])
-        operator = match.group(1)
-        if not {
-            ">=": version >= target,
-            ">": version > target,
-            "<=": version <= target,
-            "<": version < target,
-            "==": version == target,
-        }[operator]:
-            return False
-    return True
-
-
 def _verify_manifest(
     payload: object,
     *,
     link_url: str,
-    openclaw_version: tuple[int, int, int],
+    family: str,
     trust: dict[str, object] | None = None,
     package_version: str | None = None,
 ) -> CloudManifest:
+    """Verify a signed Cloud adapter manifest issued for one host family.
+
+    The family is signed into the manifest, so a link made for OpenClaw cannot
+    be redeemed by the Claude Code or Codex installer, or the other way round.
+    Host-version support is not part of the manifest: each installer negotiates
+    it against its own shipped host target before anything is redeemed.
+    """
     from datetime import UTC, datetime, timedelta
     from urllib.parse import urlsplit, urlunsplit
 
@@ -282,20 +269,17 @@ def _verify_manifest(
         "family",
         "package",
         "package_version",
-        "supported_openclaw",
     }:
         raise InstallError("Cloud adapter package provenance is malformed")
     local_version = package_version or _package_version()
     artifact_sha256 = adapter.get("artifact_sha256")
     if (
-        adapter.get("family") != "openclaw"
+        adapter.get("family") != family
         or adapter.get("package") != "albert-memory"
         or adapter.get("package_version") != local_version
         or not isinstance(artifact_sha256, str)
         or not SHA256_PATTERN.fullmatch(artifact_sha256)
         or adapter.get("artifact_signature") != f"github-oidc-dsse:sha256:{artifact_sha256}"
-        or not isinstance(adapter.get("supported_openclaw"), str)
-        or not _version_in_range(openclaw_version, adapter["supported_openclaw"])
     ):
         raise InstallError("Cloud adapter package provenance or host compatibility is untrusted")
     _https_url(adapter.get("artifact_url"), "Adapter artifact")
@@ -322,6 +306,10 @@ def _verify_manifest(
         or set(compensation) != {"credential_specific", "method", "receipt_ttl_seconds", "url"}
     ):
         raise InstallError("Cloud adapter endpoints are malformed")
+    try:
+        expected_reload = {"command": list(load_host_target(family).install["reload"])}
+    except (HostTargetError, KeyError, TypeError):
+        raise InstallError("Cloud adapter host family is unsupported") from None
     rest_url = _https_url(connection.get("rest_url"), "Brain endpoint")
     redemption_url = _https_url(redemption.get("url"), "Redemption endpoint")
     compensation_url = _https_url(compensation.get("url"), "Compensation endpoint")
@@ -339,7 +327,7 @@ def _verify_manifest(
         or compensation.get("credential_specific") is not True
         or compensation.get("receipt_ttl_seconds") != 600
         or compensation_url != f"{expected_rest}/onboard/compensate"
-        or reload_contract != {"command": ["openclaw", "plugins", "reload", PLUGIN_ID]}
+        or reload_contract != expected_reload
         or revocation
         != {
             "credential_id_issued_on_redemption": True,
@@ -719,15 +707,44 @@ def uninstall_openclaw(paths: InstallPaths, *, runner: Runner = _run) -> None:
         shutil.rmtree(paths.root)
 
 
-def connect_openclaw(
+CloudInstall = Callable[[str, str, str, dict[str, object]], None]
+
+
+def read_private_link(link_stdin: bool, link_fd: int | None) -> str:
+    """Read a one-time link from a hidden prompt, private stdin, or an open descriptor."""
+    if link_stdin and link_fd is not None:
+        raise InstallError("choose only one private link input mode")
+    if link_fd is not None:
+        with os.fdopen(os.dup(link_fd), encoding="utf-8") as stream:
+            link = stream.read(8193)
+    elif link_stdin:
+        link = sys.stdin.read(8193)
+    else:
+        link = getpass.getpass("Albert Cloud one-time link: ")
+    if len(link) > 8192:
+        raise InstallError("Cloud one-time link is too long")
+    return link.strip()
+
+
+def redeem_cloud_link(
     *,
     link_url: str,
-    paths: InstallPaths,
-    runner: Runner = _run,
+    family: str,
+    agent_name: str,
+    install: CloudInstall,
     trust: dict[str, object] | None = None,
     package_version: str | None = None,
     http: httpx.Client | None = None,
 ) -> None:
+    """Redeem a signed Cloud one-time link and hand the credential to ``install``.
+
+    ``install(rest_url, credential, workspace_id, cloud_metadata)`` must commit
+    transactionally and prove the connection. If it raises, the freshly issued
+    credential is revoked through Cloud's compensation receipt, so a failed
+    connect never leaves a live credential behind. The caller detects and
+    negotiates the host before calling, so an unsupported host never consumes
+    the link.
+    """
     from datetime import UTC, datetime, timedelta
     from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -746,15 +763,6 @@ def connect_openclaw(
     manifest_url = urlunsplit(
         (parsed.scheme, parsed.netloc, base_path + "/manifest/v2", parsed.query, "")
     )
-    version = _detect_openclaw(runner)
-    try:
-        negotiate_host_target(
-            "openclaw",
-            version,
-            {"capture", "recall", "reload", "rollback", "rotate", "revoke"},
-        )
-    except HostTargetError as exc:
-        raise InstallError(str(exc)) from None
     client = http or httpx.Client(timeout=15, follow_redirects=False)
     owns_client = http is None
     receipt: str | None = None
@@ -773,13 +781,13 @@ def connect_openclaw(
         manifest = _verify_manifest(
             manifest_payload,
             link_url=link_url,
-            openclaw_version=version,
+            family=family,
             trust=trust,
             package_version=installed_package_version,
         )
         compensation_url = manifest.compensation_url
         redemption = {
-            "agent_name": "Native OpenClaw",
+            "agent_name": agent_name,
             "brain_id": manifest.identity["brain_id"],
             "capabilities": manifest.capabilities,
             "manifest_id": manifest.manifest_id,
@@ -877,15 +885,7 @@ def connect_openclaw(
             "rest_url": manifest.rest_url,
             "workspace_id": identity["workspace_id"],
         }
-        install_openclaw(
-            api_url=manifest.rest_url,
-            token=credential,
-            workspace_id=manifest.identity["workspace_id"],
-            paths=paths,
-            runner=runner,
-            cloud_metadata=cloud_metadata,
-            package_version=installed_package_version,
-        )
+        install(manifest.rest_url, credential, manifest.identity["workspace_id"], cloud_metadata)
     except Exception as connect_exc:
         if receipt is not None and compensation_url is not None:
             try:
@@ -924,6 +924,44 @@ def connect_openclaw(
     finally:
         if owns_client:
             client.close()
+
+
+def connect_openclaw(
+    *,
+    link_url: str,
+    paths: InstallPaths,
+    runner: Runner = _run,
+    trust: dict[str, object] | None = None,
+    package_version: str | None = None,
+    http: httpx.Client | None = None,
+) -> None:
+    version = _detect_openclaw(runner)
+    try:
+        negotiate_host_target(
+            "openclaw",
+            version,
+            {"capture", "recall", "reload", "rollback", "rotate", "revoke"},
+        )
+    except HostTargetError as exc:
+        raise InstallError(str(exc)) from None
+    installed_package_version = package_version or _package_version()
+    redeem_cloud_link(
+        link_url=link_url,
+        family="openclaw",
+        agent_name="Native OpenClaw",
+        install=lambda rest_url, credential, workspace_id, cloud: install_openclaw(
+            api_url=rest_url,
+            token=credential,
+            workspace_id=workspace_id,
+            paths=paths,
+            runner=runner,
+            cloud_metadata=cloud,
+            package_version=installed_package_version,
+        ),
+        trust=trust,
+        package_version=installed_package_version,
+        http=http,
+    )
 
 
 # --- Classifier agent (ALBERT_LLM_PROVIDER=openclaw) ----------------------------
@@ -1214,18 +1252,8 @@ def connect_command(
 ) -> None:
     """Privately redeem a Cloud one-time link and connect OpenClaw."""
     try:
-        if link_stdin and link_fd is not None:
-            raise InstallError("choose only one private link input mode")
-        if link_fd is not None:
-            with os.fdopen(os.dup(link_fd), encoding="utf-8") as stream:
-                link = stream.read(8193)
-        elif link_stdin:
-            link = sys.stdin.read(8193)
-        else:
-            link = getpass.getpass("Albert Cloud one-time link: ")
-        if len(link) > 8192:
-            raise InstallError("Cloud one-time link is too long")
-        connect_openclaw(link_url=link.strip(), paths=_default_paths())
+        link = read_private_link(link_stdin, link_fd)
+        connect_openclaw(link_url=link, paths=_default_paths())
         typer.echo("Albert Memory connected; reload, live capture, and fresh recall passed.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Connect failed safely: {exc}", err=True)
