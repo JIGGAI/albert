@@ -15,9 +15,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import typer
 
-from albert.capture_installer import InstallError, _brain_check, _validate_secret
+from albert.capture_installer import (
+    InstallError,
+    _brain_check,
+    _package_version,
+    _validate_secret,
+    read_private_link,
+    redeem_cloud_link,
+)
 from albert.capture_sdk import generate_queue_key
 from albert.codex_adapter import CODEX_EVENTS, SUPPORTED_HOOKS
 from albert.host_targets import (
@@ -263,6 +271,7 @@ def install_codex(
     paths: CodexInstallPaths,
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
+    cloud_metadata: dict[str, object] | None = None,
     hook_source: Path | None = None,
 ) -> tuple[int, int, int]:
     """Validate, stage, atomically replace, and prove a Codex installation.
@@ -317,6 +326,8 @@ def install_codex(
             "host_target_version": target.descriptor_version,
             "owner": PLUGIN_ID,
         }
+        if cloud_metadata is not None:
+            marker["cloud"] = cloud_metadata
         _write_private(staged.marker, json.dumps(marker, sort_keys=True) + "\n", 0o600)
         for filename in ("capture.db", "capture.codex-state.db"):
             existing = paths.root / filename
@@ -352,6 +363,44 @@ def install_codex(
         if backup.exists():
             shutil.rmtree(backup)
     return version
+
+
+def connect_codex(
+    *,
+    link_url: str,
+    paths: CodexInstallPaths,
+    runner: Runner = _run,
+    trust: dict[str, object] | None = None,
+    package_version: str | None = None,
+    http: httpx.Client | None = None,
+    brain_check: Callable[[str, str, str, str | None], None] | None = None,
+    hook_source: Path | None = None,
+) -> tuple[int, int, int]:
+    """Redeem a Cloud one-time link made for Codex and install with it."""
+    # Detect before redeeming so an unsupported host never consumes the link.
+    _detect_codex(runner)
+    detected: list[tuple[int, int, int]] = []
+    redeem_cloud_link(
+        link_url=link_url,
+        family="codex",
+        agent_name="Codex",
+        install=lambda rest_url, credential, workspace_id, cloud: detected.append(
+            install_codex(
+                api_url=rest_url,
+                token=credential,
+                workspace_id=workspace_id,
+                paths=paths,
+                runner=runner,
+                brain_check=brain_check,
+                hook_source=hook_source,
+                cloud_metadata={**cloud, "package_version": package_version or _package_version()},
+            )
+        ),
+        trust=trust,
+        package_version=package_version,
+        http=http,
+    )
+    return detected[0]
 
 
 def doctor_codex(
@@ -465,6 +514,33 @@ def install_command(
         typer.echo("Albert Memory installed. Review and trust the new Codex hooks normally.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+
+@app.command("connect")
+def connect_command(
+    link_stdin: bool = typer.Option(
+        False, "--link-stdin", help="Read the one-time link from private standard input."
+    ),
+    link_fd: int | None = typer.Option(
+        None,
+        "--link-fd",
+        min=0,
+        help="Read the one-time link from an already-open private file descriptor.",
+    ),
+) -> None:
+    """Connect Codex with an Albert Cloud one-time link."""
+    try:
+        version = connect_codex(
+            link_url=read_private_link(link_stdin, link_fd), paths=_default_paths()
+        )
+        _echo_verification(version)
+        typer.echo(
+            "Albert Memory connected; capture and recall passed. "
+            "Review and trust the new Codex hooks normally."
+        )
+    except (InstallError, OSError) as exc:
+        typer.echo(f"Connect failed safely: {exc}", err=True)
         raise typer.Exit(1) from None
 
 

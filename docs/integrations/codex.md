@@ -1,5 +1,25 @@
 # Codex integration
 
+## Connect from Albert Cloud
+
+In Albert Cloud, open the Brain's **Agents** tab, choose **Codex**, and create a
+setup link. The link is single-use, expires in 15 minutes, and is signed for
+Codex only. Let the command prompt for it so it stays out of shell history and
+process arguments:
+
+```bash
+albert-codex-lifecycle connect
+albert-codex-lifecycle doctor --smoke
+```
+
+`connect` verifies the signed manifest and package version, redeems the link for
+a credential limited to capture and recall in the chosen workspace, and then runs
+the same transactional install and live smoke test as `install`. If anything
+fails, the previous installation is restored and the new credential is revoked
+through Cloud. Automation may pass the link with `--link-stdin` or `--link-fd`.
+Review and trust the new hooks in Codex afterwards.
+
+
 ## Automatic memory adapter
 
 Albert uses Codex CLI's supported command-hook interface. It does not patch

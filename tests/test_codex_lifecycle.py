@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
 
 from albert.capture_installer import InstallError
@@ -12,6 +13,7 @@ from albert.codex_adapter import _client_from_environment
 from albert.codex_lifecycle import (
     CodexInstallPaths,
     app,
+    connect_codex,
     doctor_codex,
     install_codex,
     revoke_codex,
@@ -19,6 +21,7 @@ from albert.codex_lifecycle import (
     unverified_warning,
 )
 from albert.host_targets import negotiate_host_target
+from tests.test_capture_installer import CAPABILITIES, REST, cloud_contract, redeemed_response
 
 ROOT = Path(__file__).parents[1]
 HOOKS = ROOT / "src/albert/codex_hooks/hooks.json"
@@ -240,3 +243,60 @@ def test_doctor_command_prints_unverified_warning_to_stderr(
     result = CliRunner().invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "not yet verified" not in result.stderr
+
+
+def test_connect_redeems_a_codex_link_and_merges_hooks(tmp_path: Path) -> None:
+    link, manifest, trust = cloud_contract(family="codex")
+    redemptions: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        if request.url.path.endswith("/redeem/v2"):
+            redemptions.append(json.loads(request.content))
+            return redeemed_response("codex-credential")
+        return httpx.Response(404)
+
+    paths = _paths(tmp_path)
+    version = connect_codex(
+        link_url=link,
+        paths=paths,
+        runner=CodexRunner(),
+        trust=trust,
+        package_version="0.4.1",
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        brain_check=lambda *_: None,
+        hook_source=HOOKS,
+    )
+
+    assert ".".join(str(part) for part in version) == VERIFIED
+    assert redemptions[0]["agent_name"] == "Codex"
+    assert redemptions[0]["capabilities"] == CAPABILITIES
+    values = json.loads(paths.credentials.read_text())
+    assert values["ALBERT_CAPTURE_TOKEN"] == "codex-credential"
+    assert values["ALBERT_API_URL"] == REST
+    assert json.loads(paths.marker.read_text())["cloud"]["connection_id"] == "connection-1"
+    assert str(paths.adapter) in paths.hooks_config.read_text()
+
+
+def test_connect_refuses_a_claude_link(tmp_path: Path) -> None:
+    link, manifest, trust = cloud_contract(family="claude-code")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        raise AssertionError("a Claude Code link must not be redeemed by Codex")
+
+    paths = _paths(tmp_path)
+    with pytest.raises(InstallError, match="provenance"):
+        connect_codex(
+            link_url=link,
+            paths=paths,
+            runner=CodexRunner(),
+            trust=trust,
+            package_version="0.4.1",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+            brain_check=lambda *_: None,
+            hook_source=HOOKS,
+        )
+    assert not paths.root.exists() and not paths.hooks_config.exists()

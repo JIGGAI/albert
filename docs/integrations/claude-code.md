@@ -18,6 +18,27 @@ artifact. Automation may instead provide private standard input or a private
 file descriptor with `--token-stdin` or `--token-fd`. The launcher uses Claude
 Code's documented `--plugin-dir` surface and does not edit user settings.
 
+## Connect from Albert Cloud
+
+In Albert Cloud, open the Brain's **Agents** tab, choose **Claude Code**, and create a
+setup link. The link is single-use, expires in 15 minutes, and is signed for
+Claude Code only. Let the command prompt for it so it stays out of shell history and
+process arguments:
+
+```bash
+albert-claude-lifecycle connect
+albert-claude-lifecycle doctor --smoke
+```
+
+`connect` verifies the signed manifest and package version, redeems the link for
+a credential limited to capture and recall in the chosen workspace, and then runs
+the same transactional install and live smoke test as `install`. If anything
+fails, the previous installation is restored and the new credential is revoked
+through Cloud. Automation may pass the link with `--link-stdin` or `--link-fd`.
+Start Claude Code with `~/.claude/albert/bin/albert-claude` afterwards.
+
+## Development
+
 For source-tree development, validate and load the fixture directly:
 
 ```bash

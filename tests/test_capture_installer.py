@@ -31,8 +31,50 @@ def encoded(value: bytes) -> str:
     return urlsafe_b64encode(value).decode().rstrip("=")
 
 
+CAPABILITIES = ["capture.write", "memory.read"]
+REST = "https://console.example.com/api/brain-gateway/brain-1/rest"
+
+
+def redeemed_response(
+    credential: str,
+    *,
+    receipt: str = "private-compensation-receipt",
+    connection_id: str = "connection-1",
+    credential_id: str = "credential-1",
+) -> httpx.Response:
+    """Cloud's 201 answer to a v2 redemption."""
+    return httpx.Response(
+        201,
+        json={
+            "capabilities": CAPABILITIES,
+            "compensation": {
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+                "receipt": receipt,
+            },
+            "credential": credential,
+            "credential_notice": "Shown once; store only in the Albert-owned credential file.",
+            "identity": {
+                "brain_id": "brain-1",
+                "connection_id": connection_id,
+                "credential_id": credential_id,
+                "request_id": "request-1",
+                "workspace_id": "workspace-1",
+            },
+            "manifest_version": "2.0",
+            "rest_url": REST,
+        },
+    )
+
+
+RELOAD = {
+    "openclaw": ["openclaw", "plugins", "reload", "albert-memory"],
+    "claude-code": ["claude", "plugin", "validate", "--strict"],
+    "codex": ["codex", "--version"],
+}
+
+
 def cloud_contract(
-    *, authorization: str = "Bearer"
+    *, authorization: str = "Bearer", family: str = "openclaw"
 ) -> tuple[str, dict[str, object], dict[str, object]]:
     link = (
         "https://console.example.com/api/brain-gateway/brain-1/rest/"
@@ -43,15 +85,14 @@ def cloud_contract(
         "artifact_sha256": "a" * 64,
         "artifact_signature": f"github-oidc-dsse:sha256:{'a' * 64}",
         "artifact_url": "https://releases.example.com/albert-memory-0.4.1.whl",
-        "family": "openclaw",
+        "family": family,
         "package": "albert-memory",
         "package_version": "0.4.1",
-        "supported_openclaw": ">=2026.9.6,<2027.0.0",
     }
     now = datetime.now(UTC)
     manifest: dict[str, object] = {
         "adapter": adapter,
-        "capabilities": ["memory.read", "memory.write"],
+        "capabilities": CAPABILITIES,
         "compensation": {
             "credential_specific": True,
             "method": "POST",
@@ -78,7 +119,7 @@ def cloud_contract(
                 "?adapter_context=signed-context"
             ),
         },
-        "reload": {"command": ["openclaw", "plugins", "reload", "albert-memory"]},
+        "reload": {"command": RELOAD[family]},
         "revocation": {
             "credential_id_issued_on_redemption": True,
             "independent_agent": True,
@@ -380,35 +421,13 @@ def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
             assert json.loads(request.content) == {
                 "agent_name": "Native OpenClaw",
                 "brain_id": "brain-1",
-                "capabilities": ["memory.read", "memory.write"],
+                "capabilities": CAPABILITIES,
                 "manifest_id": "request-1",
                 "manifest_version": "2.0",
                 "request_id": "request-1",
                 "workspace_id": "workspace-1",
             }
-            return httpx.Response(
-                201,
-                json={
-                    "capabilities": ["memory.read", "memory.write"],
-                    "compensation": {
-                        "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
-                        "receipt": "private-compensation-receipt",
-                    },
-                    "credential": credential,
-                    "credential_notice": (
-                        "Shown once; store only in the Albert-owned credential file."
-                    ),
-                    "identity": {
-                        "brain_id": "brain-1",
-                        "connection_id": "connection-1",
-                        "credential_id": "credential-1",
-                        "request_id": "request-1",
-                        "workspace_id": "workspace-1",
-                    },
-                    "manifest_version": "2.0",
-                    "rest_url": ("https://console.example.com/api/brain-gateway/brain-1/rest"),
-                },
-            )
+            return redeemed_response(credential)
         return httpx.Response(404)
 
     monkeypatch.setattr("albert.capture_installer._brain_check", lambda *args, **kwargs: None)
@@ -460,28 +479,11 @@ def test_connect_failure_restores_predecessor_and_compensates_only_replacement(
         if request.url.path.endswith("/manifest/v2"):
             return httpx.Response(200, json=manifest)
         if request.url.path.endswith("/redeem/v2"):
-            return httpx.Response(
-                201,
-                json={
-                    "capabilities": ["memory.read", "memory.write"],
-                    "compensation": {
-                        "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
-                        "receipt": "replacement-only-receipt",
-                    },
-                    "credential": "replacement-secret",
-                    "credential_notice": (
-                        "Shown once; store only in the Albert-owned credential file."
-                    ),
-                    "identity": {
-                        "brain_id": "brain-1",
-                        "connection_id": "replacement-connection",
-                        "credential_id": "replacement-credential",
-                        "request_id": "request-1",
-                        "workspace_id": "workspace-1",
-                    },
-                    "manifest_version": "2.0",
-                    "rest_url": ("https://console.example.com/api/brain-gateway/brain-1/rest"),
-                },
+            return redeemed_response(
+                "replacement-secret",
+                receipt="replacement-only-receipt",
+                connection_id="replacement-connection",
+                credential_id="replacement-credential",
             )
         if request.url.path.endswith("/onboard/compensate"):
             compensated.append(json.loads(request.content))
@@ -526,7 +528,7 @@ def test_manifest_rejects_tampering_and_untrusted_release():
         _verify_manifest(
             manifest,
             link_url=link,
-            openclaw_version=(2026, 9, 6),
+            family="openclaw",
             trust=trust,
             package_version="0.4.1",
         )
@@ -536,7 +538,7 @@ def test_manifest_rejects_tampering_and_untrusted_release():
         _verify_manifest(
             clean_manifest,
             link_url=link,
-            openclaw_version=(2026, 9, 6),
+            family="openclaw",
             trust=clean_trust,
             # Keep this deliberately unrelated to release versions so the
             # package-version bump script cannot make the mismatch valid.
@@ -560,7 +562,7 @@ def test_manifest_requires_bearer_authorization_scheme():
         _verify_manifest(
             manifest,
             link_url=link,
-            openclaw_version=(2026, 9, 6),
+            family="openclaw",
             trust=trust,
             package_version="0.4.1",
         )
@@ -813,3 +815,44 @@ def test_config_file_path_ignores_the_cli_health_banner(tmp_path: Path):
         return subprocess.CompletedProcess(command, 0, f"{banner}{config}\n", "")
 
     assert _config_file_path(chatty) == config
+
+
+def test_manifest_is_bound_to_the_host_family_it_was_issued_for():
+    link, manifest, trust = cloud_contract(family="claude-code")
+
+    _verify_manifest(
+        manifest, link_url=link, family="claude-code", trust=trust, package_version="0.4.1"
+    )
+    for other in ("openclaw", "codex"):
+        with pytest.raises(InstallError, match="provenance"):
+            _verify_manifest(
+                manifest, link_url=link, family=other, trust=trust, package_version="0.4.1"
+            )
+
+
+def test_manifest_reload_contract_must_match_the_shipped_host_target():
+    link, manifest, trust = cloud_contract(family="codex")
+    manifest.pop("signature")
+    manifest["reload"] = {"command": RELOAD["openclaw"]}
+    private_key = Ed25519PrivateKey.generate()
+    manifest["signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": "test-key",
+        "value": encoded(
+            private_key.sign(json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode())
+        ),
+    }
+    trust = {
+        "manifest_keys": {
+            "test-key": encoded(
+                private_key.public_key().public_bytes(
+                    serialization.Encoding.Raw, serialization.PublicFormat.Raw
+                )
+            )
+        }
+    }
+
+    with pytest.raises(InstallError, match="endpoint binding"):
+        _verify_manifest(
+            manifest, link_url=link, family="codex", trust=trust, package_version="0.4.1"
+        )

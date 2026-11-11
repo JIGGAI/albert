@@ -5,18 +5,21 @@ import os
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
 
 from albert.capture_installer import InstallError
 from albert.claude_adapter import _client_from_environment
 from albert.claude_lifecycle import (
     ClaudeInstallPaths,
+    connect_claude,
     doctor_claude,
     install_claude,
     revoke_claude,
     uninstall_claude,
 )
 from albert.host_targets import negotiate_host_target
+from tests.test_capture_installer import CAPABILITIES, REST, cloud_contract, redeemed_response
 
 ROOT = Path(__file__).parents[1]
 PLUGIN = ROOT / "src/albert/claude_plugin"
@@ -194,3 +197,122 @@ def test_claude_adapter_reads_only_owned_private_credential_file(
     os.chmod(credential, 0o644)
     with pytest.raises(RuntimeError, match="permissions are unsafe"):
         _client_from_environment()
+
+
+def test_connect_redeems_a_claude_link_and_records_cloud_identity(tmp_path: Path) -> None:
+    link, manifest, trust = cloud_contract(family="claude-code")
+    redemptions: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        if request.url.path.endswith("/redeem/v2"):
+            redemptions.append(json.loads(request.content))
+            return redeemed_response("claude-credential")
+        return httpx.Response(404)
+
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    connect_claude(
+        link_url=link,
+        paths=paths,
+        runner=runner,
+        trust=trust,
+        package_version="0.4.1",
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        brain_check=lambda *_: None,
+        plugin_source=PLUGIN,
+    )
+
+    assert redemptions[0]["agent_name"] == "Claude Code"
+    assert redemptions[0]["capabilities"] == CAPABILITIES
+    values = json.loads(paths.credentials.read_text())
+    assert values["ALBERT_CAPTURE_TOKEN"] == "claude-credential"
+    assert values["ALBERT_API_URL"] == REST
+    assert values["ALBERT_WORKSPACE_ID"] == "workspace-1"
+    marker = json.loads(paths.marker.read_text())
+    assert marker["cloud"]["credential_id"] == "credential-1"
+    assert marker["cloud"]["package_version"] == "0.4.1"
+    assert "claude-credential" not in paths.marker.read_text() + json.dumps(runner.commands)
+
+
+def test_connect_refuses_a_link_made_for_another_host(tmp_path: Path) -> None:
+    link, manifest, trust = cloud_contract(family="openclaw")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        raise AssertionError("an OpenClaw link must not be redeemed by Claude Code")
+
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    with pytest.raises(InstallError, match="provenance"):
+        connect_claude(
+            link_url=link,
+            paths=paths,
+            runner=ClaudeRunner(),
+            trust=trust,
+            package_version="0.4.1",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+            brain_check=lambda *_: None,
+            plugin_source=PLUGIN,
+        )
+    assert not paths.root.exists()
+
+
+def test_connect_compensates_the_credential_when_install_fails(tmp_path: Path) -> None:
+    link, manifest, trust = cloud_contract(family="claude-code")
+    compensated: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/manifest/v2"):
+            return httpx.Response(200, json=manifest)
+        if request.url.path.endswith("/redeem/v2"):
+            return redeemed_response("doomed-credential", receipt="claude-receipt")
+        if request.url.path.endswith("/onboard/compensate"):
+            compensated.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "connection_id": "connection-1",
+                    "credential_id": "credential-1",
+                    "revoked": True,
+                },
+            )
+        return httpx.Response(404)
+
+    def failing_check(*_: object) -> None:
+        raise InstallError("live capture smoke test was rejected")
+
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    with pytest.raises(InstallError, match="smoke"):
+        connect_claude(
+            link_url=link,
+            paths=paths,
+            runner=ClaudeRunner(),
+            trust=trust,
+            package_version="0.4.1",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+            brain_check=failing_check,
+            plugin_source=PLUGIN,
+        )
+    assert compensated == [{"receipt": "claude-receipt"}]
+    assert not paths.root.exists()
+
+
+def test_connect_detects_an_unsupported_host_before_touching_the_link(tmp_path: Path) -> None:
+    link, _, trust = cloud_contract(family="claude-code")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the link must not be fetched for an unsupported host")
+
+    with pytest.raises(InstallError):
+        connect_claude(
+            link_url=link,
+            paths=ClaudeInstallPaths(tmp_path / "albert"),
+            runner=ClaudeRunner(version="2.0.1"),
+            trust=trust,
+            package_version="0.4.1",
+            http=httpx.Client(transport=httpx.MockTransport(handler)),
+            brain_check=lambda *_: None,
+            plugin_source=PLUGIN,
+        )

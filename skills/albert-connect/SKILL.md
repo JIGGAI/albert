@@ -24,38 +24,38 @@ Check for the host and its version without using the link:
 
 Use the first host that owns the current agent session. Do not infer support merely because an unrelated executable is installed.
 
-Current Cloud one-time-link support:
+Current Cloud one-time-link support. Each link is signed for one host, so use the host the link was made for:
 
-| Host | Cloud link | Action |
-| --- | --- | --- |
-| OpenClaw `>=2026.9.6,<2027.0.0` | Supported | Continue below. |
-| Codex | Not yet supported | Do not redeem the link; report that direct lifecycle setup exists but Cloud-link onboarding is not unified yet. |
-| Claude Code | Not yet supported | Do not redeem the link; report that direct lifecycle setup exists but Cloud-link onboarding is not unified yet. |
-| Cursor | Not yet supported | Do not install or redeem; report that the production lifecycle target is not available yet. |
-| Generic MCP/REST client | Custom-client path only | Do not substitute it for automatic memory capture; ask the user to use Albert Cloud's advanced custom-client flow. |
+| Host | Cloud link | Connector command | Owned marker |
+| --- | --- | --- | --- |
+| OpenClaw `>=2026.9.6,<2027.0.0` | Supported | `albert-capture` | `~/.openclaw/albert/install.json` |
+| Claude Code `>=2.1.78,<2.2.0` | Supported | `albert-claude-lifecycle` | `~/.claude/albert/install.json` |
+| Codex `>=0.166.0` | Supported | `albert-codex-lifecycle` | `$CODEX_HOME/albert/install.json` (default `~/.codex`) |
+| Cursor | Not yet supported | — | Do not install or redeem; report that the production lifecycle target is not available yet. |
+| Generic MCP/REST client | Custom-client path only | — | Do not substitute it for automatic memory capture; ask the user to choose "Other (MCP/REST)" in Albert Cloud. |
 
-Do not install the OpenClaw adapter into another host.
+Below, `<connector>` means the connector command for the detected host and `<marker>` its owned marker. Do not install one host's adapter into another host; a link made for a different host is refused by `connect` before redemption.
 
 **Complete when:** the current host and version are known, and unsupported hosts have stopped without consuming the link.
 
-## 3. Reuse a healthy matching OpenClaw connection
+## 3. Reuse a healthy matching connection
 
-If `albert-capture` already exists, inspect both the installed distribution metadata and the owned marker at `~/.openclaw/albert/install.json` without using the link:
+If `<connector>` already exists, inspect both the installed distribution metadata and the owned marker at `<marker>` without using the link:
 
 ```bash
 python -c 'import importlib.metadata; print(importlib.metadata.version("albert-memory"))'
 ```
 
-A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.1` and record both `"owner": "albert-memory"` and `"package_version": "0.4.1"` in the marker. A missing or different package version requires the verified installation step below; do not trust executable names or
+A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.1` and record both `"owner": "albert-memory"` and `"package_version": "0.4.1"` in the marker (Claude Code and Codex record it under `"cloud"`). A missing or different package version requires the verified installation step below; do not trust executable names or
 the Brain origin alone.
 
 Only when both exact-version checks pass, run:
 
 ```bash
-albert-capture doctor --smoke
+<connector> doctor --smoke
 ```
 
-If doctor passes and the marker has the same Brain API origin encoded by the link (the portion before `/onboard/`), keep the existing connection and do not redeem the new link. Inspect only `install.json`; never read or print `credentials.env`.
+If doctor passes and the marker has the same Brain API origin encoded by the link (the portion before `/onboard/`), keep the existing connection and do not redeem the new link. Inspect only `install.json`; never read or print the credential file.
 
 If doctor fails, either exact-version check fails, the Brain differs, or the user explicitly requested reconnection/rotation, continue. Do not uninstall the working connection first; `connect` performs transactional replacement and rollback.
 
@@ -65,7 +65,7 @@ If doctor fails, either exact-version check fails, the Brain differs, or the use
 
 The supported connector package for this skill revision is `albert-memory==0.4.1`. The copied Albert Cloud prompt must name the same expected package version. Stop on a mismatch.
 
-If `albert-capture` is missing or its installed package version differs:
+If `<connector>` is missing or its installed package version differs:
 
 1. Create a private temporary directory.
 2. Download only the exact wheel, without installing it:
@@ -82,46 +82,50 @@ If `albert-capture` is missing or its installed package version differs:
 
 4. Install that verified local wheel with `uv tool install <downloaded-wheel>` or `pipx install <downloaded-wheel>`.
 5. Remove only the temporary download directory after installation.
-6. Confirm `albert-capture --help` succeeds and the installed `albert-memory` version is exactly `0.4.1`.
+6. Confirm `<connector> --help` succeeds and the installed `albert-memory` version is exactly `0.4.1`.
 
 If the exact wheel is unpublished, unavailable, unattested, or cannot be verified, stop. Never fall back to an unpinned package, a floating Git branch, or source copied from the one-time-link endpoint.
 
-**Complete when:** the exact attested package is installed as a tool and `albert-capture` resolves from the current executable path.
+**Complete when:** the exact attested package is installed as a tool and `<connector>` resolves from the current executable path.
 
 ## 5. Connect privately
 
-Preferred interactive path:
+Preferred interactive path, for the detected host:
 
 ```bash
 albert-capture connect
+albert-claude-lifecycle connect
+albert-codex-lifecycle connect
 ```
 
-Wait for `Albert Cloud one-time link:` and provide the link through the tool's hidden/PTY input. Do not include the link in the command.
+Run only the one line for the detected host. Wait for `Albert Cloud one-time link:` and provide the link through the tool's hidden/PTY input. Do not include the link in the command.
 
-When an interactive prompt is impossible, invoke `albert-capture connect --link-stdin` and send the link directly through the execution tool's private stdin API. Do not build a shell pipeline with `echo`, `printf`, a here-document, command substitution, or an environment variable. Use `--link-fd` only when the caller already supplied a private open descriptor.
+When an interactive prompt is impossible, invoke `<connector> connect --link-stdin` and send the link directly through the execution tool's private stdin API. Do not build a shell pipeline with `echo`, `printf`, a here-document, command substitution, or an environment variable. Use `--link-fd` only when the caller already supplied a private open descriptor.
 
-`connect` must validate the signed manifest, package provenance, host compatibility, one-time redemption identity, Brain readiness, plugin reload, live capture, and fresh recall before committing. On failure, preserve the prior working installation and report the sanitized error.
+`connect` must validate the signed manifest, its host family, package provenance, host compatibility, one-time redemption identity, Brain readiness, live capture, and fresh recall before committing. On failure, preserve the prior working installation and report the sanitized error; the issued credential is revoked automatically.
 
-**Complete when:** `connect` reports that reload, live capture, and fresh recall passed.
+**Complete when:** `connect` reports that live capture and fresh recall passed.
 
 ## 6. Verify and report
 
 Run:
 
 ```bash
-albert-capture doctor --smoke
-openclaw plugins inspect albert-memory --runtime --json
+<connector> doctor --smoke
 ```
+
+For OpenClaw also run `openclaw plugins inspect albert-memory --runtime --json`. For Claude Code, tell the user to start Claude Code with `~/.claude/albert/bin/albert-claude`. For Codex, tell the user to review and trust the new hooks in Codex.
 
 Report only:
 
 - host and version;
 - `albert-memory` package version;
 - connected Brain API origin and workspace identifier from `install.json`;
-- plugin runtime health;
+- plugin runtime health (OpenClaw);
 - capture/recall smoke result;
-- whether an existing connection was reused or transactionally replaced.
+- whether an existing connection was reused or transactionally replaced;
+- the host's next step above.
 
 Never report the link, bearer credential, queue key, compensation receipt, or credential-file contents.
 
-**Complete when:** doctor and runtime inspection pass and the user receives a sanitized connection summary.
+**Complete when:** doctor (and OpenClaw runtime inspection) pass and the user receives a sanitized connection summary.
