@@ -331,7 +331,7 @@ of compact JSON (`--json` is accepted for symmetry; JSON is the only format),
 described by `contracts/compatibility-v1.schema.json`:
 
 ```json
-{"compatibility_manifest":"1","package":"albert-memory","package_version":"0.4.1","contracts":{"rest_api":["v1"],"capture":["1"],"export_format":["albert-export-v1"]},"migrations":{"heads":["0015"],"known_revisions":["0001","0002","0003","0004","0005","0006","0007","0008","0009","0010","0011","0012","0013","0014","0015"]}}
+{"compatibility_manifest":"1","package":"albert-memory","package_version":"0.4.2","contracts":{"rest_api":["v1"],"capture":["1"],"export_format":["albert-export-v1"]},"migrations":{"heads":["0015"],"known_revisions":["0001","0002","0003","0004","0005","0006","0007","0008","0009","0010","0011","0012","0013","0014","0015"]}}
 ```
 
 - `contracts.rest_api`, `contracts.capture`, `contracts.export_format`: the REST

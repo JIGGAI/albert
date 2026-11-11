@@ -3,7 +3,7 @@
 **Shared memory for AI agents that's safe to trust: self-hosted, multi-tenant, and built so untrusted content can't steer your agents.**
 
 [![CI](https://github.com/JIGGAI/albert/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JIGGAI/albert/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.4.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.2-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-22%20tools-5A45FF)
@@ -475,6 +475,16 @@ what happened afterwards.
 | **Codex** | Hooks in `src/albert/codex_hooks` | Session start and every prompt | Prompts, outcomes, checkpoints |
 | **Cursor** | Hooks in `src/albert/cursor_hooks` | Session start (Cursor cannot inject context per prompt) | Prompts, responses, checkpoints |
 | **OpenClaw** | Native adapter, installed with `albert-capture connect` | Before every prompt | Full lifecycle, with transactional install and rollback |
+
+In Claude Code, `albert-claude-lifecycle connect` installs the plugin for you.
+To install it yourself from Albert's plugin marketplace instead:
+
+```
+/plugin install albert-memory --marketplace JIGGAI/albert
+```
+
+The hooks start capturing once a Brain is connected (`pipx install albert-memory`,
+then `albert-claude-lifecycle connect`).
 
 Hooks never block the host: each has a short time budget, failed deliveries
 wait in an encrypted local queue, and an outage leaves the agent working without

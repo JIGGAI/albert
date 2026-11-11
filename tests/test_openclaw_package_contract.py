@@ -19,7 +19,7 @@ def test_source_package_contract_is_consistent() -> None:
 
 
 def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) -> None:
-    wheel = tmp_path / "albert_memory-0.4.1-py3-none-any.whl"
+    wheel = tmp_path / "albert_memory-0.4.2-py3-none-any.whl"
     descriptor = (ROOT / "src/albert/openclaw_package.json").read_bytes()
     with zipfile.ZipFile(wheel, "w") as archive:
         required = {
@@ -41,7 +41,7 @@ def test_wheel_provenance_rejects_missing_component_and_drift(tmp_path: Path) ->
             else:
                 content = b"x"
             archive.writestr(name, content)
-        archive.writestr("albert_memory-0.4.1.dist-info/METADATA", "Version: 0.4.1\n")
+        archive.writestr("albert_memory-0.4.2.dist-info/METADATA", "Version: 0.4.2\n")
     provenance = tmp_path / "provenance.json"
     revision = "a" * 40
     emitted = run("emit", str(wheel), "--source-revision", revision, "--output", str(provenance))
@@ -58,7 +58,7 @@ def test_source_contract_rejects_empty_malformed_and_drifted_trust(tmp_path: Pat
     (package_root / "src/albert/openclaw_plugin").mkdir(parents=True)
     (package_root / "src/albert/host_targets").mkdir(parents=True)
     (package_root / "pyproject.toml").write_text(
-        '[project]\nversion = "0.4.1"\n[project.scripts]\n'
+        '[project]\nversion = "0.4.2"\n[project.scripts]\n'
         'albert-capture = "albert.capture_installer:app"\n'
         'albert-openclaw-adapter = "albert.openclaw_adapter:main"\n'
     )

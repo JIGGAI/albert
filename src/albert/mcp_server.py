@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -49,9 +51,39 @@ class ForwardBearerAuth:
             _request_api_key.reset(token)
 
 
+def _credential_file_settings() -> tuple[str, str] | None:
+    """URL and key from an Albert-owned credential file (ALBERT_MCP_CREDENTIAL_FILE).
+
+    The Claude Code plugin points this at the lifecycle installer's file, so the
+    bundled MCP server uses the same Brain and credential as the hooks without a
+    key in any environment or settings file.
+    """
+    value = os.environ.get("ALBERT_MCP_CREDENTIAL_FILE", "")
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    try:
+        metadata = path.lstat()
+        if path.is_symlink() or not path.is_file():
+            return None
+        if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            return None
+        values = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(values, dict):
+        return None
+    url, key = values.get("ALBERT_API_URL"), values.get("ALBERT_CAPTURE_TOKEN")
+    if not isinstance(url, str) or not isinstance(key, str) or not url or not key:
+        return None
+    return url.rstrip("/"), key
+
+
 def _settings() -> tuple[str, str]:
     url = os.environ.get("ALBERT_API_URL", "http://127.0.0.1:8080").rstrip("/")
     key = _request_api_key.get() or os.environ.get("ALBERT_MCP_API_KEY", "")
+    if not key and (from_file := _credential_file_settings()):
+        url, key = from_file
     if not key:
         raise RuntimeError(
             "An HTTP Authorization bearer key or ALBERT_MCP_API_KEY for stdio is required"

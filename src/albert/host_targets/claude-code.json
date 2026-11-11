@@ -6,7 +6,7 @@
   "enabled": true,
   "package": {
     "distribution": "albert-memory",
-    "version": "0.4.1",
+    "version": "0.4.2",
     "artifact_provenance": "github-oidc-dsse+sha256"
   },
   "host": {
@@ -22,7 +22,7 @@
   "install": {
     "root": "~/.claude/albert",
     "reload": ["claude", "plugin", "validate", "--strict"],
-    "uninstall": ["claude", "plugin", "uninstall", "albert-memory", "--scope", "user"]
+    "uninstall": ["albert-claude-lifecycle", "uninstall"]
   },
   "credentials": {
     "acquisition": ["hidden_prompt", "private_stdin", "private_fd"],
