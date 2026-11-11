@@ -32,14 +32,20 @@ from albert.host_targets import HostTargetError, assert_owned_install_root, nego
 
 app = typer.Typer(help="Securely install and operate Albert for Claude Code.")
 PLUGIN_ID = "albert-memory"
+# The installed plugin is published to Claude Code through a local marketplace
+# inside the owned tree, so plain `claude` loads it and its hooks always match
+# the installed albert-memory version. People who installed from the public
+# marketplace (`albert-memory@albert`) keep that one instead.
+LOCAL_MARKETPLACE = "albert-local"
+LOCAL_PLUGIN = f"{PLUGIN_ID}@{LOCAL_MARKETPLACE}"
 VERSION_PATTERN = re.compile(r"(?:Claude Code\s+)?v?(\d+)\.(\d+)\.(\d+)")
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
-
 
 
 # Seconds Claude Code allows each hook. Recall hooks search (and may embed) on the
 # Brain, so they get longer than the capture-only hooks.
 HOOK_TIMEOUTS = {"SessionStart": 5, "UserPromptSubmit": 5}
+
 
 @dataclass(frozen=True)
 class ClaudeInstallPaths:
@@ -54,16 +60,16 @@ class ClaudeInstallPaths:
         return self.root / "install.json"
 
     @property
+    def marketplace(self) -> Path:
+        return self.root / "marketplace"
+
+    @property
     def plugin(self) -> Path:
-        return self.root / "plugin"
+        return self.marketplace / "plugin"
 
     @property
     def adapter(self) -> Path:
         return self.root / "bin" / "albert-claude-adapter"
-
-    @property
-    def launcher(self) -> Path:
-        return self.root / "bin" / "albert-claude"
 
     @property
     def queue(self) -> Path:
@@ -125,11 +131,72 @@ def _adapter_text(credentials: Path) -> str:
     )
 
 
-def _launcher_text(plugin: Path) -> str:
+def _marketplace_text() -> str:
     return (
-        "#!/bin/sh\n"
-        f"exec claude --plugin-dir {shlex.quote(str(plugin))} \"$@\"\n"
+        json.dumps(
+            {
+                "name": LOCAL_MARKETPLACE,
+                "owner": {"name": "JIGGAI"},
+                "plugins": [
+                    {
+                        "description": "Albert automatic memory for Claude Code",
+                        "name": PLUGIN_ID,
+                        "source": "./plugin",
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
     )
+
+
+def _installed_plugin_ids(runner: Runner) -> set[str]:
+    result = _checked(runner, ["claude", "plugin", "list", "--json"], "Claude plugin listing")
+    try:
+        items = json.loads(result.stdout)
+    except ValueError:
+        raise InstallError("Claude plugin listing is malformed") from None
+    if not isinstance(items, list):
+        raise InstallError("Claude plugin listing is malformed")
+    return {
+        item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+
+
+def _register_plugin(paths: ClaudeInstallPaths, runner: Runner) -> bool:
+    """Make plain `claude` load the plugin; True when this call newly registered it.
+
+    The local plugin loads in place from the owned tree, so an upgrade only swaps
+    files; `plugin update` re-records the version. All three commands are
+    idempotent.
+    """
+    installed = _installed_plugin_ids(runner)
+    if any(item.startswith(f"{PLUGIN_ID}@") and item != LOCAL_PLUGIN for item in installed):
+        # Installed from the public marketplace: its hooks read the same
+        # credential file, and a second copy would capture every event twice.
+        return False
+    fresh = LOCAL_PLUGIN not in installed
+    try:
+        _checked(
+            runner,
+            ["claude", "plugin", "marketplace", "add", str(paths.marketplace)],
+            "Claude marketplace registration",
+        )
+        _checked(runner, ["claude", "plugin", "install", LOCAL_PLUGIN], "Claude plugin install")
+        _checked(runner, ["claude", "plugin", "update", LOCAL_PLUGIN], "Claude plugin update")
+    except InstallError:
+        if fresh:
+            _unregister_plugin(runner)
+        raise
+    return fresh
+
+
+def _unregister_plugin(runner: Runner) -> None:
+    if LOCAL_PLUGIN in _installed_plugin_ids(runner):
+        _checked(runner, ["claude", "plugin", "uninstall", LOCAL_PLUGIN], "Claude plugin removal")
+    runner(["claude", "plugin", "marketplace", "remove", LOCAL_MARKETPLACE])
 
 
 def _load_install(
@@ -191,6 +258,19 @@ def _stage_plugin(staged: ClaudeInstallPaths, source: Path, adapter_command: Pat
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise InstallError("Claude plugin hook manifest is malformed") from exc
     hooks_path.write_text(json.dumps(hooks, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Run the MCP server from the same installation as the hooks, not whatever
+    # `albert-mcp` happens to be first on PATH.
+    mcp_path = staged.plugin / ".mcp.json"
+    server = Path(sys.executable).with_name("albert-mcp")
+    if mcp_path.exists() and server.exists():
+        try:
+            mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+            if mcp["mcpServers"]["albert"]["command"] != "albert-mcp":
+                raise InstallError("Claude plugin MCP manifest is untrusted")
+            mcp["mcpServers"]["albert"]["command"] = str(server)
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise InstallError("Claude plugin MCP manifest is malformed") from exc
+        mcp_path.write_text(json.dumps(mcp, indent=2) + "\n", encoding="utf-8")
 
 
 def install_claude(
@@ -222,9 +302,7 @@ def install_claude(
     previous_marker: dict = {}
     previous_credentials: dict = {}
     if paths.root.exists():
-        previous_marker, previous_credentials = _load_install(
-            paths, require_credentials=False
-        )
+        previous_marker, previous_credentials = _load_install(paths, require_credentials=False)
         if not previous_credentials and not previous_marker.get("revoked"):
             raise InstallError("Claude Code installation credentials are missing")
     queue_key = previous_credentials.get("ALBERT_CAPTURE_QUEUE_KEY")
@@ -245,6 +323,7 @@ def install_claude(
     staging = paths.root.with_name(f".{paths.root.name}.staging-{uuid.uuid4().hex}")
     staged = ClaudeInstallPaths(staging)
     swapped = False
+    registered = False
     try:
         _write_private(
             staged.credentials,
@@ -252,8 +331,10 @@ def install_claude(
             0o600,
         )
         _write_private(staged.adapter, _adapter_text(paths.credentials), 0o700)
-        _write_private(staged.launcher, _launcher_text(paths.plugin), 0o700)
         _stage_plugin(staged, source, paths.adapter)
+        _write_private(
+            staged.marketplace / ".claude-plugin" / "marketplace.json", _marketplace_text(), 0o644
+        )
         marker = {
             "api_url": api_url,
             "claude_version": ".".join(str(value) for value in version),
@@ -287,8 +368,11 @@ def install_claude(
             ["claude", "plugin", "validate", "--strict", str(paths.plugin)],
             "Claude installed plugin validation",
         )
+        registered = _register_plugin(paths, runner)
         check(api_url, token, queue_key, workspace_id)
     except Exception:
+        if registered:
+            _unregister_plugin(runner)
         if backup.exists():
             if paths.root.exists():
                 shutil.rmtree(paths.root)
@@ -356,6 +440,8 @@ def doctor_claude(
         ["claude", "plugin", "validate", "--strict", str(paths.plugin)],
         "Claude plugin validation",
     )
+    if not any(item.startswith(f"{PLUGIN_ID}@") for item in _installed_plugin_ids(runner)):
+        raise InstallError("Albert Memory is not installed in Claude Code; re-run connect")
     check = brain_check or (
         lambda url, secret, key, workspace: _brain_check(
             url,
@@ -396,6 +482,7 @@ def uninstall_claude(paths: ClaudeInstallPaths, *, runner: Runner = _run) -> Non
     except HostTargetError as exc:
         raise InstallError(str(exc)) from None
     _load_install(paths, require_credentials=False)
+    _unregister_plugin(runner)
     shutil.rmtree(paths.root)
 
 
@@ -428,7 +515,7 @@ def install_command(
             workspace_id=workspace_id,
             paths=_default_paths(),
         )
-        typer.echo("Albert Memory installed; use ~/.claude/albert/bin/albert-claude.")
+        typer.echo("Albert Memory installed; start a new Claude Code session.")
     except (InstallError, OSError) as exc:
         typer.echo(f"Install failed safely: {exc}", err=True)
         raise typer.Exit(1) from None
@@ -451,7 +538,7 @@ def connect_command(
         connect_claude(link_url=read_private_link(link_stdin, link_fd), paths=_default_paths())
         typer.echo(
             "Albert Memory connected; capture and recall passed. "
-            "Start Claude Code with ~/.claude/albert/bin/albert-claude."
+            "Start a new Claude Code session to use it."
         )
     except (InstallError, OSError) as exc:
         typer.echo(f"Connect failed safely: {exc}", err=True)
@@ -482,7 +569,7 @@ def revoke_command() -> None:
 def uninstall_command() -> None:
     try:
         uninstall_claude(_default_paths())
-        typer.echo("Albert-owned Claude Code files removed; unrelated settings remain.")
+        typer.echo("Albert Memory removed from Claude Code; unrelated settings remain.")
     except InstallError as exc:
         typer.echo(f"Uninstall failed safely: {exc}", err=True)
         raise typer.Exit(1) from None

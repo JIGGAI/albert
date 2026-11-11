@@ -3,10 +3,14 @@
     "albert": {
       "type": "stdio",
       "command": "albert-mcp",
-      "args": ["--transport", "stdio"],
+      "args": [
+        "--transport",
+        "stdio"
+      ],
       "env": {
         "ALBERT_API_URL": "${ALBERT_API_URL:-http://127.0.0.1:8080}",
-        "ALBERT_MCP_API_KEY": "${ALBERT_MCP_API_KEY}"
+        "ALBERT_MCP_API_KEY": "${ALBERT_MCP_API_KEY:-}",
+        "ALBERT_MCP_CREDENTIAL_FILE": "${HOME}/.claude/albert/credentials.env"
       }
     }
   }

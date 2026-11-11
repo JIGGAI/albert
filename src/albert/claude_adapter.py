@@ -208,9 +208,7 @@ class ClaudeAdapter:
                 return {"results": [asdict(item) for item in results]}
             identity = str(event.get("prompt_id") or hashlib.sha256(prompt.encode()).hexdigest())
             results.append(self._record(event, "user_goal", prompt, identity, hook))
-            context = self.client.recall(
-                screened.content, provenance=self._provenance(event, hook)
-            )
+            context = self.client.recall(screened.content, provenance=self._provenance(event, hook))
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
@@ -286,9 +284,16 @@ class ClaudeAdapter:
         return {"results": [asdict(item) for item in results]}
 
 
+DEFAULT_CREDENTIAL_FILE = Path("~/.claude/albert/credentials.env")
+
+
 def _client_from_environment() -> tuple[CaptureClient, ClaudeState, str | None]:
     environment = dict(os.environ)
     credential_file = environment.get("ALBERT_CAPTURE_CREDENTIAL_FILE")
+    if not credential_file and DEFAULT_CREDENTIAL_FILE.expanduser().exists():
+        # Installed from a marketplace, the hooks run the bare adapter command;
+        # the lifecycle installer's credential file is the only source then.
+        credential_file = str(DEFAULT_CREDENTIAL_FILE.expanduser())
     if credential_file:
         path = Path(credential_file)
         metadata = path.lstat()

@@ -1,7 +1,7 @@
 {
   "name": "albert-memory",
   "displayName": "Albert Memory",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Policy-safe automatic memory lifecycle hooks for Claude Code",
   "author": {
     "name": "JIGGAI"

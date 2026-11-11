@@ -26,14 +26,20 @@ PLUGIN = ROOT / "src/albert/claude_plugin"
 
 
 class ClaudeRunner:
-    def __init__(self, version: str = "2.1.312") -> None:
+    """A `claude` CLI double that keeps plugin and marketplace state in memory."""
+
+    def __init__(self, version: str = "2.1.312", plugins: set[str] | None = None) -> None:
         self.version = version
         self.commands: list[list[str]] = []
         self.validation_count = 0
         self.fail_validation: int | None = None
+        self.fail_install = False
+        self.plugins: set[str] = set(plugins or ())
+        self.marketplaces: dict[str, str] = {}
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
+        ok = subprocess.CompletedProcess(command, 0, "{}\n", "")
         if command == ["claude", "--version"]:
             return subprocess.CompletedProcess(command, 0, f"Claude Code {self.version}\n", "")
         if command[:4] == ["claude", "plugin", "validate", "--strict"]:
@@ -42,6 +48,30 @@ class ClaudeRunner:
             if self.fail_validation == self.validation_count:
                 return subprocess.CompletedProcess(command, 1, "", "invalid plugin")
             return subprocess.CompletedProcess(command, 0, "valid\n", "")
+        if command == ["claude", "plugin", "list", "--json"]:
+            listing = [{"enabled": True, "id": item} for item in sorted(self.plugins)]
+            return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
+        if command[:4] == ["claude", "plugin", "marketplace", "add"]:
+            manifest = json.loads(
+                (Path(command[4]) / ".claude-plugin" / "marketplace.json").read_text()
+            )
+            self.marketplaces[manifest["name"]] = command[4]
+            return ok
+        if command[:4] == ["claude", "plugin", "marketplace", "remove"]:
+            self.marketplaces.pop(command[4], None)
+            return ok
+        if command[:3] == ["claude", "plugin", "install"]:
+            if self.fail_install:
+                return subprocess.CompletedProcess(command, 1, "", "install refused")
+            assert command[3].split("@")[1] in self.marketplaces
+            self.plugins.add(command[3])
+            return ok
+        if command[:3] == ["claude", "plugin", "update"]:
+            assert command[3] in self.plugins
+            return ok
+        if command[:3] == ["claude", "plugin", "uninstall"]:
+            self.plugins.discard(command[3])
+            return ok
         raise AssertionError(f"unexpected command: {command}")
 
 
@@ -72,6 +102,10 @@ def test_install_doctor_replace_revoke_and_uninstall_are_isolated(tmp_path: Path
     runner = ClaudeRunner()
 
     _install(paths, runner, "first-secret")
+    # Plain `claude` loads it: no launcher, a local marketplace in the owned tree.
+    assert runner.plugins == {"albert-memory@albert-local"}
+    assert runner.marketplaces == {"albert-local": str(paths.marketplace)}
+    assert not (paths.root / "bin" / "albert-claude").exists()
     first = json.loads(paths.credentials.read_text())
     assert paths.credentials.stat().st_mode & 0o777 == 0o600
     assert paths.marker.stat().st_mode & 0o777 == 0o600
@@ -96,6 +130,7 @@ def test_install_doctor_replace_revoke_and_uninstall_are_isolated(tmp_path: Path
     assert json.loads(paths.marker.read_text())["revoked"] is True
     uninstall_claude(paths, runner=runner)
     assert not paths.root.exists()
+    assert runner.plugins == set() and runner.marketplaces == {}
     assert settings.read_text() == '{"unrelated":true}\n'
 
 
@@ -218,7 +253,7 @@ def test_connect_redeems_a_claude_link_and_records_cloud_identity(tmp_path: Path
         paths=paths,
         runner=runner,
         trust=trust,
-        package_version="0.4.1",
+        package_version=manifest["adapter"]["package_version"],
         http=httpx.Client(transport=httpx.MockTransport(handler)),
         brain_check=lambda *_: None,
         plugin_source=PLUGIN,
@@ -232,7 +267,7 @@ def test_connect_redeems_a_claude_link_and_records_cloud_identity(tmp_path: Path
     assert values["ALBERT_WORKSPACE_ID"] == "workspace-1"
     marker = json.loads(paths.marker.read_text())
     assert marker["cloud"]["credential_id"] == "credential-1"
-    assert marker["cloud"]["package_version"] == "0.4.1"
+    assert marker["cloud"]["package_version"] == manifest["adapter"]["package_version"]
     assert "claude-credential" not in paths.marker.read_text() + json.dumps(runner.commands)
 
 
@@ -251,7 +286,7 @@ def test_connect_refuses_a_link_made_for_another_host(tmp_path: Path) -> None:
             paths=paths,
             runner=ClaudeRunner(),
             trust=trust,
-            package_version="0.4.1",
+            package_version=manifest["adapter"]["package_version"],
             http=httpx.Client(transport=httpx.MockTransport(handler)),
             brain_check=lambda *_: None,
             plugin_source=PLUGIN,
@@ -290,7 +325,7 @@ def test_connect_compensates_the_credential_when_install_fails(tmp_path: Path) -
             paths=paths,
             runner=ClaudeRunner(),
             trust=trust,
-            package_version="0.4.1",
+            package_version=manifest["adapter"]["package_version"],
             http=httpx.Client(transport=httpx.MockTransport(handler)),
             brain_check=failing_check,
             plugin_source=PLUGIN,
@@ -300,7 +335,7 @@ def test_connect_compensates_the_credential_when_install_fails(tmp_path: Path) -
 
 
 def test_connect_detects_an_unsupported_host_before_touching_the_link(tmp_path: Path) -> None:
-    link, _, trust = cloud_contract(family="claude-code")
+    link, manifest, trust = cloud_contract(family="claude-code")
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("the link must not be fetched for an unsupported host")
@@ -311,8 +346,122 @@ def test_connect_detects_an_unsupported_host_before_touching_the_link(tmp_path: 
             paths=ClaudeInstallPaths(tmp_path / "albert"),
             runner=ClaudeRunner(version="2.0.1"),
             trust=trust,
-            package_version="0.4.1",
+            package_version=manifest["adapter"]["package_version"],
             http=httpx.Client(transport=httpx.MockTransport(handler)),
             brain_check=lambda *_: None,
             plugin_source=PLUGIN,
         )
+
+
+def test_a_public_marketplace_install_is_kept_instead_of_a_second_copy(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner(plugins={"albert-memory@albert"})
+
+    _install(paths, runner)
+
+    # One copy of the hooks: the public plugin reads the same credential file.
+    assert runner.plugins == {"albert-memory@albert"}
+    assert runner.marketplaces == {}
+    assert paths.credentials.exists()
+    doctor_claude(paths, runner=runner, brain_check=lambda *_: None)
+
+
+def test_failed_plugin_install_leaves_no_registration_behind(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    runner.fail_install = True
+
+    with pytest.raises(InstallError, match="Claude plugin install"):
+        _install(paths, runner)
+
+    assert runner.plugins == set() and runner.marketplaces == {}
+    assert not paths.root.exists()
+
+
+def test_failed_proof_after_registration_unregisters_a_fresh_install(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    calls = 0
+
+    def second_check_fails(*_: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise InstallError("live capture smoke test was rejected")
+
+    with pytest.raises(InstallError, match="smoke"):
+        install_claude(
+            api_url="https://brain.example",
+            token="secret",
+            workspace_id="workspace-1",
+            paths=paths,
+            runner=runner,
+            brain_check=second_check_fails,
+            plugin_source=PLUGIN,
+        )
+    assert runner.plugins == set() and runner.marketplaces == {}
+
+
+def test_reinstall_keeps_an_existing_registration(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    _install(paths, runner, "first")
+    runner.fail_validation = runner.validation_count + 2
+
+    with pytest.raises(InstallError):
+        _install(paths, runner, "second")
+
+    # The previous install is restored and still registered.
+    assert runner.plugins == {"albert-memory@albert-local"}
+    assert json.loads(paths.credentials.read_text())["ALBERT_CAPTURE_TOKEN"] == "first"
+
+
+def test_doctor_reports_a_plugin_removed_from_claude_code(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    runner = ClaudeRunner()
+    _install(paths, runner)
+    runner.plugins.clear()
+
+    with pytest.raises(InstallError, match="not installed in Claude Code"):
+        doctor_claude(paths, runner=runner, brain_check=lambda *_: None)
+
+
+def test_local_marketplace_lists_only_the_owned_plugin(tmp_path: Path) -> None:
+    paths = ClaudeInstallPaths(tmp_path / "albert")
+    _install(paths, ClaudeRunner())
+
+    manifest = json.loads((paths.marketplace / ".claude-plugin" / "marketplace.json").read_text())
+    assert manifest["name"] == "albert-local"
+    assert manifest["plugins"] == [
+        {
+            "description": "Albert automatic memory for Claude Code",
+            "name": "albert-memory",
+            "source": "./plugin",
+        }
+    ]
+    mcp = json.loads((paths.plugin / ".mcp.json").read_text())["mcpServers"]["albert"]
+    assert mcp["env"]["ALBERT_MCP_CREDENTIAL_FILE"] == "${HOME}/.claude/albert/credentials.env"
+
+
+def test_marketplace_hooks_find_the_installer_credential_file_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credential = tmp_path / "credentials.env"
+    credential.write_text(
+        json.dumps(
+            {
+                "ALBERT_API_URL": "https://brain.example",
+                "ALBERT_CAPTURE_QUEUE_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+                "ALBERT_CAPTURE_QUEUE_PATH": str(tmp_path / "capture.db"),
+                "ALBERT_CAPTURE_TOKEN": "private-token",
+            }
+        )
+    )
+    os.chmod(credential, 0o600)
+    monkeypatch.delenv("ALBERT_CAPTURE_CREDENTIAL_FILE", raising=False)
+    monkeypatch.delenv("ALBERT_CAPTURE_TOKEN", raising=False)
+    monkeypatch.setattr("albert.claude_adapter.DEFAULT_CREDENTIAL_FILE", credential)
+
+    client, _, _ = _client_from_environment()
+    assert client.client.headers["Authorization"] == "Bearer private-token"
+    client.close()

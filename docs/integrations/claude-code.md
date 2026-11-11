@@ -1,22 +1,38 @@
 # Claude Code integration
 
-Albert ships a Claude Code plugin fixture at `src/albert/claude_plugin`. The
-supported lifecycle command validates the installed Claude Code version and
-plugin schema, writes credentials only to an owned mode-0600 file, atomically
-replaces Albert-owned state, proves direct-Brain capture and fresh-session
-recall, and creates an isolated launcher:
+Albert ships a Claude Code plugin at `src/albert/claude_plugin`. The supported
+lifecycle command validates the installed Claude Code version and plugin schema,
+writes credentials only to an owned mode-0600 file, atomically replaces
+Albert-owned state, installs the plugin into Claude Code, and proves
+direct-Brain capture and fresh-session recall:
 
 ```bash
 albert-claude-lifecycle install --api-url https://brain.example
-~/.claude/albert/bin/albert-claude
 albert-claude-lifecycle doctor --smoke
 ```
+
+Then start a new Claude Code session: plain `claude` loads Albert.
 
 The token is collected with a hidden prompt. It is never accepted as an
 argument, ordinary environment option, Claude setting, log, diagnostic, or
 artifact. Automation may instead provide private standard input or a private
-file descriptor with `--token-stdin` or `--token-fd`. The launcher uses Claude
-Code's documented `--plugin-dir` surface and does not edit user settings.
+file descriptor with `--token-stdin` or `--token-fd`.
+
+### How the plugin is installed
+
+The installer publishes the plugin to Claude Code through a local marketplace
+inside its own tree (`~/.claude/albert/marketplace`, named `albert-local`) and
+installs `albert-memory@albert-local` at user scope. Claude Code loads that
+plugin in place, so its hooks always match the installed `albert-memory`
+version, and an upgrade only swaps Albert's files. The only Claude settings it
+changes are that marketplace entry and the enabled plugin; `uninstall` removes
+both.
+
+If you already installed the plugin from Albert's public marketplace
+(`/plugin install albert-memory --marketplace JIGGAI/albert`), the installer
+keeps that one and only writes the credential file, so the hooks never run
+twice. The public plugin's hooks and its bundled MCP server read the same
+`~/.claude/albert/credentials.env`.
 
 ## Connect from Albert Cloud
 
@@ -35,7 +51,7 @@ a credential limited to capture and recall in the chosen workspace, and then run
 the same transactional install and live smoke test as `install`. If anything
 fails, the previous installation is restored and the new credential is revoked
 through Cloud. Automation may pass the link with `--link-stdin` or `--link-fd`.
-Start Claude Code with `~/.claude/albert/bin/albert-claude` afterwards.
+Start a new Claude Code session afterwards.
 
 ## Development
 

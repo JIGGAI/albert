@@ -75,7 +75,7 @@ def test_codex_exact_version_and_reduced_fidelity_are_truthful() -> None:
     assert target.hooks["absent"] == ["failure"]
     assert {"interrupt", "session_end"} <= set(target.hooks["present"])
     assert target.package["artifact_provenance"] == "github-oidc-dsse+sha256"
-    assert package["package_version"] == target.package["version"] == "0.4.1"
+    assert package["package_version"] == target.package["version"] == "0.4.2"
     assert package["tested_codex"] == target.host["tested"]
     assert package["supported_codex"] == target.host["supported"]
     assert package["provenance"] == target.package["artifact_provenance"]
@@ -263,7 +263,7 @@ def test_connect_redeems_a_codex_link_and_merges_hooks(tmp_path: Path) -> None:
         paths=paths,
         runner=CodexRunner(),
         trust=trust,
-        package_version="0.4.1",
+        package_version="0.4.2",
         http=httpx.Client(transport=httpx.MockTransport(handler)),
         brain_check=lambda *_: None,
         hook_source=HOOKS,
@@ -294,7 +294,7 @@ def test_connect_refuses_a_claude_link(tmp_path: Path) -> None:
             paths=paths,
             runner=CodexRunner(),
             trust=trust,
-            package_version="0.4.1",
+            package_version="0.4.2",
             http=httpx.Client(transport=httpx.MockTransport(handler)),
             brain_check=lambda *_: None,
             hook_source=HOOKS,

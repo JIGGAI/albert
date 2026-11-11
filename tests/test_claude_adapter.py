@@ -165,8 +165,10 @@ def test_claude_plugin_bundles_albert_mcp_server_without_credentials():
     albert = servers["albert"]
     assert albert["command"] == "albert-mcp"
     assert albert["args"] == ["--transport", "stdio"]
-    assert albert["env"]["ALBERT_MCP_API_KEY"] == "${ALBERT_MCP_API_KEY}"
+    assert albert["env"]["ALBERT_MCP_API_KEY"] == "${ALBERT_MCP_API_KEY:-}"
     assert albert["env"]["ALBERT_API_URL"].startswith("${ALBERT_API_URL")
+    # The key comes from the installer's owned file, never from settings.
+    assert albert["env"]["ALBERT_MCP_CREDENTIAL_FILE"] == "${HOME}/.claude/albert/credentials.env"
 
 
 def test_claude_plugin_fixture_declares_only_supported_minimized_hooks():

@@ -128,7 +128,7 @@ To revoke local use without changing Codex hooks, run
 recorded by the ownership marker and the `~/.codex/albert` tree. If the commands
 were modified, uninstall fails closed instead of deleting foreign state.
 
-Release `albert-memory==0.4.1` is verified with Codex `0.167.0` and installs on
+Release `albert-memory==0.4.2` is verified with Codex `0.167.0` and installs on
 `>=0.166.0`; newer, not yet verified releases install with a warning. The installed marker records host-target descriptor
 version `1.0.0`. Immutable release provenance is GitHub OIDC DSSE plus SHA-256,
 declared in `src/albert/codex_package.json` and

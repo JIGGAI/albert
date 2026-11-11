@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
+
 import httpx
 import pytest
 from starlette.responses import JSONResponse
 
-from albert.mcp_server import ForwardBearerAuth, _request_api_key
+from albert.mcp_server import ForwardBearerAuth, _request_api_key, _settings
 
 pytestmark = pytest.mark.anyio
 
@@ -84,3 +87,36 @@ async def test_streamable_http_tool_calls_forward_each_requests_bearer(monkeypat
         thread.join(timeout=5)
     assert first.structured_content == {"seen_key": "alb_first_key"}
     assert second.structured_content == {"seen_key": "alb_second_key"}
+
+
+def _credential_file(tmp_path, mode: int = 0o600):  # type: ignore[no-untyped-def]
+    path = tmp_path / "credentials.env"
+    path.write_text(
+        json.dumps({"ALBERT_API_URL": "https://brain.example/", "ALBERT_CAPTURE_TOKEN": "alb_file"})
+    )
+    os.chmod(path, mode)
+    return path
+
+
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_stdio_falls_back_to_the_owned_credential_file(
+    tmp_path, monkeypatch, anyio_backend
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("ALBERT_API_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("ALBERT_MCP_API_KEY", "")
+    monkeypatch.setenv("ALBERT_MCP_CREDENTIAL_FILE", str(_credential_file(tmp_path)))
+    assert _settings() == ("https://brain.example", "alb_file")
+
+    # An explicit key still wins.
+    monkeypatch.setenv("ALBERT_MCP_API_KEY", "alb_explicit")
+    assert _settings() == ("http://127.0.0.1:8080", "alb_explicit")
+
+
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_stdio_ignores_a_credential_file_others_can_read(
+    tmp_path, monkeypatch, anyio_backend
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("ALBERT_MCP_API_KEY", "")
+    monkeypatch.setenv("ALBERT_MCP_CREDENTIAL_FILE", str(_credential_file(tmp_path, 0o644)))
+    with pytest.raises(RuntimeError, match="required"):
+        _settings()

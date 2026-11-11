@@ -1,0 +1,14 @@
+{
+  "name": "albert",
+  "description": "Albert: shared, self-hosted memory for your AI agents.",
+  "owner": {
+    "name": "JIGGAI"
+  },
+  "plugins": [
+    {
+      "name": "albert-memory",
+      "source": "./src/albert/claude_plugin",
+      "description": "Albert automatic memory for Claude Code: captures what you work on and recalls it in new sessions. Connect a Brain with `albert-claude-lifecycle connect` (pipx install albert-memory)."
+    }
+  ]
+}

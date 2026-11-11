@@ -46,7 +46,7 @@ If `<connector>` already exists, inspect both the installed distribution metadat
 python -c 'import importlib.metadata; print(importlib.metadata.version("albert-memory"))'
 ```
 
-A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.1` and record both `"owner": "albert-memory"` and `"package_version": "0.4.1"` in the marker (Claude Code and Codex record it under `"cloud"`). A missing or different package version requires the verified installation step below; do not trust executable names or
+A reusable installation must prove that the installed `albert-memory` version is exactly `0.4.2` and record both `"owner": "albert-memory"` and `"package_version": "0.4.2"` in the marker (Claude Code and Codex record it under `"cloud"`). A missing or different package version requires the verified installation step below; do not trust executable names or
 the Brain origin alone.
 
 Only when both exact-version checks pass, run:
@@ -63,7 +63,7 @@ If doctor fails, either exact-version check fails, the Brain differs, or the use
 
 ## 4. Install the exact verified connector when missing
 
-The supported connector package for this skill revision is `albert-memory==0.4.1`. The copied Albert Cloud prompt must name the same expected package version. Stop on a mismatch.
+The supported connector package for this skill revision is `albert-memory==0.4.2`. The copied Albert Cloud prompt must name the same expected package version. Stop on a mismatch.
 
 If `<connector>` is missing or its installed package version differs:
 
@@ -71,7 +71,7 @@ If `<connector>` is missing or its installed package version differs:
 2. Download only the exact wheel, without installing it:
 
    ```bash
-   python -m pip download --no-deps --only-binary=:all: --dest <private-temp-dir> albert-memory==0.4.1
+   python -m pip download --no-deps --only-binary=:all: --dest <private-temp-dir> albert-memory==0.4.2
    ```
 
 3. Verify its GitHub build attestation before installation:
@@ -82,7 +82,7 @@ If `<connector>` is missing or its installed package version differs:
 
 4. Install that verified local wheel with `uv tool install <downloaded-wheel>` or `pipx install <downloaded-wheel>`.
 5. Remove only the temporary download directory after installation.
-6. Confirm `<connector> --help` succeeds and the installed `albert-memory` version is exactly `0.4.1`.
+6. Confirm `<connector> --help` succeeds and the installed `albert-memory` version is exactly `0.4.2`.
 
 If the exact wheel is unpublished, unavailable, unattested, or cannot be verified, stop. Never fall back to an unpinned package, a floating Git branch, or source copied from the one-time-link endpoint.
 
@@ -124,7 +124,7 @@ Run:
 <connector> doctor --smoke
 ```
 
-For OpenClaw also run `openclaw plugins inspect albert-memory --runtime --json`. For Claude Code, tell the user to start Claude Code with `~/.claude/albert/bin/albert-claude`. For Codex, tell the user to review and trust the new hooks in Codex.
+For OpenClaw also run `openclaw plugins inspect albert-memory --runtime --json`. For Claude Code, tell the user to start a new Claude Code session (plain `claude` now loads Albert). For Codex, tell the user to review and trust the new hooks in Codex.
 
 Report only:
 

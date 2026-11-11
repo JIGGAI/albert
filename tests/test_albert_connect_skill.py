@@ -7,7 +7,7 @@ def test_agent_connect_skill_has_secure_supported_flow() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
     assert text.startswith("---\nname: albert-connect\n")
-    assert "albert-memory==0.4.1" in text
+    assert "albert-memory==0.4.2" in text
     assert "gh attestation verify" in text
     assert "albert-capture connect\n" in text
     assert "<connector> doctor --smoke" in text
@@ -21,8 +21,8 @@ def test_agent_connect_skill_has_secure_supported_flow() -> None:
     install = text.index("## 4. Install the exact verified connector when missing")
     reuse_contract = text[reuse:install]
     assert 'importlib.metadata.version("albert-memory")' in reuse_contract
-    assert "installed `albert-memory` version is exactly `0.4.1`" in reuse_contract
-    assert '"package_version": "0.4.1"' in reuse_contract
+    assert "installed `albert-memory` version is exactly `0.4.2`" in reuse_contract
+    assert '"package_version": "0.4.2"' in reuse_contract
 
 
 def test_agent_connect_skill_forbids_secret_bearing_shortcuts() -> None:
@@ -40,7 +40,7 @@ def test_agent_connect_skill_forbids_secret_bearing_shortcuts() -> None:
 def test_agent_connect_skill_reuses_only_the_exact_package_version() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
-    version_check = text.index('"package_version": "0.4.1"')
+    version_check = text.index('"package_version": "0.4.2"')
     doctor = text.index("<connector> doctor --smoke")
     reuse = text.index("keep the existing connection")
     assert version_check < doctor < reuse
