@@ -8,7 +8,7 @@ description: Securely connect an agent host to an Albert Brain using a private o
 ## 1. Protect the one-time link
 
 - Treat the link as a password until setup succeeds.
-- Never echo it, quote it in a shell command, place it in command arguments or environment variables, save it in notes, or include it in logs or the final report.
+- Never echo it, place it in command arguments or environment variables, save it in notes or files, or include it in logs or the final report. The only shell form allowed is the here-string in step 5.
 - Accept it only through an interactive hidden prompt, private standard input supplied directly by the tool API, or an already-open private file descriptor.
 
 **Complete when:** the link remains only in the current private conversation/tool input and has not been copied to another persistence surface.
@@ -98,9 +98,19 @@ albert-claude-lifecycle connect
 albert-codex-lifecycle connect
 ```
 
-Run only the one line for the detected host. Wait for `Albert Cloud one-time link:` and provide the link through the tool's hidden/PTY input. Do not include the link in the command.
+Run only the one line for the detected host. Prefer, in order:
 
-When an interactive prompt is impossible, invoke `<connector> connect --link-stdin` and send the link directly through the execution tool's private stdin API. Do not build a shell pipeline with `echo`, `printf`, a here-document, command substitution, or an environment variable. Use `--link-fd` only when the caller already supplied a private open descriptor.
+1. **Hidden prompt.** If your execution tool offers a PTY or hidden input, run `<connector> connect`, wait for `Albert Cloud one-time link:`, and type the link there.
+2. **Private stdin.** If your tool can send standard input directly, run `<connector> connect --link-stdin` and send the link through that API.
+3. **Here-string.** Agents whose shell tool cannot do either (Claude Code, Codex) run exactly:
+
+   ```bash
+   <connector> connect --link-stdin <<< '<the link from the user's message>'
+   ```
+
+   A here-string is handled by the shell itself, so the link never appears in a process argument list. This is acceptable only because the link is already in this conversation, works once, expires in 15 minutes, and is dead the moment `connect` redeems it. Do not use `echo` or `printf` pipelines, environment variables, files, or command substitution, and never pass the link as a command argument.
+
+Use `--link-fd` only when the caller already supplied a private open descriptor. If `connect` fails, do not retry with the same link: a redeemed link is spent. Ask the user for a new one.
 
 `connect` must validate the signed manifest, its host family, package provenance, host compatibility, one-time redemption identity, Brain readiness, live capture, and fresh recall before committing. On failure, preserve the prior working installation and report the sanitized error; the issued credential is revoked automatically.
 

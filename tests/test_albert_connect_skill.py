@@ -29,7 +29,9 @@ def test_agent_connect_skill_forbids_secret_bearing_shortcuts() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
     assert "Never echo it" in text
-    assert "Do not include the link in the command" in text
+    assert "never pass the link as a command argument" in text
+    assert "connect --link-stdin <<< '<the link from the user's message>'" in text
+    assert "do not retry with the same link" in text
     assert "Never fall back to an unpinned package" in text
     assert "albert-capture connect <" not in text
     assert "--link " not in text
