@@ -113,9 +113,20 @@ def _settings(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if config.get("schema") != SCHEMA or private.get("schema") != SCHEMA:
         _fail("unsupported local runtime configuration schema")
     marker = _read_json(root / MARKER)
+    if not _valid_settings(config, private, marker.get("instance_id")):
+        _fail("invalid or unsafe local runtime configuration")
+    _assert_private(root / DATABASE)
+    return config, private
+
+
+def _valid_settings(
+    config: dict[str, Any], private: dict[str, Any], instance_id: object
+) -> bool:
     expected_provider = "sentence-transformers" if config.get("mode") == "semantic" else "hashing"
-    valid = (
-        config.get("instance_id") == marker.get("instance_id")
+    return (
+        isinstance(instance_id, str)
+        and bool(instance_id)
+        and config.get("instance_id") == instance_id
         and config.get("mode") in {"basic", "semantic"}
         and config.get("bind_host") == "127.0.0.1"
         and config.get("embedding_provider") == expected_provider
@@ -129,10 +140,6 @@ def _settings(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         and isinstance(private.get("api_key_pepper"), str)
         and len(private["api_key_pepper"]) >= 32
     )
-    if not valid:
-        _fail("invalid or unsafe local runtime configuration")
-    _assert_private(root / DATABASE)
-    return config, private
 
 
 def _environment(root: Path) -> dict[str, str]:
@@ -422,15 +429,46 @@ def restore_runtime(root: Path, archive_path: Path) -> None:
     restored_config, restored_private = json.loads(values[CONFIG]), json.loads(values[SECRETS])
     if restored_config.get("schema") != SCHEMA or restored_private.get("schema") != SCHEMA:
         _fail("backup configuration is invalid")
-    for name, value in values.items():
-        temporary = root / f".{name}.{uuid4().hex}.restore"
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(value)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, root / name)
-        os.chmod(root / name, 0o600)
+    source_instance_id = manifest.get("instance_id")
+    if not _valid_settings(restored_config, restored_private, source_instance_id):
+        _fail("backup configuration is invalid or unsafe")
+
+    # A restore recovers data and credentials into the already-owned destination.
+    # Retaining that destination identity prevents a backup from replacing the
+    # ownership boundary while keeping config and marker consistent.
+    destination_instance_id = _read_json(root / MARKER)["instance_id"]
+    restored_config["instance_id"] = destination_instance_id
+    if not _valid_settings(restored_config, restored_private, destination_instance_id):
+        _fail("backup configuration is invalid or unsafe")
+    values[CONFIG] = (json.dumps(restored_config, sort_keys=True) + "\n").encode()
+
+    staged: dict[str, Path] = {}
+    previous: dict[str, Path] = {}
+    try:
+        for name, value in values.items():
+            temporary = root / f".{name}.{uuid4().hex}.restore"
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(value)
+                handle.flush()
+                os.fsync(handle.fileno())
+            staged[name] = temporary
+        for name, temporary in staged.items():
+            rollback = root / f".{name}.{uuid4().hex}.rollback"
+            os.replace(root / name, rollback)
+            previous[name] = rollback
+            os.replace(temporary, root / name)
+            os.chmod(root / name, 0o600)
+    except BaseException:
+        for name, rollback in reversed(previous.items()):
+            if rollback.exists():
+                os.replace(rollback, root / name)
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+        for rollback in previous.values():
+            rollback.unlink(missing_ok=True)
 
 
 @app.command()

@@ -79,6 +79,29 @@ def test_backup_restore_round_trip_and_integrity(
         local_runtime.restore_runtime(root, corrupt)
 
 
+def test_backup_restore_into_clean_install_retains_destination_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "runtime"
+    _install(monkeypatch, root)
+    source_id = json.loads((root / local_runtime.MARKER).read_text())["instance_id"]
+    archive = local_runtime.backup_runtime(root, tmp_path / "backup.zip")
+    monkeypatch.setattr(local_runtime, "stop_runtime", lambda _root: False)
+    local_runtime.uninstall(root=root, remove_data=True)
+
+    _install(monkeypatch, root)
+    destination_id = json.loads((root / local_runtime.MARKER).read_text())["instance_id"]
+    assert destination_id != source_id
+
+    local_runtime.restore_runtime(root, archive)
+
+    config, private = local_runtime._settings(root)
+    assert config["instance_id"] == destination_id
+    assert private["api_key"] == "alb_test_credential"
+    with sqlite3.connect(root / local_runtime.DATABASE) as database:
+        assert database.execute("SELECT value FROM sentinel").fetchone() == ("original",)
+
+
 def test_owned_root_rejects_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "runtime"
     _install(monkeypatch, root)
