@@ -463,6 +463,19 @@ The 22 MCP tools, each with a REST equivalent:
 | Coordination | `memory_lock_acquire`, `memory_lock_renew`, `memory_lock_release` |
 | Portability | `memory_export`, `memory_import` |
 
+### TypeScript SDK
+
+`sdk/typescript` contains the official `@jiggai/albert` client. It provides
+typed memory, capture, context, profile, source/indexing-job, and equivalent MCP
+operations; bounded retry for reads and contract-idempotent writes; structured
+errors; and runtime compatibility negotiation against Albert's OpenAPI surface.
+It builds separate ESM and CommonJS packages with declarations.
+
+Use `@jiggai/albert/server` for server-side Brain API keys. Browser applications
+must use `@jiggai/albert/browser`, which accepts only a short-lived access-token
+callback and rejects server-key configuration. See the
+[TypeScript SDK guide](docs/integrations/typescript-sdk.md).
+
 ### Automatic memory
 
 Tools let an agent remember when it decides to. Hooks make memory automatic:
@@ -519,6 +532,7 @@ memory rather than stuck. Setup per host: [integration handbook](docs/integratio
 | [Providers](docs/PROVIDERS.md) | Embedding and classification models |
 | [Security](docs/SECURITY.md) | Trust boundaries, the memory-safety pass, keys, sensitivity, what the console can see |
 | [Integration handbook](docs/integrations/README.md) | Connecting Claude Code, Codex, Cursor, OpenClaw, REST clients |
+| [TypeScript SDK](docs/integrations/typescript-sdk.md) | Typed server/browser clients, compatibility, retries, and credential boundaries |
 | [Automatic-memory release gate](docs/AUTOMATIC_MEMORY_RELEASE.md) | Supported hosts, SLOs, rollback, beta limits, release evidence |
 | [Status](docs/STATUS.md) | What is done, and what is not |
 
