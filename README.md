@@ -327,7 +327,7 @@ src/albert/
   portability.py      export and import
   admin.py            albert-admin command line
 console/              the operator console (Next.js)
-migrations/           Alembic migrations 0001-0015
+migrations/           Alembic migrations 0001-0016
 tests/                pytest suite, including one contract run against every graph store
 docs/                 guides (see below)
 ```

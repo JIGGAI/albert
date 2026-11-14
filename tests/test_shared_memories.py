@@ -173,6 +173,7 @@ async def test_credentials_are_issued_no_wider_than_the_issuer() -> None:
         listing = (await client.get("/v1/settings/credentials")).json()
         assert listing["workspace_id"] is None
         assert "memory.write.organization" in listing["grantable_capabilities"]
+        assert "profile.read.organization" in listing["grantable_capabilities"]
         rows = {row["name"]: row for row in listing["api_keys"]}
         assert rows["sibling reader"]["workspace_id"] == str(sibling.id)
 
@@ -180,6 +181,7 @@ async def test_credentials_are_issued_no_wider_than_the_issuer() -> None:
         listing = (await client.get("/v1/settings/credentials")).json()
         assert listing["workspace_id"] == str(home.id)
         assert "memory.write.organization" not in listing["grantable_capabilities"]
+        assert "profile.read.organization" not in listing["grantable_capabilities"]
         elsewhere = await client.post(
             "/v1/settings/api-keys",
             json={"name": "x", "capabilities": ["memory.read"], "workspace_id": str(sibling.id)},
@@ -190,6 +192,11 @@ async def test_credentials_are_issued_no_wider_than_the_issuer() -> None:
             json={"name": "x", "capabilities": ["memory.write", "memory.write.organization"]},
         )
         assert sharing.status_code == 403
+        profile_sharing = await client.post(
+            "/v1/settings/api-keys",
+            json={"name": "x", "capabilities": ["profile.read.organization"]},
+        )
+        assert profile_sharing.status_code == 403
         own = await client.post(
             "/v1/settings/api-keys", json={"name": "home reader", "capabilities": ["memory.read"]}
         )

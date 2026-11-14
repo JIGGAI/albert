@@ -345,6 +345,61 @@ class Memory(Base, TimestampMixin):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
+class ProfileMaterialization(Base, TimestampMixin):
+    """Current rebuildable standing profile for one scoped principal."""
+
+    __tablename__ = "profile_materializations"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "workspace_scope", "principal_id",
+            name="uq_profile_materializations_scope_principal",
+        ),
+        Index("ix_profile_materializations_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column()
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column()
+    workspace_scope: Mapped[str] = mapped_column(String(36))
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("principals.id", ondelete="CASCADE"), index=True
+    )
+    schema_version: Mapped[str] = mapped_column(String(32))
+    bucket_config: Mapped[dict[str, list[str]]] = mapped_column(JSON)
+    source_digest: Mapped[str] = mapped_column(String(64))
+    assertion_count: Mapped[int] = mapped_column(Integer, default=0)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProfileAssertion(Base):
+    """One current derived assertion; safe to drop and deterministically rebuild."""
+
+    __tablename__ = "profile_assertions"
+    __table_args__ = (
+        UniqueConstraint(
+            "materialization_id", "ordinal", name="uq_profile_assertions_materialization_ordinal"
+        ),
+        Index("ix_profile_assertions_scope", "organization_id", "workspace_id", "principal_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    materialization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profile_materializations.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column()
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column()
+    principal_id: Mapped[uuid.UUID] = mapped_column()
+    ordinal: Mapped[int] = mapped_column(Integer)
+    bucket: Mapped[str] = mapped_column(String(64), index=True)
+    value: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trust: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float)
+    sensitivity: Mapped[str] = mapped_column(String(32), index=True)
+    citations: Mapped[list[str]] = mapped_column(JSON)
+
+
 class MemoryChunk(Base):
     """A retrievable slice of a memory with its embedding.
 
