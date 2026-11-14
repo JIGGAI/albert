@@ -129,10 +129,16 @@ def _issue_scope(
             raise HTTPException(
                 status_code=403, detail="A workspace-scoped key issues only into its workspace"
             )
-        if "memory.write.organization" in capabilities:
+        organization_capabilities = sorted(
+            capability for capability in capabilities if capability.endswith(".organization")
+        )
+        if organization_capabilities:
             raise HTTPException(
                 status_code=403,
-                detail="A workspace-scoped key cannot grant memory.write.organization",
+                detail=(
+                    "A workspace-scoped key cannot grant organization-wide capabilities: "
+                    + ", ".join(organization_capabilities)
+                ),
             )
         return auth.workspace_id
     if workspace_id is not None and _workspace(session, auth, workspace_id) is None:
@@ -255,7 +261,7 @@ def list_credentials(
     grantable = [
         capability
         for capability in GRANTABLE_CAPABILITIES
-        if not (capability == "memory.write.organization" and _workspace_bound(auth))
+        if not (capability.endswith(".organization") and _workspace_bound(auth))
     ]
     return {
         "grantable_capabilities": grantable,
