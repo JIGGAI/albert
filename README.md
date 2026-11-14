@@ -510,6 +510,8 @@ memory rather than stuck. Setup per host: [integration handbook](docs/integratio
 
 ## Documentation
 
+- [Multimodal extraction v1](docs/MULTIMODAL_EXTRACTION.md) — bounded self-hosted OCR contract and provider extension points
+
 | Read this | For |
 |---|---|
 | [Architecture](docs/ARCHITECTURE.md) | How Albert is built: data model, pipelines, settings |
