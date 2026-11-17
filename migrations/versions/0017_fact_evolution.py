@@ -61,7 +61,15 @@ def upgrade() -> None:
         "fact_evolutions",
         ["organization_id", "workspace_id", "principal_id"],
     )
-    for column in ("evidence_memory_id", "fact_memory_id", "result_memory_id", "state"):
+    for column in (
+        "organization_id",
+        "workspace_id",
+        "principal_id",
+        "evidence_memory_id",
+        "fact_memory_id",
+        "result_memory_id",
+        "state",
+    ):
         op.create_index(f"ix_fact_evolutions_{column}", "fact_evolutions", [column])
 
 
