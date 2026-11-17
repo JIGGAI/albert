@@ -400,6 +400,58 @@ class ProfileAssertion(Base):
     citations: Mapped[list[str]] = mapped_column(JSON)
 
 
+class FactEvolution(Base, TimestampMixin):
+    """Immutable classification and review history for one evidence delivery."""
+
+    __tablename__ = "fact_evolutions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "principal_id",
+            "idempotency_key",
+            name="uq_fact_evolutions_principal_key",
+        ),
+        Index(
+            "ix_fact_evolutions_scope",
+            "organization_id",
+            "workspace_id",
+            "principal_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    evidence_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), index=True
+    )
+    fact_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), index=True
+    )
+    result_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), index=True
+    )
+    relation: Mapped[str] = mapped_column(String(24))
+    decision: Mapped[str] = mapped_column(String(24))
+    state: Mapped[str] = mapped_column(String(24), index=True)
+    rationale_code: Mapped[str] = mapped_column(String(100))
+    review_reason: Mapped[str | None] = mapped_column(String(100))
+    impact: Mapped[str] = mapped_column(String(16))
+    source_trust: Mapped[str] = mapped_column(String(16))
+    confidence_ceiling: Mapped[float] = mapped_column(Float)
+    effective_confidence: Mapped[float] = mapped_column(Float)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    effective_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    citations: Mapped[list[str]] = mapped_column(JSON)
+    reviewed_by_principal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("principals.id", ondelete="SET NULL")
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class MemoryChunk(Base):
     """A retrievable slice of a memory with its embedding.
 
