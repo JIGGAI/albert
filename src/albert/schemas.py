@@ -44,6 +44,65 @@ class ProfileMaterializationStatus(BaseModel):
     built_at: datetime | None = None
 
 
+class FactEvolutionCreate(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    evidence_memory_id: UUID
+    fact_memory_id: UUID | None = None
+    relation: Literal["same", "adds", "supersedes", "conflicts", "ambiguous"]
+    impact: Literal["low", "medium", "high"] = "low"
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_temporal_window(self):  # type: ignore[no-untyped-def]
+        if (
+            self.effective_from is not None
+            and self.effective_until is not None
+            and self.effective_until <= self.effective_from
+        ):
+            raise ValueError("effective_until must be after effective_from")
+        return self
+
+
+class FactEvolutionReview(BaseModel):
+    action: Literal["approve", "reject"]
+    relation: Literal["same", "adds", "supersedes", "conflicts"] | None = None
+
+    @model_validator(mode="after")
+    def validate_resolution(self):  # type: ignore[no-untyped-def]
+        if self.action == "reject" and self.relation is not None:
+            raise ValueError("A rejected evolution cannot override its relation")
+        return self
+
+
+class FactEvolutionRead(BaseModel):
+    id: UUID
+    evidence_memory_id: UUID | None
+    fact_memory_id: UUID | None
+    result_memory_id: UUID | None
+    relation: Literal["same", "adds", "supersedes", "conflicts", "ambiguous"]
+    decision: Literal["update", "extend", "derive", "contradict", "review"]
+    state: Literal["applied", "pending_review", "rejected"]
+    rationale_code: str
+    review_reason: str | None
+    impact: Literal["low", "medium", "high"]
+    source_trust: Literal["untrusted", "verified", "trusted"]
+    confidence_ceiling: float
+    effective_confidence: float
+    effective_from: datetime
+    effective_until: datetime | None
+    citations: list[UUID]
+    reviewed_by_principal_id: UUID | None
+    reviewed_at: datetime | None
+    created_at: datetime
+
+
+class FactEvolutionHistory(BaseModel):
+    count: int
+    history_digest: str
+    decisions: list[FactEvolutionRead]
+
+
 def _require_visible_text(value: str | None) -> str | None:
     if value is not None and not value.strip():
         raise ValueError("content must contain visible text")
