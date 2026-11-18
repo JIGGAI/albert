@@ -406,6 +406,20 @@ LLM and Albert commit noted alongside:
 
 ## Quick start
 
+For a private, single-node evaluation without Docker (Python 3.12+):
+
+```bash
+pipx install albert-memory
+albert-local start
+albert-local smoke
+```
+
+This loopback-only basic mode includes the API, worker, and MCP gateway. See
+[One-command local runtime](docs/LOCAL_RUNTIME.md) for semantic mode, lifecycle,
+backup/restore, security properties, and the explicit single-node limits.
+
+For the production-shaped container deployment:
+
 ```bash
 cp .env.example .env          # set ALBERT_POSTGRES_PASSWORD and ALBERT_API_KEY_PEPPER
 docker compose up --build -d
