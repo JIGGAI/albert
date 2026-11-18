@@ -5,6 +5,23 @@ description: Securely connect an agent host to an Albert Brain using a private o
 
 # Connect to Albert
 
+## Host safety: never reconfigure the host you run in
+
+You are probably running inside the host you are connecting (for OpenClaw, inside its gateway). Restarting or reconfiguring it can end your own session mid-setup and take the user's agents offline.
+
+This skill changes only three things: the `albert-memory` tool installation (step 4), the host's own `albert/` directory, and what `<connector>` itself does. For OpenClaw, `<connector>` installs the plugin, sets `plugins.entries.albert-memory`, and reloads plugins. The gateway hot-reloads those without restarting.
+
+Never do any of the following, even if a step fails or a tool suggests it:
+
+- start, stop, restart, reinstall, or update the host: `openclaw gateway restart`, `openclaw gateway stop`, `openclaw gateway install`, `openclaw update`, `openclaw doctor --fix`, or killing host processes;
+- touch the service manager: `systemctl`, `launchctl`, unit files or drop-ins (`ExecStartPost`, timeouts), cron, or login items;
+- change networking: `tailscale serve`, `tailscale funnel`, reverse proxies, firewall rules, or ports;
+- edit host configuration yourself: `openclaw.json`, `openclaw config set`/`unset`, Claude Code settings, or Codex config. Only `<connector>` writes host configuration, and it rolls its own changes back on failure.
+
+If any step fails, stop and report the failing step and its sanitized error. Do not work around it by changing the host. Tell the user what an operator needs to do and leave it to them.
+
+**Complete when:** every command you run is one this skill names, and none of them restarts or reconfigures the host outside `<connector>`.
+
 ## 1. Protect the one-time link
 
 - Treat the link as a password until setup succeeds.
