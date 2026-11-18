@@ -45,3 +45,36 @@ def test_agent_connect_skill_reuses_only_the_exact_package_version() -> None:
     reuse = text.index("keep the existing connection")
     assert version_check < doctor < reuse
     assert "do not trust executable names or\nthe Brain origin alone" in text
+
+
+def test_agent_connect_skill_never_reconfigures_the_host() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+
+    safety = text.index("## Host safety: never reconfigure the host you run in")
+    protect = text.index("## 1. Protect the one-time link")
+    assert safety < protect
+    rules = text[safety:protect]
+    for forbidden in (
+        "openclaw gateway restart",
+        "openclaw gateway install",
+        "openclaw doctor --fix",
+        "systemctl",
+        "ExecStartPost",
+        "tailscale serve",
+        "openclaw config set",
+    ):
+        assert forbidden in rules, forbidden
+    assert "If any step fails, stop and report" in rules
+    assert "Only `<connector>` writes host configuration" in rules
+
+    # Outside the safety rules, the skill must never instruct a host-mutating command.
+    steps = text[protect:]
+    for forbidden in (
+        "gateway restart",
+        "gateway install",
+        "doctor --fix",
+        "systemctl",
+        "tailscale",
+        "config set",
+    ):
+        assert forbidden not in steps, forbidden
