@@ -9,7 +9,6 @@ import os
 import re
 import shlex
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -66,6 +65,18 @@ class InstallPaths:
     @property
     def queue(self) -> Path:
         return self.root / "capture.db"
+
+    @property
+    def plugin(self) -> Path:
+        """The gateway's copy of the plugin, at a path that never moves.
+
+        OpenClaw links plugins by path. Linking into the Python environment meant
+        a pipx/uv upgrade or venv rebuild left the gateway pointing at a missing
+        or stale directory, and relinking from a new path leaves both registered
+        with the old one winning. A copy inside Albert's own root survives all of
+        that and keeps the same path across upgrades.
+        """
+        return self.root / "openclaw_plugin"
 
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
@@ -401,6 +412,115 @@ def _detect_openclaw(
     return version
 
 
+_MISSING = object()
+# Every key `openclaw plugins install --link` and the plugin entry can touch.
+# Rollback restores exactly these, never the whole file: the gateway and the
+# user keep writing openclaw.json while Albert installs.
+_PLUGIN_CONFIG_PATHS = (
+    f"plugins.entries.{PLUGIN_ID}",
+    f"plugins.installs.{PLUGIN_ID}",
+    "plugins.load.paths",
+    "plugins.allow",
+)
+GATEWAY_HEALTH_TIMEOUT_MS = 10000
+
+
+def _read_config_data(config_path: Path) -> dict[str, object]:
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise InstallError(f"OpenClaw config is unreadable ({type(exc).__name__})") from None
+    if not isinstance(data, dict):
+        raise InstallError("OpenClaw config is not a JSON object")
+    return data
+
+
+def _config_value(data: object, path: str) -> object:
+    node = data
+    for part in path.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            return _MISSING
+    return node
+
+
+def _restore_config_values(
+    runner: Runner, config_path: Path, previous: dict[str, object]
+) -> list[str]:
+    """Put each path back to its value before Albert changed it.
+
+    Leaves every other key alone and skips paths that already hold their old
+    value. Returns the paths it could not restore.
+    """
+    try:
+        current: object = _read_config_data(config_path)
+    except InstallError:
+        current = None
+    failed: list[str] = []
+    for path, before in previous.items():
+        now = _config_value(current, path) if current is not None else _MISSING
+        if current is not None and (now is before or (now is not _MISSING and now == before)):
+            continue
+        if before is _MISSING:
+            if current is not None and now is _MISSING:
+                continue
+            command = ["openclaw", "config", "unset", path]
+        else:
+            command = [
+                "openclaw",
+                "config",
+                "set",
+                path,
+                json.dumps(before, separators=(",", ":")),
+                "--strict-json",
+            ]
+        if runner(command).returncode:
+            failed.append(path)
+    return failed
+
+
+def _gateway_health(runner: Runner, when: str) -> None:
+    """Require a reachable, healthy gateway; Albert never changes an unhealthy one."""
+    result = runner(["openclaw", "health", "--json", "--timeout", str(GATEWAY_HEALTH_TIMEOUT_MS)])
+    healthy = False
+    if result.returncode == 0:
+        try:
+            healthy = json.loads(result.stdout or "{}").get("ok") is True
+        except (ValueError, AttributeError):
+            healthy = False
+    if not healthy:
+        raise InstallError(
+            f"the OpenClaw gateway is not healthy {when}. Albert does not restart or "
+            "repair the gateway; ask its operator to bring it back, then retry"
+        )
+
+
+def _is_stale_albert_plugin_path(value: object, current: Path) -> bool:
+    """A load path that is a different copy of this plugin (e.g. an old venv link)."""
+    if not isinstance(value, str):
+        return False
+    candidate = Path(value).expanduser()
+    if candidate == current:
+        return False
+    manifest = candidate / "openclaw.plugin.json"
+    if manifest.is_file():
+        try:
+            return json.loads(manifest.read_text(encoding="utf-8")).get("id") == PLUGIN_ID
+        except (OSError, ValueError, AttributeError):
+            return False
+    # A deleted venv leaves the path behind with nothing to inspect.
+    return (
+        not candidate.exists()
+        and candidate.name == "openclaw_plugin"
+        and (candidate.parent.name == "albert")
+    )
+
+
 def _validate_secret(value: str) -> str:
     if not value or any(character in value for character in "\r\n\0"):
         raise InstallError("credential must be non-empty and contain no control characters")
@@ -535,18 +655,25 @@ def install_openclaw(
         lambda url, secret, key, workspace: _brain_check(url, secret, key, workspace, smoke=True)
     )
     check(api_url, token, queue_key, workspace_id)
+    _gateway_health(runner, "before install")
 
     config_path = _config_file_path(runner)
     config_existed = config_path.exists()
-    config_before = config_path.read_bytes() if config_existed else None
-    config_mode = stat.S_IMODE(config_path.stat().st_mode) if config_existed else 0o600
+    config_data = _read_config_data(config_path)
+    previous_config = {path: _config_value(config_data, path) for path in _PLUGIN_CONFIG_PATHS}
     backup = paths.root.with_name(f".{paths.root.name}.rollback-{uuid.uuid4().hex}")
     staging = paths.root.with_name(f".{paths.root.name}.staging-{uuid.uuid4().hex}")
-    plugin_path = Path(__file__).with_name("openclaw_plugin")
+    plugin_path = paths.plugin
     previous_install = paths.root.exists()
     plugin_installed = False
+    config_touched = False
     try:
         staged = InstallPaths(staging)
+        shutil.copytree(
+            Path(__file__).with_name("openclaw_plugin"),
+            staged.plugin,
+            ignore=shutil.ignore_patterns("__pycache__", "node_modules"),
+        )
         _write_private(
             staged.credentials,
             _credentials_text(api_url, token, queue_key, paths.queue, workspace_id),
@@ -572,6 +699,28 @@ def install_openclaw(
         if paths.root.exists():
             paths.root.rename(backup)
         staging.rename(paths.root)
+        load_paths = previous_config["plugins.load.paths"]
+        if isinstance(load_paths, list):
+            kept = [
+                value
+                for value in load_paths
+                if not _is_stale_albert_plugin_path(value, plugin_path)
+            ]
+            if kept != load_paths:
+                config_touched = True
+                _checked(
+                    runner,
+                    [
+                        "openclaw",
+                        "config",
+                        "set",
+                        "plugins.load.paths",
+                        json.dumps(kept, separators=(",", ":")),
+                        "--strict-json",
+                    ],
+                    "OpenClaw stale plugin path cleanup",
+                )
+        config_touched = True
         _checked(
             runner,
             [
@@ -615,6 +764,7 @@ def install_openclaw(
             "OpenClaw runtime inspection",
         )
         check(api_url, token, queue_key, workspace_id)
+        _gateway_health(runner, "after install")
     except Exception as exc:
         cleanup_error: Exception | None = None
         if plugin_installed and not previous_install:
@@ -630,20 +780,26 @@ def install_openclaw(
             shutil.rmtree(paths.root)
         if backup.exists():
             backup.rename(paths.root)
-        if config_before is not None:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = config_path.with_name(f".{config_path.name}.albert-rollback")
-            temporary.write_bytes(config_before)
-            os.chmod(temporary, config_mode)
-            os.replace(temporary, config_path)
-        elif not config_existed and config_path.exists():
-            config_path.unlink()
+        unrestored: list[str] = []
+        if config_touched:
+            if config_existed:
+                unrestored = _restore_config_values(runner, config_path, previous_config)
+            elif config_path.exists():
+                config_path.unlink()
+            if previous_install:
+                # Bring the predecessor's plugin back into the running gateway.
+                runner(["openclaw", "plugins", "reload", PLUGIN_ID])
         if staging.exists():
             shutil.rmtree(staging)
         if cleanup_error is not None:
             raise InstallError(
                 f"{exc}; automatic plugin rollback failed ({cleanup_error}). "
                 f"Run `openclaw plugins uninstall {PLUGIN_ID} --force`, then retry."
+            ) from exc
+        if unrestored:
+            raise InstallError(
+                f"{exc}; could not restore OpenClaw config {', '.join(unrestored)}. "
+                "Check them with `openclaw config get <path>`."
             ) from exc
         raise
     else:
@@ -1036,14 +1192,24 @@ def _read_openclaw_config(runner: Runner) -> tuple[Path, dict[str, object]]:
     return config_path, data
 
 
-def _agent_index(data: dict[str, object], agent_id: str) -> int | None:
+def _agent_config_prefix(data: dict[str, object], agent_id: str) -> str | None:
+    """The config path of an agent, in whichever shape this OpenClaw uses.
+
+    OpenClaw 2026.9.6 keys agents by id under `agents.entries`; older releases kept
+    an `agents.list` array. Writing the retired `agents.list` on a current host
+    is not hot-reloadable and restarts the gateway, so never guess the shape.
+    """
     agents = data.get("agents")
-    entries = agents.get("list") if isinstance(agents, dict) else None
-    if not isinstance(entries, list):
+    if not isinstance(agents, dict):
         return None
-    for index, entry in enumerate(entries):
-        if isinstance(entry, dict) and entry.get("id") == agent_id:
-            return index
+    entries = agents.get("entries")
+    if isinstance(entries, dict) and isinstance(entries.get(agent_id), dict):
+        return f"agents.entries.{agent_id}"
+    legacy = agents.get("list")
+    if isinstance(legacy, list):
+        for index, entry in enumerate(legacy):
+            if isinstance(entry, dict) and entry.get("id") == agent_id:
+                return f"agents.list.{index}"
     return None
 
 
@@ -1117,7 +1283,8 @@ def install_classifier_agent(
 ) -> str:
     """Create (or repair) the tool-less classifier agent; return the gateway URL.
 
-    Rolls the config file, the agent and the workspace back if any step fails.
+    Rolls back only what it changed (the agent, the keys it set, the workspace)
+    if any step fails, so concurrent edits to openclaw.json survive.
     """
     if not AGENT_ID_PATTERN.match(agent_id):
         raise InstallError("agent id must be lowercase letters, digits, '-' or '_'")
@@ -1125,8 +1292,6 @@ def install_classifier_agent(
     workspace = workspace.expanduser()
     _assert_workspace_ownable(workspace)
     config_path, data = _read_openclaw_config(runner)
-    config_before = config_path.read_bytes()
-    config_mode = stat.S_IMODE(config_path.stat().st_mode)
     gateway_url, token = _gateway_target(data)
     if model is None:
         defaults = data.get("agents", {}).get("defaults", {}) if isinstance(data, dict) else {}
@@ -1139,9 +1304,11 @@ def install_classifier_agent(
 
     created_agent = False
     created_workspace = not workspace.exists()
+    previous: dict[str, object] = {}
+    prefix: str | None = None
     try:
         _write_classifier_workspace(workspace, agent_id)
-        if _agent_index(data, agent_id) is None:
+        if _agent_config_prefix(data, agent_id) is None:
             _checked(
                 runner,
                 [
@@ -1160,18 +1327,20 @@ def install_classifier_agent(
             )
             created_agent = True
             _, data = _read_openclaw_config(runner)
-        index = _agent_index(data, agent_id)
-        if index is None:
-            raise InstallError(f"OpenClaw did not record agent {agent_id} in agents.list")
+        prefix = _agent_config_prefix(data, agent_id)
+        if prefix is None:
+            raise InstallError(f"OpenClaw did not record agent {agent_id} in its agent config")
         settings = {
-            f"agents.list.{index}.workspace": str(workspace),
-            f"agents.list.{index}.identity": {"name": CLASSIFIER_AGENT_NAME},
-            f"agents.list.{index}.tools": CLASSIFIER_TOOLS,
+            f"{prefix}.workspace": str(workspace),
+            f"{prefix}.identity": {"name": CLASSIFIER_AGENT_NAME},
+            f"{prefix}.tools": CLASSIFIER_TOOLS,
             # The default Codex harness for openai/* models ignores per-request
             # instructions on the Responses endpoint; the OpenClaw runtime honours them.
-            f"agents.list.{index}.models": {model: {"agentRuntime": {"id": "openclaw"}}},
+            f"{prefix}.models": {model: {"agentRuntime": {"id": "openclaw"}}},
+            # Hot-reloaded by the gateway (no restart); see OpenClaw's config-reload plan.
             "gateway.http.endpoints.responses.enabled": True,
         }
+        previous = {path: _config_value(data, path) for path in settings}
         for path, value in settings.items():
             _checked(
                 runner,
@@ -1188,16 +1357,25 @@ def install_classifier_agent(
         _checked(runner, ["openclaw", "config", "validate"], "OpenClaw config validation")
         if probe is not None:
             probe(gateway_url, token, agent_id)
-    except Exception:
+    except Exception as exc:
         if created_agent:
             runner(["openclaw", "agents", "delete", agent_id, "--force", "--json"])
             _remove_empty_agent_state(config_path, agent_id)
-        temporary = config_path.with_name(f".{config_path.name}.albert-rollback")
-        temporary.write_bytes(config_before)
-        os.chmod(temporary, config_mode)
-        os.replace(temporary, config_path)
+            # Deleting the agent removed its own keys; restoring them would recreate it.
+            if prefix is not None:
+                previous = {
+                    path: value
+                    for path, value in previous.items()
+                    if not path.startswith(f"{prefix}.")
+                }
+        unrestored = _restore_config_values(runner, config_path, previous)
         if created_workspace and workspace.exists():
             shutil.rmtree(workspace)
+        if unrestored:
+            raise InstallError(
+                f"{exc}; could not restore OpenClaw config {', '.join(unrestored)}. "
+                "Check them with `openclaw config get <path>`."
+            ) from exc
         raise
     return gateway_url
 
@@ -1214,7 +1392,7 @@ def remove_classifier_agent(
     if not _workspace_owned(workspace):
         raise InstallError(f"workspace {workspace} is not owned by Albert; nothing removed")
     config_path, data = _read_openclaw_config(runner)
-    if _agent_index(data, agent_id) is not None:
+    if _agent_config_prefix(data, agent_id) is not None:
         _checked(
             runner,
             ["openclaw", "agents", "delete", agent_id, "--force", "--json"],

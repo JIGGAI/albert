@@ -155,22 +155,104 @@ def cloud_contract(
     return link, manifest, trust
 
 
+def _json_set(data: dict, path: str, value: object) -> None:
+    node: object = data
+    parts = path.split(".")
+    for part in parts[:-1]:
+        node = node[int(part)] if isinstance(node, list) else node.setdefault(part, {})
+    if isinstance(node, list):
+        node[int(parts[-1])] = value
+    else:
+        node[parts[-1]] = value
+
+
+def _json_unset(data: dict, path: str) -> None:
+    """Remove a key and prune the parents it leaves empty."""
+    parts = path.split(".")
+    trail: list[tuple[dict, str]] = []
+    node: object = data
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return
+        trail.append((node, part))
+        node = node[part]
+    if isinstance(node, dict):
+        node.pop(parts[-1], None)
+    for parent, key in reversed(trail):
+        if parent[key] == {}:
+            del parent[key]
+
+
 class FakeRunner:
-    def __init__(self, config: Path, *, fail_on: tuple[str, ...] | None = None) -> None:
+    """OpenClaw CLI double that edits a real JSON config, key by key, like the CLI."""
+
+    def __init__(
+        self,
+        config: Path,
+        *,
+        fail_on: tuple[str, ...] | None = None,
+        health: tuple[bool, ...] = (),
+        on_command=None,
+    ) -> None:
         self.config = config
         self.fail_on = fail_on
+        self.health = list(health)
+        self.on_command = on_command
         self.commands: list[list[str]] = []
+
+    def _load(self) -> dict:
+        if not self.config.exists():
+            return {}
+        return json.loads(self.config.read_text(encoding="utf-8"))
+
+    def _save(self, data: dict) -> None:
+        self.config.write_text(json.dumps(data, separators=(",", ":")) + "\n", encoding="utf-8")
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
+        if self.on_command is not None:
+            self.on_command(self, command)
         if command == ["openclaw", "--version"]:
             return subprocess.CompletedProcess(command, 0, "OpenClaw 2026.9.6 (test)\n", "")
         if command == ["openclaw", "config", "file"]:
             return subprocess.CompletedProcess(command, 0, f"{self.config}\n", "")
-        if command[1:3] == ["config", "set"]:
-            self.config.write_text('{"changed":true}\n', encoding="utf-8")
+        if command[1:2] == ["health"]:
+            healthy = self.health.pop(0) if self.health else True
+            body = json.dumps({"ok": healthy}) + "\n"
+            return subprocess.CompletedProcess(command, 0 if healthy else 1, body, "")
         if self.fail_on and tuple(command[1 : 1 + len(self.fail_on)]) == self.fail_on:
             return subprocess.CompletedProcess(command, 1, "", "injected failure\n")
+        if command[1:3] == ["config", "set"]:
+            data = self._load()
+            _json_set(data, command[3], json.loads(command[4]))
+            self._save(data)
+        elif command[1:3] == ["config", "unset"]:
+            data = self._load()
+            _json_unset(data, command[3])
+            self._save(data)
+        elif command[1:3] == ["plugins", "install"]:
+            data = self._load()
+            plugins = data.setdefault("plugins", {})
+            paths = plugins.setdefault("load", {}).setdefault("paths", [])
+            if command[-1] not in paths:
+                paths.append(command[-1])
+            plugins.setdefault("entries", {}).setdefault("albert-memory", {})["enabled"] = True
+            self._save(data)
+        elif command[1:3] == ["plugins", "uninstall"]:
+            data = self._load()
+            plugins = data.get("plugins", {})
+            plugins.get("entries", {}).pop("albert-memory", None)
+            load = plugins.get("load", {})
+            if "paths" in load:
+                load["paths"] = [p for p in load["paths"] if not p.endswith("openclaw_plugin")]
+            for key in ("entries", "load"):
+                if key in plugins and not any(
+                    plugins[key].values() if key == "load" else plugins[key]
+                ):
+                    del plugins[key]
+            if not plugins:
+                data.pop("plugins", None)
+            self._save(data)
         return subprocess.CompletedProcess(command, 0, "{}\n", "")
 
 
@@ -289,6 +371,97 @@ def test_failed_plugin_rollback_prints_manual_cleanup_instructions(tmp_path: Pat
 
     assert config.read_text() == "{}\n"
     assert not paths.root.exists()
+
+
+def test_install_refuses_to_touch_an_unhealthy_gateway(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    config.write_text('{"unrelated":true}\n', encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    runner = FakeRunner(config, health=(False,))
+
+    with pytest.raises(InstallError, match="not healthy before install"):
+        install(paths, runner)
+
+    assert config.read_text() == '{"unrelated":true}\n'
+    assert not paths.root.exists()
+    assert not any(command[1:2] == ["plugins"] for command in runner.commands)
+    assert not any(command[1:3] == ["config", "set"] for command in runner.commands)
+    # Albert never tries to fix the gateway itself.
+    assert not any(command[1:2] in (["gateway"], ["doctor"]) for command in runner.commands)
+
+
+def test_install_rolls_back_when_the_gateway_is_unhealthy_afterwards(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    config.write_text('{"unrelated":true}\n', encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    runner = FakeRunner(config, health=(True, False))
+
+    with pytest.raises(InstallError, match="not healthy after install"):
+        install(paths, runner)
+
+    assert ["openclaw", "plugins", "uninstall", "albert-memory", "--force"] in runner.commands
+    assert config.read_text() == '{"unrelated":true}\n'
+    assert not paths.root.exists()
+
+
+def test_plugin_is_copied_into_the_owned_root_and_stale_links_are_dropped(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    old_venv_link = str(tmp_path / "old-venv" / "site-packages" / "albert" / "openclaw_plugin")
+    other_plugin = str(tmp_path / "ClawRecipes")
+    config.write_text(
+        json.dumps({"plugins": {"load": {"paths": [other_plugin, old_venv_link]}}}) + "\n",
+        encoding="utf-8",
+    )
+    paths = InstallPaths(tmp_path / "albert")
+    runner = FakeRunner(config)
+
+    install(paths, runner)
+
+    assert (paths.plugin / "openclaw.plugin.json").is_file()
+    install_command = next(c for c in runner.commands if c[1:3] == ["plugins", "install"])
+    assert install_command[-1] == str(paths.plugin)
+    # The deleted venv's link is gone; unrelated plugins stay, in order.
+    data = json.loads(config.read_text())
+    assert data["plugins"]["load"]["paths"] == [other_plugin, str(paths.plugin)]
+
+
+def test_rollback_restores_only_albert_keys_and_keeps_concurrent_edits(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    config.write_text('{"plugins":{"entries":{"telegram":{"enabled":true}}}}\n', encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+
+    def gateway_writes_during_install(runner: FakeRunner, command: list[str]) -> None:
+        if command[1:3] == ["plugins", "install"]:
+            data = runner._load()
+            data["gateway"] = {"controlUi": {"allowedOrigins": ["https://new"]}}
+            runner._save(data)
+
+    runner = FakeRunner(
+        config, fail_on=("plugins", "inspect"), on_command=gateway_writes_during_install
+    )
+    with pytest.raises(InstallError, match="runtime inspection"):
+        install(paths, runner)
+
+    data = json.loads(config.read_text())
+    # What the gateway wrote mid-install survives; Albert's own keys are gone.
+    assert data["gateway"] == {"controlUi": {"allowedOrigins": ["https://new"]}}
+    assert data["plugins"] == {"entries": {"telegram": {"enabled": True}}}
+
+
+def test_failed_upgrade_reloads_the_previous_plugin(tmp_path: Path):
+    config = tmp_path / "openclaw.json"
+    config.write_text("{}\n", encoding="utf-8")
+    paths = InstallPaths(tmp_path / "albert")
+    install(paths, FakeRunner(config), "first")
+    before = config.read_text()
+    failing = FakeRunner(config, fail_on=("plugins", "inspect"))
+
+    with pytest.raises(InstallError):
+        install(paths, failing, "second")
+
+    assert config.read_text() == before
+    assert (paths.plugin / "openclaw.plugin.json").is_file()
+    assert failing.commands[-1] == ["openclaw", "plugins", "reload", "albert-memory"]
 
 
 def test_uninstall_requires_ownership_and_removes_only_owned_tree(tmp_path: Path):
@@ -578,8 +751,9 @@ def stat_mode(path: Path) -> int:
 class AgentRunner:
     """OpenClaw CLI double for the classifier-agent command.
 
-    Keeps a JSON config file like the real `openclaw config set` would, so the
-    command's index lookups and the rollback can be checked against a file.
+    Keeps a JSON config file like the real CLI would. `shape="entries"` is the
+    OpenClaw 2026.9.6+ layout (agents keyed by id under `agents.entries`);
+    `shape="list"` is the retired pre-2026.9.6 `agents.list` array.
     """
 
     def __init__(
@@ -589,18 +763,26 @@ class AgentRunner:
         agents: tuple[str, ...] = ("main",),
         fail_on=None,
         version: str = "2026.9.6",
+        shape: str = "entries",
+        on_command=None,
     ) -> None:
         self.config = config
         self.fail_on = fail_on
         self.version = version
+        self.shape = shape
+        self.on_command = on_command
         self.commands: list[list[str]] = []
         self.deleted: list[str] = []
+        if shape == "entries":
+            registry: object = {agent: {"workspace": f"/ws/{agent}"} for agent in agents}
+        else:
+            registry = [{"id": agent, "workspace": f"/ws/{agent}"} for agent in agents]
         config.write_text(
             json.dumps(
                 {
                     "agents": {
                         "defaults": {"model": {"primary": "openai/test-model"}},
-                        "list": [{"id": agent, "workspace": f"/ws/{agent}"} for agent in agents],
+                        shape: registry,
                     },
                     "gateway": {"port": 18789, "auth": {"mode": "token", "token": "gw-secret"}},
                 }
@@ -615,8 +797,16 @@ class AgentRunner:
     def _save(self, data: dict) -> None:
         self.config.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
+    def agent(self, agent_id: str) -> dict | None:
+        registry = self._load()["agents"][self.shape]
+        if self.shape == "entries":
+            return registry.get(agent_id)
+        return next((a for a in registry if a["id"] == agent_id), None)
+
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
+        if self.on_command is not None:
+            self.on_command(self, command)
         if self.fail_on and tuple(command[1 : 1 + len(self.fail_on)]) == self.fail_on:
             return subprocess.CompletedProcess(command, 1, "", "injected failure\n")
         if command == ["openclaw", "--version"]:
@@ -625,28 +815,31 @@ class AgentRunner:
             return subprocess.CompletedProcess(command, 0, f"{self.config}\n", "")
         if command[1:3] == ["agents", "add"]:
             data = self._load()
-            data["agents"]["list"].append(
-                {"id": command[3], "workspace": command[command.index("--workspace") + 1]}
-            )
+            workspace = command[command.index("--workspace") + 1]
+            if self.shape == "entries":
+                data["agents"]["entries"][command[3]] = {"workspace": workspace}
+            else:
+                data["agents"]["list"].append({"id": command[3], "workspace": workspace})
             self._save(data)
             return subprocess.CompletedProcess(command, 0, f'{{"id":"{command[3]}"}}\n', "")
         if command[1:3] == ["agents", "delete"]:
             data = self._load()
-            data["agents"]["list"] = [a for a in data["agents"]["list"] if a["id"] != command[3]]
+            if self.shape == "entries":
+                data["agents"]["entries"].pop(command[3], None)
+            else:
+                data["agents"]["list"] = [
+                    a for a in data["agents"]["list"] if a["id"] != command[3]
+                ]
             self._save(data)
             self.deleted.append(command[3])
             return subprocess.CompletedProcess(command, 0, "{}\n", "")
         if command[1:3] == ["config", "set"]:
             data = self._load()
-            node: object = data
-            parts = command[3].split(".")
-            for part in parts[:-1]:
-                node = node[int(part)] if isinstance(node, list) else node.setdefault(part, {})
-            value = json.loads(command[4])
-            if isinstance(node, list):
-                node[int(parts[-1])] = value
-            else:
-                node[parts[-1]] = value
+            _json_set(data, command[3], json.loads(command[4]))
+            self._save(data)
+        if command[1:3] == ["config", "unset"]:
+            data = self._load()
+            _json_unset(data, command[3])
             self._save(data)
         return subprocess.CompletedProcess(command, 0, "{}\n", "")
 
@@ -668,8 +861,11 @@ def test_classifier_agent_install_adds_an_owned_agent_and_pins_its_runtime(tmp_p
     )
 
     data = json.loads(config.read_text(encoding="utf-8"))
-    agent = next(a for a in data["agents"]["list"] if a["id"] == "albert-classifier")
+    # OpenClaw 2026.9.6 keys agents by id; the retired agents.list must never appear.
+    assert "list" not in data["agents"]
+    agent = data["agents"]["entries"]["albert-classifier"]
     assert agent["workspace"] == str(workspace)
+    assert not any("agents.list" in " ".join(command) for command in runner.commands)
     # No plugin tools (so no memory access) and no messaging; `session_status`
     # stays because OpenClaw refuses to run an agent with no callable tool at all.
     assert agent["tools"] == {"profile": "minimal", "deny": ["group:plugins", "message"]}
@@ -706,9 +902,10 @@ def test_classifier_agent_install_is_idempotent_and_honours_model_override(tmp_p
             probe=lambda *_: None,
         )
     data = json.loads(config.read_text(encoding="utf-8"))
-    matching = [a for a in data["agents"]["list"] if a["id"] == "albert-classifier"]
-    assert len(matching) == 1
-    assert matching[0]["models"] == {"openai/other-model": {"agentRuntime": {"id": "openclaw"}}}
+    assert set(data["agents"]["entries"]) == {"main", "albert-classifier"}
+    assert data["agents"]["entries"]["albert-classifier"]["models"] == {
+        "openai/other-model": {"agentRuntime": {"id": "openclaw"}}
+    }
     assert sum(1 for c in runner.commands if c[1:3] == ["agents", "add"]) == 1
 
 
@@ -734,6 +931,36 @@ def test_classifier_agent_install_rolls_back_when_the_probe_fails(tmp_path: Path
     assert config.read_bytes() == before
     assert runner.deleted == ["albert-classifier"]
     assert not workspace.exists()
+
+
+def test_classifier_rollback_keeps_concurrent_edits_and_prior_values(tmp_path: Path):
+    from albert.capture_installer import InstallError, install_classifier_agent
+
+    config = tmp_path / "openclaw.json"
+
+    def user_edits_mid_install(runner: AgentRunner, command: list[str]) -> None:
+        if command[1:3] == ["config", "validate"]:
+            data = runner._load()
+            data["channels"] = {"telegram": {"enabled": True}}
+            runner._save(data)
+
+    runner = AgentRunner(config, on_command=user_edits_mid_install)
+    data = runner._load()
+    data["gateway"]["http"] = {"endpoints": {"responses": {"enabled": False}}}
+    runner._save(data)
+
+    def failing_probe(*_: object) -> None:
+        raise InstallError("gateway answered 404")
+
+    with pytest.raises(InstallError, match="gateway answered 404"):
+        install_classifier_agent(
+            workspace=tmp_path / "ws", model=None, runner=runner, probe=failing_probe
+        )
+
+    data = json.loads(config.read_text())
+    assert data["channels"] == {"telegram": {"enabled": True}}
+    assert data["gateway"]["http"]["endpoints"]["responses"]["enabled"] is False
+    assert "albert-classifier" not in data["agents"]["entries"]
 
 
 def test_classifier_agent_install_refuses_a_workspace_it_does_not_own(tmp_path: Path):
@@ -790,9 +1017,10 @@ def test_classifier_agent_accepts_openclaw_releases_older_than_the_capture_plugi
     config = tmp_path / "openclaw.json"
     install_classifier_agent(
         workspace=tmp_path / "ws",
-        runner=AgentRunner(config, version="2026.6.35"),
+        runner=AgentRunner(config, version="2026.6.35", shape="list"),
         probe=lambda *_: None,
     )
+    # Pre-2026.9.6 hosts still use the agents.list array; follow the host's shape.
     assert any(
         a["id"] == "albert-classifier" for a in json.loads(config.read_text())["agents"]["list"]
     )

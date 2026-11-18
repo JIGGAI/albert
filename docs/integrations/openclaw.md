@@ -71,6 +71,34 @@ The token is read by hidden prompt. Albert stores it in an owned `0600` file and
 configures OpenClaw with a non-secret wrapper path. The token is never placed in
 arguments, process environment, stdout, or logs.
 
+## What installing changes on the gateway
+
+`connect` and `install` never restart, stop, reinstall, or update the gateway.
+They do not touch systemd/launchd, cron, `tailscale serve`, or any config key
+outside the list below. Every change is one the gateway hot-reloads.
+
+- **Gateway health first and last.** Albert checks `openclaw health` before
+  changing anything and refuses to touch an unhealthy gateway. It checks again
+  after install and rolls back if the gateway stopped answering. Albert never
+  tries to repair the gateway itself; bring it back first, then retry.
+- **Files:** everything lives in `~/.openclaw/albert/`. That covers the
+  credential (`0600`), the wrapper, the encrypted queue, `install.json`, and a
+  copy of the plugin at `~/.openclaw/albert/openclaw_plugin`. The gateway links
+  that copy, so upgrading or rebuilding the Python environment cannot leave it
+  pointing at a missing directory. An older install's link into the Python
+  environment is removed from `plugins.load.paths` on the next `connect`.
+- **Config keys:** `plugins.entries.albert-memory`, the plugin's entry in
+  `plugins.load.paths`, and whatever `openclaw plugins install` records for
+  `albert-memory`.
+- **Rollback:** on any failure, Albert restores exactly those keys to their
+  previous values and leaves the rest of `openclaw.json` alone, including
+  changes the gateway or you made during the install. It then reloads the
+  previous plugin, if there was one.
+
+The optional classifier agent (below) adds one agent and sets
+`gateway.http.endpoints.responses.enabled`, which is also hot-reloaded. Its
+rollback is targeted the same way.
+
 ## Operate the connection
 
 ### Diagnose
