@@ -85,6 +85,7 @@ def _canonical_memories(session: Session, principal: Principal) -> list[Memory]:
         for memory in records
         if _as_utc(memory.valid_from) <= now
         and (memory.valid_until is None or _as_utc(memory.valid_until) > now)
+        and not (memory.metadata_ or {}).get("quarantined")
     ]
 
 
@@ -128,7 +129,9 @@ def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
         if not value:
             continue
         metadata = memory.metadata_ if isinstance(memory.metadata_, dict) else {}
-        trust = str(metadata.get("source_trust", "untrusted")).lower()
+        trust = str(
+            metadata.get("source_trust", metadata.get("capture_source_trust", "untrusted"))
+        ).lower()
         if trust not in TRUST_ORDER:
             trust = "untrusted"
         source_rows.append(
