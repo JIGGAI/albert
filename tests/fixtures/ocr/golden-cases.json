@@ -1,0 +1,10 @@
+{
+  "contract": "albert.extraction/v1",
+  "cases": [
+    {"name": "scanned-png", "page": 1, "region": [10, 20, 80, 14], "text": "Invoice total 42", "confidence": 0.98},
+    {"name": "scanned-pdf", "page": 2, "region": [5, 7, 40, 10], "text": "Approved", "confidence": 0.91},
+    {"name": "mixed-text-scan", "page": 3, "region": [4, 8, 70, 11], "text": "Scanned appendix", "confidence": 0.87},
+    {"name": "rotated", "page": 4, "region": [7, 5, 14, 80], "text": "Rotated label", "confidence": 0.83},
+    {"name": "low-confidence", "page": 5, "region": [2, 3, 20, 9], "text": "unclear", "confidence": 0.24}
+  ]
+}
