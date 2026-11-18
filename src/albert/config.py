@@ -76,6 +76,17 @@ class Settings(BaseSettings):
     link_similarity_min: float = Field(default=0.78, ge=0, le=1)
     housekeeping_seconds: float = Field(default=60, ge=0.5, le=3600)
     map_node_limit: int = Field(default=1500, ge=10, le=3000)
+    # Standing profiles only consume these explicit semantic memory types.
+    profile_schema_version: str = Field(default="1", min_length=1, max_length=32)
+    profile_buckets: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "identity": ["identity"],
+            "preferences": ["preference"],
+            "goals": ["goal"],
+            "constraints": ["constraint"],
+        }
+    )
+    profile_max_assertions: int = Field(default=100, ge=1, le=1000)
 
     @field_validator("api_key_pepper")
     @classmethod
@@ -84,6 +95,33 @@ class Settings(BaseSettings):
         if len(raw) < 32 and raw != "development-only-change-me":
             raise ValueError("ALBERT_API_KEY_PEPPER must contain at least 32 characters")
         return value
+
+    @field_validator("profile_buckets")
+    @classmethod
+    def validate_profile_buckets(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        if not value or len(value) > 32:
+            raise ValueError("ALBERT_PROFILE_BUCKETS must define 1 to 32 buckets")
+        normalized: dict[str, list[str]] = {}
+        seen_types: set[str] = set()
+        for bucket, memory_types in value.items():
+            name = bucket.strip().lower()
+            types = [item.strip().lower() for item in memory_types]
+            if (
+                not name
+                or name in normalized
+                or len(name) > 64
+                or not types
+                or any(not item for item in types)
+                or len(types) != len(set(types))
+            ):
+                raise ValueError(
+                    "Profile bucket names and memory types must be non-empty and unique"
+                )
+            if seen_types.intersection(types):
+                raise ValueError("A memory type may belong to only one profile bucket")
+            seen_types.update(types)
+            normalized[name] = types
+        return normalized
 
     @field_validator("graph_store", mode="before")
     @classmethod

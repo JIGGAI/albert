@@ -242,6 +242,30 @@ A denied or rejected event is audited with its reason and never stored.
 Capture older than its profile's `retention_days` is scrubbed by the worker's
 housekeeping pass, together with its episode and the memories derived from it.
 
+## Standing profiles
+
+Standing profiles are current, rebuildable views over a principal's canonical
+memories. The versioned `ALBERT_PROFILE_BUCKETS` JSON maps bucket names to
+explicit memory types; safe defaults cover `identity`, `preference`, `goal`,
+and `constraint`. Unsupported types are not guessed into a profile. Each
+assertion includes its bucket and normalized value, validity interval, trust,
+confidence, sensitivity, and canonical memory UUID citations.
+
+| Route | Capability | Purpose |
+|---|---|---|
+| `GET /v1/profile?budget=N` | `profile.read` | Read the caller's bounded current profile. |
+| `GET /v1/profile/status` | `profile.read` | Read status without assertion bodies. |
+| `POST /v1/profile/rebuild` | `profile.rebuild` | Deterministically rebuild derived assertions. |
+| `/v1/profiles/{principal_id}` variants | capability plus `.organization` | Operate on another in-scope principal. |
+
+Reads never return sensitivities the key cannot read. Foreign tenants,
+out-of-workspace principals, and other principals without the corresponding
+`.organization` capability all return `404`. `budget` is capped by
+`ALBERT_PROFILE_MAX_ASSERTIONS`; responses report `total` and `truncated`.
+Rebuild audits and traces contain source digests, IDs, counts, and selection
+decisions, never assertion bodies. Canonical memories remain the source of
+truth, so materialized rows may be dropped and rebuilt.
+
 ## Console API
 
 Operator endpoints under `/v1/console`, gated by `console.read` (implied by
@@ -352,6 +376,8 @@ per-backend reciprocal-rank contribution.
 
 `memory.read`, `memory.write`, `memory.write.organization`, `memory.delete`,
 `memory.export`, `memory.import`, `graph.query`, `graph.write`,
+`profile.read`, `profile.read.organization`, `profile.rebuild`,
+`profile.rebuild.organization`,
 `working_memory.read`, `working_memory.write`, `locks.acquire`,
 `capture.write`, `capture.system`, `console.read`, `keys.manage`,
 `memory.confidential`, `memory.restricted`, and `admin`. Reading working memory
@@ -364,8 +390,8 @@ key write, change and delete the shared organization-wide records.
 Routes under `/v1/settings` need `keys.manage`, which `console.read` never
 implies. A credential is never issued wider than its issuer: a
 workspace-scoped manager sees, issues and revokes only its own workspace's
-credentials, cannot grant
-`memory.write.organization`, and cannot create, rename or delete workspaces. Neither
+credentials, cannot grant `.organization` capabilities, and cannot create,
+rename or delete workspaces. Neither
 `admin` nor `keys.manage` can be granted.
 
 - `GET /v1/settings/credentials`: keys and connection links, each with its
@@ -438,6 +464,9 @@ Tools include:
 - `memory_get`
 - `memory_update`
 - `memory_get_episode` (includes `indexing`; also takes `wait_seconds`)
+- `memory_profile_read` (bounded assertions plus citations and truncation)
+- `memory_profile_rebuild`
+- `memory_profile_status`
 - `memory_forget_episode`
 - `memory_search`
 - `memory_assemble_context`

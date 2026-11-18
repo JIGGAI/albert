@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from albert.db import get_session
 from albert.graph_store import get_graph_store
 from albert.models import Episode
 from albert.portability import export_bundle, import_bundle
+from albert.profiles import profile_status, read_profile, rebuild_profile
 from albert.provenance import normalize_provenance
 from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, span
 from albert.schemas import (
@@ -43,12 +44,14 @@ from albert.schemas import (
     MemoryRead,
     MemorySafetyReview,
     MemoryUpdate,
+    ProfileMaterializationStatus,
     RelationshipCreate,
     RelationshipRead,
     SearchRequest,
     SearchResponse,
     SessionContextRequest,
     SessionContextResponse,
+    StandingProfileRead,
     SubgraphQuery,
     WorkingMemoryCreate,
     WorkingMemoryCreateRead,
@@ -112,6 +115,69 @@ app.include_router(console_map_router)
 app.include_router(console_ops_router)
 app.include_router(settings_router)
 app.include_router(onboard_router)
+
+
+@app.get("/v1/profile", response_model=StandingProfileRead, tags=["profiles"])
+def read_own_profile(
+    budget: int = Query(default=100, ge=1, le=1000),
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> StandingProfileRead:
+    return read_profile(session, auth, auth.principal_id, budget)
+
+
+@app.post("/v1/profile/rebuild", response_model=StandingProfileRead, tags=["profiles"])
+def rebuild_own_profile(
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> StandingProfileRead:
+    return rebuild_profile(session, auth, auth.principal_id)
+
+
+@app.get(
+    "/v1/profile/status", response_model=ProfileMaterializationStatus, tags=["profiles"]
+)
+def own_profile_status(
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileMaterializationStatus:
+    return profile_status(session, auth, auth.principal_id)
+
+
+@app.get("/v1/profiles/{principal_id}", response_model=StandingProfileRead, tags=["profiles"])
+def read_scoped_profile(
+    principal_id: UUID,
+    budget: int = Query(default=100, ge=1, le=1000),
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> StandingProfileRead:
+    return read_profile(session, auth, principal_id, budget)
+
+
+@app.post(
+    "/v1/profiles/{principal_id}/rebuild",
+    response_model=StandingProfileRead,
+    tags=["profiles"],
+)
+def rebuild_scoped_profile(
+    principal_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> StandingProfileRead:
+    return rebuild_profile(session, auth, principal_id)
+
+
+@app.get(
+    "/v1/profiles/{principal_id}/status",
+    response_model=ProfileMaterializationStatus,
+    tags=["profiles"],
+)
+def scoped_profile_status(
+    principal_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileMaterializationStatus:
+    return profile_status(session, auth, principal_id)
 
 
 def _memory_ids(result: SearchResponse) -> list[str]:

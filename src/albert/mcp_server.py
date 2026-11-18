@@ -115,6 +115,28 @@ def _shared(shared: bool) -> dict[str, str]:
 
 
 @mcp.tool()
+async def memory_profile_read(budget: int = 100) -> dict[str, Any]:
+    """Read the caller's current evidence-backed standing profile.
+
+    The bounded result reports total and truncated, and every assertion carries
+    canonical memory citations, temporal validity, trust, and sensitivity.
+    """
+    return await _request("GET", f"/v1/profile?budget={budget}")
+
+
+@mcp.tool()
+async def memory_profile_rebuild() -> dict[str, Any]:
+    """Deterministically rebuild the caller's profile from canonical memories."""
+    return await _request("POST", "/v1/profile/rebuild")
+
+
+@mcp.tool()
+async def memory_profile_status() -> dict[str, Any]:
+    """Report whether and when the caller's standing profile was materialized."""
+    return await _request("GET", "/v1/profile/status")
+
+
+@mcp.tool()
 async def memory_remember(
     content: str,
     subject: str = "",

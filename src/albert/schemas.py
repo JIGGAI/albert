@@ -12,6 +12,38 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProfileAssertionRead(BaseModel):
+    bucket: str
+    value: str
+    valid_from: datetime
+    valid_until: datetime | None
+    trust: Literal["untrusted", "verified", "trusted"]
+    confidence: float
+    sensitivity: Literal["public", "internal", "confidential", "restricted"]
+    citations: list[UUID]
+
+
+class StandingProfileRead(BaseModel):
+    principal_id: UUID
+    workspace_id: UUID | None
+    schema_version: str
+    source_digest: str
+    built_at: datetime
+    assertions: list[ProfileAssertionRead]
+    total: int
+    truncated: bool
+
+
+class ProfileMaterializationStatus(BaseModel):
+    principal_id: UUID
+    workspace_id: UUID | None
+    state: Literal["never", "current"]
+    schema_version: str | None = None
+    source_digest: str | None = None
+    assertion_count: int = 0
+    built_at: datetime | None = None
+
+
 def _require_visible_text(value: str | None) -> str | None:
     if value is not None and not value.strip():
         raise ValueError("content must contain visible text")
