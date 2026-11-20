@@ -35,6 +35,7 @@ ALL_CAPABILITIES = [
     "profile.read.organization",
     "profile.rebuild",
     "profile.rebuild.organization",
+    "profile.admin",
     "graph.query",
     "graph.write",
     "working_memory.read",

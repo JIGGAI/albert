@@ -44,6 +44,97 @@ class ProfileMaterializationStatus(BaseModel):
     built_at: datetime | None = None
 
 
+class ProfileBucketPolicyWrite(BaseModel):
+    expected_version: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    buckets: dict[str, list[str]] = Field(min_length=1, max_length=32)
+
+    @field_validator("buckets")
+    @classmethod
+    def validate_buckets(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for bucket, memory_types in value.items():
+            if not bucket or len(bucket) > 64 or not bucket.replace("-", "").isalnum():
+                raise ValueError("bucket names must be short alphanumeric slugs")
+            cleaned = sorted({item.strip().lower() for item in memory_types if item.strip()})
+            if not cleaned or any(len(item) > 64 for item in cleaned):
+                raise ValueError("each bucket requires bounded memory types")
+            normalized[bucket] = cleaned
+        return normalized
+
+
+class ProfileBucketPolicyRead(BaseModel):
+    version: int
+    buckets: dict[str, list[str]]
+    actor_principal_id: UUID | None = None
+    created_at: datetime | None = None
+
+
+class ProfilePrincipalSummary(BaseModel):
+    principal_id: UUID
+    workspace_id: UUID | None
+    name: str
+    principal_type: str
+    materialized: bool
+    assertion_count: int
+    built_at: datetime | None
+
+
+class ProfilePrincipalPage(BaseModel):
+    items: list[ProfilePrincipalSummary]
+    total: int
+    offset: int
+    limit: int
+
+
+class ProfileAssertionAdminRead(BaseModel):
+    id: UUID
+    principal_id: UUID
+    bucket: str
+    value: str
+    valid_from: datetime
+    valid_until: datetime | None
+    trust: str
+    confidence: float
+    sensitivity: str
+    citations: list[UUID]
+    version: int
+    decision_state: str
+    suppressed: bool
+
+
+class ProfileAssertionPage(BaseModel):
+    items: list[ProfileAssertionAdminRead]
+    total: int
+    offset: int
+    limit: int
+
+
+class ProfileAssertionMutation(BaseModel):
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    value: str | None = Field(default=None, min_length=1, max_length=50_000)
+
+
+class ProfileAssertionHistoryRead(BaseModel):
+    id: UUID
+    assertion_id: UUID
+    action: str
+    version: int
+    prior_value: str
+    new_value: str
+    citations: list[UUID]
+    actor_principal_id: UUID
+    created_at: datetime
+
+
+class ProfileAssertionHistoryPage(BaseModel):
+    items: list[ProfileAssertionHistoryRead]
+    total: int
+    offset: int
+    limit: int
+
+
 class FactEvolutionCreate(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=200)
     evidence_memory_id: UUID
