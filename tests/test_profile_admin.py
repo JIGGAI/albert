@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from albert.api import app
 from albert.db import SessionLocal
-from albert.models import AuditEvent, Principal
+from albert.models import AuditEvent, Principal, ProfileAssertion, Workspace
 
 from .conftest import create_identity, create_principal_key
 
@@ -133,3 +133,89 @@ async def test_admin_contracts_fail_closed_for_under_scoped_and_foreign_callers(
     async with _client(foreign_admin) as foreign:
         response = await foreign.get(f"/v1/profile-admin/principals/{principal_id}/assertions")
         assert response.status_code == 404
+
+
+async def test_assertion_idempotent_retry_does_not_cross_workspace(identity) -> None:  # type: ignore[no-untyped-def]
+    owner_key, organization, first_workspace = identity
+    with SessionLocal() as session:
+        second_workspace = Workspace(organization_id=organization.id, name="Second")
+        session.add(second_workspace)
+        session.commit()
+        session.refresh(second_workspace)
+
+    second_owner_key = create_principal_key(
+        organization,
+        second_workspace,
+        "Second workspace owner",
+        ["memory.read", "memory.write", "profile.read", "profile.rebuild"],
+    )
+    first_admin_key = create_principal_key(
+        organization,
+        first_workspace,
+        "First workspace admin",
+        ["profile.admin", "memory.restricted"],
+    )
+    restricted_blind_admin_key = create_principal_key(
+        organization, first_workspace, "Restricted blind admin", ["profile.admin"]
+    )
+    second_admin_key = create_principal_key(
+        organization, second_workspace, "Second workspace admin", ["profile.admin"]
+    )
+
+    async with _client(owner_key) as first_owner:
+        assert (
+            await first_owner.post(
+                "/v1/memories",
+                json={"content": "FIRST-WORKSPACE-SECRET", "memory_type": "identity"},
+            )
+        ).status_code == 201
+        assert (await first_owner.post("/v1/profile/rebuild")).status_code == 200
+
+    with SessionLocal() as session:
+        first_assertion = session.scalar(
+            select(ProfileAssertion).where(ProfileAssertion.workspace_id == first_workspace.id)
+        )
+        assert first_assertion is not None
+        first_assertion.sensitivity = "restricted"
+        session.commit()
+
+    async with _client(second_owner_key) as second_owner:
+        assert (
+            await second_owner.post(
+                "/v1/memories",
+                json={"content": "SECOND-WORKSPACE-SECRET", "memory_type": "identity"},
+            )
+        ).status_code == 201
+        assert (await second_owner.post("/v1/profile/rebuild")).status_code == 200
+
+    async with _client(first_admin_key) as first_admin:
+        principals = (await first_admin.get("/v1/profile-admin/principals")).json()["items"]
+        principal_id = next(
+            item["principal_id"] for item in principals if item["assertion_count"] > 0
+        )
+        assertion = (
+            await first_admin.get(f"/v1/profile-admin/principals/{principal_id}/assertions")
+        ).json()["items"][0]
+        mutation = {
+            "expected_version": assertion["version"],
+            "idempotency_key": "workspace-bounded-retry",
+            "value": "FIRST-WORKSPACE-CORRECTED",
+        }
+        corrected = await first_admin.post(
+            f"/v1/profile-admin/assertions/{assertion['id']}/correct", json=mutation
+        )
+        assert corrected.status_code == 200
+
+    async with _client(restricted_blind_admin_key) as restricted_blind_admin:
+        replay = await restricted_blind_admin.post(
+            f"/v1/profile-admin/assertions/{assertion['id']}/correct", json=mutation
+        )
+        assert replay.status_code == 404
+        assert "FIRST-WORKSPACE" not in replay.text
+
+    async with _client(second_admin_key) as second_admin:
+        replay = await second_admin.post(
+            f"/v1/profile-admin/assertions/{assertion['id']}/correct", json=mutation
+        )
+        assert replay.status_code == 404
+        assert "FIRST-WORKSPACE" not in replay.text

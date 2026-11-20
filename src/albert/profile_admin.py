@@ -194,6 +194,32 @@ def _assertion_read(row: ProfileAssertion) -> ProfileAssertionAdminRead:
     return ProfileAssertionAdminRead.model_validate(row, from_attributes=True)
 
 
+def _idempotent_assertion_retry(
+    session: Session, auth: AuthContext, idempotency_key: str
+) -> tuple[ProfileAssertionHistory, ProfileAssertion] | None:
+    history = session.scalar(
+        select(ProfileAssertionHistory).where(
+            ProfileAssertionHistory.organization_id == auth.organization_id,
+            ProfileAssertionHistory.idempotency_key == idempotency_key,
+            in_workspace(ProfileAssertionHistory.workspace_id, auth.workspace_id),
+            ProfileAssertionHistory.sensitivity.in_(auth.allowed_sensitivities()),
+        )
+    )
+    if history is None:
+        return None
+    assertion = session.scalar(
+        select(ProfileAssertion).where(
+            ProfileAssertion.id == history.assertion_id,
+            ProfileAssertion.organization_id == auth.organization_id,
+            in_workspace(ProfileAssertion.workspace_id, auth.workspace_id),
+            ProfileAssertion.sensitivity.in_(auth.allowed_sensitivities()),
+        )
+    )
+    if assertion is None:
+        return None
+    return history, assertion
+
+
 def list_assertions(
     session: Session, auth: AuthContext, principal_id: UUID, offset: int, limit: int
 ) -> ProfileAssertionPage:
@@ -234,18 +260,11 @@ def mutate_assertion(
             "expected_version": data.expected_version,
         }
     )
-    retry = session.scalar(
-        select(ProfileAssertionHistory).where(
-            ProfileAssertionHistory.organization_id == auth.organization_id,
-            ProfileAssertionHistory.idempotency_key == data.idempotency_key,
-        )
-    )
+    retry = _idempotent_assertion_retry(session, auth, data.idempotency_key)
     if retry is not None:
-        if retry.request_digest != digest:
+        history, row = retry
+        if history.request_digest != digest:
             raise HTTPException(status_code=409, detail="Idempotency key payload mismatch")
-        row = session.get(ProfileAssertion, retry.assertion_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="Profile assertion not found")
         return _assertion_read(row)
     row = session.scalar(
         select(ProfileAssertion)
@@ -312,15 +331,10 @@ def mutate_assertion(
         session.commit()
     except IntegrityError as exc:
         session.rollback()
-        concurrent = session.scalar(
-            select(ProfileAssertionHistory).where(
-                ProfileAssertionHistory.organization_id == auth.organization_id,
-                ProfileAssertionHistory.idempotency_key == data.idempotency_key,
-            )
-        )
-        if concurrent is not None and concurrent.request_digest == digest:
-            current = session.get(ProfileAssertion, concurrent.assertion_id)
-            if current is not None:
+        concurrent = _idempotent_assertion_retry(session, auth, data.idempotency_key)
+        if concurrent is not None:
+            history, current = concurrent
+            if history.request_digest == digest:
                 return _assertion_read(current)
         raise HTTPException(status_code=409, detail="Profile assertion version conflict") from exc
     session.refresh(row)
