@@ -398,6 +398,8 @@ class ProfileAssertion(Base):
     confidence: Mapped[float] = mapped_column(Float)
     sensitivity: Mapped[str] = mapped_column(String(32), index=True)
     citations: Mapped[list[str]] = mapped_column(JSON)
+    decay_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    decay_reason: Mapped[str] = mapped_column(String(100), default="fresh")
 
 
 class FactEvolution(Base, TimestampMixin):
@@ -450,6 +452,57 @@ class FactEvolution(Base, TimestampMixin):
         ForeignKey("principals.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DecayPolicy(Base, TimestampMixin):
+    """Immutable version of tenant-scoped retrieval aging policy."""
+
+    __tablename__ = "decay_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "workspace_scope", "version", name="uq_decay_policy_version"
+        ),
+        Index("ix_decay_policies_scope", "organization_id", "workspace_id", "active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    workspace_scope: Mapped[str] = mapped_column(String(36))
+    version: Mapped[int] = mapped_column(Integer)
+    rules: Mapped[dict[str, Any]] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by_principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    rollback_of_version: Mapped[int | None] = mapped_column(Integer)
+
+
+class DecayState(Base, TimestampMixin):
+    """Rebuildable effective decay state; canonical memory content is untouched."""
+
+    __tablename__ = "decay_states"
+    __table_args__ = (
+        UniqueConstraint("memory_id", name="uq_decay_states_memory"),
+        Index("ix_decay_states_scope", "organization_id", "workspace_id", "stale"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("decay_policies.id", ondelete="CASCADE"), index=True
+    )
+    policy_version: Mapped[int] = mapped_column(Integer)
+    rule_class: Mapped[str] = mapped_column(String(64))
+    freshness_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    age_days: Mapped[float] = mapped_column(Float)
+    score_multiplier: Mapped[float] = mapped_column(Float)
+    stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    protected: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(String(100))
 
 
 class MemoryChunk(Base):

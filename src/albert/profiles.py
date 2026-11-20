@@ -12,7 +12,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from albert.config import get_settings
-from albert.models import Memory, Principal, ProfileAssertion, ProfileMaterialization, utcnow
+from albert.models import (
+    DecayState,
+    Memory,
+    Principal,
+    ProfileAssertion,
+    ProfileMaterialization,
+    utcnow,
+)
 from albert.recorder import span
 from albert.schemas import ProfileMaterializationStatus, StandingProfileRead
 from albert.scope import covers, in_workspace
@@ -103,6 +110,8 @@ def _view_digest(schema_version: str, rows: list[ProfileAssertion]) -> str:
                 "confidence": row.confidence,
                 "sensitivity": row.sensitivity,
                 "citations": row.citations,
+                "decay_multiplier": row.decay_multiplier,
+                "decay_reason": row.decay_reason,
             }
             for row in rows
         ],
@@ -112,7 +121,9 @@ def _view_digest(schema_version: str, rows: list[ProfileAssertion]) -> str:
     ).hexdigest()
 
 
-def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
+def _derive(
+    records: list[Memory], decay_states: dict[UUID, DecayState]
+) -> tuple[list[dict[str, object]], str]:
     settings = get_settings()
     bucket_for_type = {
         memory_type: bucket
@@ -129,6 +140,9 @@ def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
         if not value:
             continue
         metadata = memory.metadata_ if isinstance(memory.metadata_, dict) else {}
+        decay = decay_states.get(memory.id)
+        decay_multiplier = decay.score_multiplier if decay is not None else 1.0
+        decay_reason = decay.reason if decay is not None else "not_evaluated"
         trust = str(
             metadata.get("source_trust", metadata.get("capture_source_trust", "untrusted"))
         ).lower()
@@ -147,6 +161,8 @@ def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
                 "confidence": memory.confidence,
                 "sensitivity": memory.sensitivity,
                 "updated_at": _as_utc(memory.updated_at).isoformat(),
+                "decay_multiplier": decay_multiplier,
+                "decay_reason": decay_reason,
             }
         )
         key = (bucket, value.casefold())
@@ -161,6 +177,8 @@ def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
                 "confidence": memory.confidence,
                 "sensitivity": memory.sensitivity,
                 "citations": [str(memory.id)],
+                "decay_multiplier": decay_multiplier,
+                "decay_reason": decay_reason,
             }
             continue
         assertion["valid_from"] = min(assertion["valid_from"], memory.valid_from)  # type: ignore[type-var]
@@ -178,6 +196,9 @@ def _derive(records: list[Memory]) -> tuple[list[dict[str, object]], str]:
             (str(assertion["sensitivity"]), memory.sensitivity), key=SENSITIVITY_ORDER.index
         )
         assertion["citations"] = sorted([*assertion["citations"], str(memory.id)])  # type: ignore[misc]
+        if decay_multiplier < float(assertion["decay_multiplier"]):
+            assertion["decay_multiplier"] = decay_multiplier
+            assertion["decay_reason"] = decay_reason
 
     bucket_order = {name: index for index, name in enumerate(settings.profile_buckets)}
     assertions = sorted(
@@ -201,7 +222,19 @@ def rebuild_profile(
     principal = _target(session, auth, principal_id, "profile.rebuild")
     settings = get_settings()
     with span("profile.materialize", principal_id=str(principal.id)) as handle:
-        assertions, digest = _derive(_canonical_memories(session, principal))
+        records = _canonical_memories(session, principal)
+        memory_ids = [memory.id for memory in records]
+        decay_states = (
+            {
+                state.memory_id: state
+                for state in session.scalars(
+                    select(DecayState).where(DecayState.memory_id.in_(memory_ids))
+                )
+            }
+            if memory_ids
+            else {}
+        )
+        assertions, digest = _derive(records, decay_states)
         materialization = _materialization(session, principal)
         if materialization is None:
             materialization = ProfileMaterialization(
@@ -297,6 +330,8 @@ def _render_profile(
                 "confidence": row.confidence,
                 "sensitivity": row.sensitivity,
                 "citations": row.citations,
+                "decay_multiplier": row.decay_multiplier,
+                "decay_reason": row.decay_reason,
             }
             for row in selected
         ],

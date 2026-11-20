@@ -49,7 +49,6 @@ def test_fact_evolution_migration_indexes_round_trip(tmp_path: Path) -> None:
 
     _alembic(project_root, database, "upgrade", "0017")
     assert _fact_evolution_indexes(database) == EXPECTED_INDEXES
-    _alembic(project_root, database, "check")
 
     _alembic(project_root, database, "downgrade", "0016")
     with sqlite3.connect(database) as connection:
@@ -59,3 +58,5 @@ def test_fact_evolution_migration_indexes_round_trip(tmp_path: Path) -> None:
 
     _alembic(project_root, database, "upgrade", "0017")
     assert _fact_evolution_indexes(database) == EXPECTED_INDEXES
+    _alembic(project_root, database, "upgrade", "head")
+    _alembic(project_root, database, "check")

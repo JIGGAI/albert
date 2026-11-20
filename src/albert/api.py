@@ -20,6 +20,13 @@ from albert.console_map import router as console_map_router
 from albert.console_ops import router as console_ops_router
 from albert.credentials import onboard_router, settings_router
 from albert.db import get_session
+from albert.decay import (
+    get_decay_policy,
+    read_decay_state,
+    recompute_decay,
+    rollback_decay_policy,
+    set_decay_policy,
+)
 from albert.fact_evolution import (
     evolve_fact,
     get_fact_evolution,
@@ -35,6 +42,12 @@ from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, s
 from albert.schemas import (
     ContextRequest,
     ContextResponse,
+    DecayPolicyRead,
+    DecayPolicyRollback,
+    DecayPolicyWrite,
+    DecayRecompute,
+    DecayRunRead,
+    DecayStateRead,
     EpisodeCreate,
     EpisodeRead,
     ExportBundle,
@@ -125,6 +138,50 @@ app.include_router(console_map_router)
 app.include_router(console_ops_router)
 app.include_router(settings_router)
 app.include_router(onboard_router)
+
+
+@app.get("/v1/decay/policy", response_model=DecayPolicyRead, tags=["decay"])
+def read_active_decay_policy(
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> DecayPolicyRead:
+    return get_decay_policy(session, auth)
+
+
+@app.put("/v1/decay/policy", response_model=DecayPolicyRead, tags=["decay"])
+def write_decay_policy(
+    data: DecayPolicyWrite,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> DecayPolicyRead:
+    return set_decay_policy(session, auth, data)
+
+
+@app.post("/v1/decay/policy/rollback", response_model=DecayPolicyRead, tags=["decay"])
+def rollback_active_decay_policy(
+    data: DecayPolicyRollback,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> DecayPolicyRead:
+    return rollback_decay_policy(session, auth, data)
+
+
+@app.post("/v1/decay/recompute", response_model=DecayRunRead, tags=["decay"])
+def recompute_effective_decay(
+    data: DecayRecompute,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> DecayRunRead:
+    return recompute_decay(session, auth, data)
+
+
+@app.get("/v1/memories/{memory_id}/decay", response_model=DecayStateRead, tags=["decay"])
+def read_memory_decay(
+    memory_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> DecayStateRead:
+    return read_decay_state(session, auth, memory_id)
 
 
 @app.get("/v1/profile", response_model=StandingProfileRead, tags=["profiles"])
