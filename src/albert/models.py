@@ -446,7 +446,12 @@ class ProfileAssertionHistory(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer)
     prior_value: Mapped[str] = mapped_column(Text)
     new_value: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trust: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float)
     sensitivity: Mapped[str] = mapped_column(String(32), index=True)
+    decision_state: Mapped[str] = mapped_column(String(24))
     citations: Mapped[list[str]] = mapped_column(JSON)
     actor_principal_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("principals.id", ondelete="RESTRICT")

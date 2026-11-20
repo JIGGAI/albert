@@ -32,8 +32,19 @@ def test_profile_admin_migration_upgrade_downgrade_and_reapply(tmp_path: Path) -
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         columns = {row[1] for row in connection.execute("PRAGMA table_info(profile_assertions)")}
+        history_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(profile_assertion_history)")
+        }
     assert {"profile_bucket_policies", "profile_assertion_history"} <= tables
     assert {"assertion_key", "version", "decision_state", "suppressed"} <= columns
+    assert {
+        "valid_from",
+        "valid_until",
+        "trust",
+        "confidence",
+        "sensitivity",
+        "decision_state",
+    } <= history_columns
     _alembic(root, database, "check")
     _alembic(root, database, "downgrade", "0017")
     with sqlite3.connect(database) as connection:

@@ -99,6 +99,15 @@ async def test_admin_policy_discovery_correction_suppression_and_history(identit
         assert suppressed.status_code == 200 and suppressed.json()["suppressed"] is True
         history = (await admin.get(f"/v1/profile-admin/principals/{principal_id}/history")).json()
         assert [item["action"] for item in history["items"]] == ["correct", "suppress"]
+        for item, decision_state in zip(
+            history["items"], ["corrected", "suppressed"], strict=True
+        ):
+            assert item["confidence"] == assertion["confidence"]
+            assert item["trust"] == assertion["trust"]
+            assert item["valid_from"] == assertion["valid_from"]
+            assert item["valid_until"] == assertion["valid_until"]
+            assert item["sensitivity"] == assertion["sensitivity"]
+            assert item["decision_state"] == decision_state
 
     async with _client(owner_key) as owner:
         assert (await owner.get("/v1/profile")).json()["assertions"] == []

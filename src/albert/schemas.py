@@ -123,6 +123,12 @@ class ProfileAssertionHistoryRead(BaseModel):
     version: int
     prior_value: str
     new_value: str
+    valid_from: datetime
+    valid_until: datetime | None
+    trust: str
+    confidence: float
+    sensitivity: str
+    decision_state: str
     citations: list[UUID]
     actor_principal_id: UUID
     created_at: datetime
