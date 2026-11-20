@@ -20,6 +20,12 @@ from albert.console_map import router as console_map_router
 from albert.console_ops import router as console_ops_router
 from albert.credentials import onboard_router, settings_router
 from albert.db import get_session
+from albert.fact_evolution import (
+    evolve_fact,
+    get_fact_evolution,
+    rebuild_fact_evolution_history,
+    review_fact_evolution,
+)
 from albert.graph_store import get_graph_store
 from albert.models import Episode
 from albert.portability import export_bundle, import_bundle
@@ -32,6 +38,10 @@ from albert.schemas import (
     EpisodeCreate,
     EpisodeRead,
     ExportBundle,
+    FactEvolutionCreate,
+    FactEvolutionHistory,
+    FactEvolutionRead,
+    FactEvolutionReview,
     GraphQuery,
     HealthResponse,
     ImportRequest,
@@ -178,6 +188,59 @@ def scoped_profile_status(
     session: Session = Depends(get_session),
 ) -> ProfileMaterializationStatus:
     return profile_status(session, auth, principal_id)
+
+
+@app.post(
+    "/v1/fact-evolutions",
+    response_model=FactEvolutionRead,
+    status_code=201,
+    tags=["facts"],
+)
+def post_fact_evolution(
+    data: FactEvolutionCreate,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> FactEvolutionRead:
+    return evolve_fact(session, auth, data)
+
+
+@app.post(
+    "/v1/fact-evolutions/rebuild",
+    response_model=FactEvolutionHistory,
+    tags=["facts"],
+)
+def rebuild_fact_evolutions(
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> FactEvolutionHistory:
+    return rebuild_fact_evolution_history(session, auth)
+
+
+@app.get(
+    "/v1/fact-evolutions/{evolution_id}",
+    response_model=FactEvolutionRead,
+    tags=["facts"],
+)
+def read_fact_evolution(
+    evolution_id: UUID,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> FactEvolutionRead:
+    return get_fact_evolution(session, auth, evolution_id)
+
+
+@app.post(
+    "/v1/fact-evolutions/{evolution_id}/review",
+    response_model=FactEvolutionRead,
+    tags=["facts"],
+)
+def review_fact_evolution_decision(
+    evolution_id: UUID,
+    data: FactEvolutionReview,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> FactEvolutionRead:
+    return review_fact_evolution(session, auth, evolution_id, data)
 
 
 def _memory_ids(result: SearchResponse) -> list[str]:
