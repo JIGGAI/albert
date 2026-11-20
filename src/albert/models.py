@@ -398,6 +398,66 @@ class ProfileAssertion(Base):
     confidence: Mapped[float] = mapped_column(Float)
     sensitivity: Mapped[str] = mapped_column(String(32), index=True)
     citations: Mapped[list[str]] = mapped_column(JSON)
+    assertion_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    decision_state: Mapped[str] = mapped_column(String(24), default="derived")
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ProfileBucketPolicy(Base, TimestampMixin):
+    """Immutable version of an organization/workspace profile bucket policy."""
+
+    __tablename__ = "profile_bucket_policies"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "workspace_scope", "version"),
+        UniqueConstraint("organization_id", "workspace_scope", "idempotency_key"),
+        Index("ix_profile_bucket_policies_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    workspace_scope: Mapped[str] = mapped_column(String(36))
+    version: Mapped[int] = mapped_column(Integer)
+    buckets: Mapped[dict[str, list[str]]] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    actor_principal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("principals.id", ondelete="RESTRICT")
+    )
+
+
+class ProfileAssertionHistory(Base, TimestampMixin):
+    """Actor-attributed append-only correction/suppression history."""
+
+    __tablename__ = "profile_assertion_history"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "idempotency_key"),
+        Index("ix_profile_assertion_history_scope", "organization_id", "principal_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    assertion_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    assertion_key: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(24))
+    version: Mapped[int] = mapped_column(Integer)
+    prior_value: Mapped[str] = mapped_column(Text)
+    new_value: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trust: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float)
+    sensitivity: Mapped[str] = mapped_column(String(32), index=True)
+    decision_state: Mapped[str] = mapped_column(String(24))
+    citations: Mapped[list[str]] = mapped_column(JSON)
+    actor_principal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("principals.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_digest: Mapped[str] = mapped_column(String(64))
 
 
 class FactEvolution(Base, TimestampMixin):
