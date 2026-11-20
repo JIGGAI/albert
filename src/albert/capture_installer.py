@@ -151,7 +151,7 @@ def _package_version() -> str:
     try:
         return importlib.metadata.version("albert-memory")
     except importlib.metadata.PackageNotFoundError:
-        return "0.4.2"
+        return "0.4.3"
 
 
 def _verify_manifest(
@@ -589,7 +589,12 @@ def install_openclaw(
         entry = {
             "enabled": True,
             "hooks": {"allowPromptInjection": True, "allowConversationAccess": True},
-            "config": {"command": str(paths.wrapper), "timeoutMs": 1800},
+            "config": {
+                "transport": "native",
+                "credentialsFile": str(paths.credentials),
+                "command": str(paths.wrapper),
+                "timeoutMs": 1800,
+            },
         }
         _checked(
             runner,

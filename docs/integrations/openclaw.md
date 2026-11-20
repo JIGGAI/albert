@@ -23,9 +23,9 @@ not use an unversioned VCS URL or a floating branch. Before production use,
 verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.2
-python -m pip hash albert_memory-0.4.2-py3-none-any.whl
-gh attestation verify albert_memory-0.4.2-py3-none-any.whl --repo JIGGAI/albert
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.3
+python -m pip hash albert_memory-0.4.3-py3-none-any.whl
+gh attestation verify albert_memory-0.4.3-py3-none-any.whl --repo JIGGAI/albert
 python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 
@@ -70,6 +70,55 @@ albert-capture doctor --smoke
 The token is read by hidden prompt. Albert stores it in an owned `0600` file and
 configures OpenClaw with a non-secret wrapper path. The token is never placed in
 arguments, process environment, stdout, or logs.
+
+## Transport: native (default since 0.4.3) or adapter
+
+The plugin that `albert-capture install` registers in OpenClaw has two transports,
+selected by `plugins.entries.albert-memory.config.transport`:
+
+| | `native` (default) | `adapter` (0.4.2 behaviour) |
+|---|---|---|
+| Where the work runs | inside the gateway process (`openclaw_plugin/native.js`) | one `albert-openclaw-adapter` Python process spawned per hook |
+| Recall before a prompt | one HTTP call to `/v1/context/session-start`, bounded by `recallTimeoutMs` (1500 ms); after two consecutive failures recall is skipped for `outageCooldownMs` (30 s) | spawn + import + HTTP, about 0.3 to 0.5 s; every call pays the full `timeoutMs` when the Brain hangs |
+| Capture (`session_start`, `agent_end`, `before_compaction`, `session_end`) | queued into a per-session lane that no hook waits for; the turn is never delayed by capture | awaited through **one global lane shared by every session**, so sessions serialise and a slow Brain delays all of them |
+| Brain unreachable | captures go straight to the encrypted queue (`capture.db.native`, AES-256-GCM with the install's queue key) and replay every 30 s; transport is not retried for `captureBackoffMs` after a failure | encrypted SQLite queue, replayed on the next hook |
+| Gateway restart mid-session | resynchronises with the server's `expected_sequence` on 409 | sequences persisted in a local SQLite state file |
+| Where the recall block is placed | `appendContext`: after the host's static system prompt, so the provider's cached prompt prefix survives | `prependContext` |
+
+Both transports read the same owner-only credential file, screen the same credential
+patterns before anything leaves the host, send the same capture contract (v1, profile
+`safe-default`, the same idempotency keys and provenance), and keep the install,
+doctor, rotate, revoke and uninstall flows unchanged. Set `transport: "adapter"` to
+roll back without reinstalling.
+
+Native transport settings (all optional): `credentialsFile` (written by the installer),
+`recallTimeoutMs`, `recallMaxItems` (8), `recallMaxCharacters` (6000),
+`captureTimeoutMs` (1500), `outageCooldownMs` (30000). The recall block is omitted
+entirely when the Brain returns nothing, so an empty workspace costs no tokens.
+
+### Why the change
+
+Measured on a DGX Spark running OpenClaw 2026.10.9 against a local Brain (turn = one
+`openclaw agent` CLI run, thinking off, local 27B model):
+
+| Scenario | adapter (0.4.2) | native |
+|---|---|---|
+| Recall call before the prompt | 320 to 450 ms (spawn + import + HTTP) | 76 to 150 ms |
+| Capture hooks on the turn's critical path | about 1 s (three spawns, awaited) | 0 (not awaited) |
+| 4 concurrent turns | 8.8 to 9.5 s each (global lane) | parallel |
+| Brain hung, per turn | timeout × hooks (6.1 to 6.9 s at 1800 ms) | one bounded recall, then skipped for the cooldown |
+| Brain stopped | fails open quickly | fails open quickly, captures queued and replayed |
+
+Two findings from the same measurements are worth knowing when reading recall
+numbers:
+
+- The 0.4.2 plugin read `event.currentUserMessage`, which this OpenClaw release does not
+  populate for CLI-originated turns (only `prompt` is set), so recall silently never ran
+  for them. The native transport falls back to `event.prompt`.
+- Injected context makes a reasoning model think longer. With the recall block present
+  the model produced 2 to 3 times the completion tokens for the same one-line prompt;
+  that, not transport, is the remaining per-turn cost, which is why the block is bounded
+  (`recallMaxItems`, `recallMaxCharacters`) and omitted when empty.
 
 ## Operate the connection
 

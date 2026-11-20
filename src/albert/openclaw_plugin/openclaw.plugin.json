@@ -10,6 +10,51 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "transport": {
+        "type": "string",
+        "enum": ["native", "adapter"],
+        "default": "native",
+        "description": "native: recall and capture from inside the gateway process; adapter: spawn albert-openclaw-adapter per hook (legacy)."
+      },
+      "credentialsFile": {
+        "type": "string",
+        "description": "Owner-only credential file written by albert-capture install (native transport)."
+      },
+      "recallTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 4500,
+        "default": 1500,
+        "description": "Bound on the single recall call made before each prompt (native transport)."
+      },
+      "recallMaxItems": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 8,
+        "description": "Most memories injected per prompt (native transport)."
+      },
+      "recallMaxCharacters": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 24000,
+        "default": 6000,
+        "description": "Size bound of the injected recall block (native transport)."
+      },
+      "captureTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 5000,
+        "default": 1500,
+        "description": "Bound on each capture write; slower writes go to the encrypted queue (native transport)."
+      },
+      "outageCooldownMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 600000,
+        "default": 30000,
+        "description": "After two consecutive recall failures, skip recall for this long (native transport)."
+      },
       "command": {
         "type": "string",
         "default": "albert-openclaw-adapter"
