@@ -8,11 +8,15 @@ import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 
 import {
+  ALBERT_TOOL_NAMES,
   EncryptedQueue,
   NativeCaptureClient,
   NativeOpenClawAdapter,
+  createAlbertTools,
+  createCorpusSupplement,
   loadCredentials,
   operationKey,
+  promptSupplement,
   screenText,
 } from "../../src/albert/openclaw_plugin/native.js";
 import plugin from "../../src/albert/openclaw_plugin/index.js";
@@ -76,6 +80,26 @@ function fakeBrain() {
       const session = state.sessions.get(match[1]);
       if (session) session.ended = true;
       return done(200, { id: match[1] });
+    }
+    if (url === "/v1/search") {
+      state.searches = (state.searches || 0) + 1;
+      return done(200, {
+        hits: [
+          { memory_id: "11111111-1111-4111-8111-111111111111", kind: "memory", subject: "MT-07", content: `About: ${body.query}`, score: 0.91, backends: ["lexical"], metadata: { source_trust: "verified" } },
+          { memory_id: null, kind: "relationship", subject: "rel", content: "x uses y", score: 0.4, backends: ["graph"], metadata: {} },
+        ],
+        degraded: [],
+      });
+    }
+    if (url === "/v1/memories" && request.method === "POST") {
+      state.stored = state.stored || [];
+      state.stored.push(body);
+      return done(201, { id: "22222222-2222-4222-8222-222222222222", memory_type: body.memory_type, content: body.content, subject: body.subject, sensitivity: body.sensitivity, status: "active", updated_at: "2026-11-21T00:00:00Z" });
+    }
+    match = url.match(/^\/v1\/memories\/([0-9a-f-]{36})$/i);
+    if (match && request.method === "GET") {
+      if (match[1].startsWith("00000000")) return done(404, { detail: "not found" });
+      return done(200, { id: match[1], subject: "MT-07", content: "line one\nline two\nline three", memory_type: "fact", sensitivity: "internal", status: "active", updated_at: "2026-11-21T00:00:00Z" });
     }
     if (url === "/v1/context/session-start") {
       state.recalls.push(body);
@@ -324,4 +348,74 @@ test("plugin with real credentials appends recall context from the native transp
   const [session] = [...brain.state.sessions.values()];
   assert.ok(session.events.some((event) => event.event_class === "assistant_outcome" && event.content === "done"));
   assert.ok(existsSync(join(dir, "capture.db.native")));
+});
+
+
+test("agent tools search, remember and read through the native client", async () => {
+  const runtime = makeRuntime();
+  const [search, remember, get] = createAlbertTools(() => runtime, { agentId: "main" });
+  assert.deepEqual([search.name, remember.name, get.name], [...ALBERT_TOOL_NAMES]);
+  for (const tool of [search, remember, get]) assert.equal(tool.parameters.type, "object");
+  const found = await search.execute("t1", { query: "what about the MT-07?", limit: 5 });
+  assert.match(found.content[0].text, /non-authoritative/);
+  assert.match(found.content[0].text, /About: what about the MT-07\?/);
+  assert.match(found.content[0].text, /\[verified\]/);
+  assert.equal(found.details.hits.length, 2);
+  const stored = await remember.execute("t2", { content: "The MT-07 was sold on 2026-11-20.", subject: "MT-07 sale", memory_type: "decision" });
+  assert.match(stored.content[0].text, /Stored in Albert as 22222222/);
+  assert.equal(brain.state.stored.at(-1).memory_type, "decision");
+  assert.equal(brain.state.stored.at(-1).metadata.agent, "main");
+  const refused = await remember.execute("t3", { content: "api_key: ABCDEFGH12345678" }).catch((error) => error);
+  assert.match(String(refused.message), /credential/);
+  const read = await get.execute("t4", { memory_id: "11111111-1111-4111-8111-111111111111" });
+  assert.match(read.content[0].text, /line one/);
+  const missing = await get.execute("t5", { memory_id: "00000000-0000-4000-8000-000000000000" });
+  assert.equal(missing.details.found, false);
+  const noRuntime = await createAlbertTools(() => null)[0].execute("t6", { query: "x" });
+  assert.equal(noRuntime.details.error, "albert_unavailable");
+});
+
+test("memory-core corpus supplement maps Albert hits to corpus results and reads by id", async () => {
+  const runtime = makeRuntime();
+  const supplement = createCorpusSupplement(() => runtime);
+  const results = await supplement.search({ query: "mt-07", maxResults: 5, agentId: "main" });
+  assert.equal(results.length, 1); // relationship hits without an id are dropped
+  assert.equal(results[0].corpus, "albert");
+  assert.equal(results[0].path, "albert://memory/11111111-1111-4111-8111-111111111111");
+  assert.match(results[0].provenanceLabel, /verified/);
+  const page = await supplement.get({ lookup: "albert://memory/11111111-1111-4111-8111-111111111111", fromLine: 2, lineCount: 1 });
+  assert.equal(page.content, "line two");
+  assert.equal(page.fromLine, 2);
+  assert.equal(await supplement.get({ lookup: "not-an-id" }), null);
+  assert.deepEqual(await createCorpusSupplement(() => null).search({ query: "x" }), []);
+});
+
+test("prompt supplement follows the tools that are actually available", () => {
+  assert.equal(promptSupplement({ availableTools: new Set(["albert_search", "albert_remember"]) }).length, 2);
+  assert.equal(promptSupplement({ availableTools: new Set(["albert_search"]) }).length, 1);
+  assert.equal(promptSupplement({ availableTools: new Set() }).length, 0);
+});
+
+test("plugin registers tools and supplements on hosts that support them", () => {
+  const registered = { tools: [], corpus: 0, prompt: 0 };
+  const api = {
+    pluginConfig: { credentialsFile: "/nonexistent/credentials.env" },
+    logger: { warn() {}, info() {} },
+    on() {},
+    registerTool(factory, opts) { registered.tools.push({ factory, names: opts?.names }); },
+    registerMemoryCorpusSupplement() { registered.corpus += 1; },
+    registerMemoryPromptSupplement() { registered.prompt += 1; },
+  };
+  plugin.register(api);
+  assert.equal(registered.tools.length, 1);
+  assert.deepEqual(registered.tools[0].names, [...ALBERT_TOOL_NAMES]);
+  assert.equal(registered.tools[0].factory.contextVersion, 2);
+  const tools = registered.tools[0].factory.create({ agentId: "main" });
+  assert.equal(tools.length, 3);
+  assert.equal(registered.corpus, 1);
+  assert.equal(registered.prompt, 1);
+  // opt-out
+  const none = { tools: 0 };
+  plugin.register({ ...api, pluginConfig: { ...api.pluginConfig, registerTools: false, corpusSupplement: false, promptSupplement: false }, registerTool() { none.tools += 1; }, registerMemoryCorpusSupplement() { none.tools += 1; }, registerMemoryPromptSupplement() { none.tools += 1; } });
+  assert.equal(none.tools, 0);
 });
