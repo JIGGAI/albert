@@ -176,3 +176,26 @@ def test_native_plugin_fixture_declares_real_openclaw_compatibility():
     ):
         assert f'api.on("{hook}"' in source
     assert "messages:" not in source
+
+
+def test_capture_profile_from_credential_file(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    credential_file = tmp_path / "credentials.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "ALBERT_API_URL": "https://brain.example",
+                "ALBERT_CAPTURE_TOKEN": "file-only-token",
+                "ALBERT_CAPTURE_QUEUE_KEY": generate_queue_key(),
+                "ALBERT_CAPTURE_QUEUE_PATH": str(tmp_path / "queue.db"),
+                "ALBERT_CAPTURE_PROFILE": "trusted-internal",
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(credential_file, 0o600)
+    monkeypatch.setenv("ALBERT_CAPTURE_CREDENTIAL_FILE", str(credential_file))
+    client, _state, _workspace = _client_from_environment()
+    try:
+        assert client.profile_key == "trusted-internal"
+    finally:
+        client.close()

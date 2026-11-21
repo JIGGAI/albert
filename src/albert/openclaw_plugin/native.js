@@ -101,6 +101,7 @@ export function loadCredentials(path) {
     queuePath: expandHome(values.ALBERT_CAPTURE_QUEUE_PATH || "~/.openclaw/albert/capture.db"),
     scope: values.ALBERT_CAPTURE_SCOPE || "openclaw:default",
     workspaceId: values.ALBERT_WORKSPACE_ID || undefined,
+    profileKey: values.ALBERT_CAPTURE_PROFILE || "safe-default",
   };
 }
 
@@ -261,6 +262,7 @@ export class NativeCaptureClient {
     this.token = options.token;
     this.queue = options.queue;
     this.workspaceId = options.workspaceId;
+    this.profileKey = options.profileKey || "safe-default";
     this.fetch = options.fetchImpl ?? globalThis.fetch;
     this.captureTimeoutMs = options.captureTimeoutMs ?? 1500;
     this.recallTimeoutMs = options.recallTimeoutMs ?? 1500;
@@ -327,7 +329,7 @@ export class NativeCaptureClient {
       version: CONTRACT_VERSION,
       client_session_id: clientSessionId.slice(0, 300),
       idempotency_key: idempotencyKey.slice(0, 200),
-      profile_key: "safe-default",
+      profile_key: this.profileKey,
       local_event_classes: [...this.localEvents].sort(),
       local_metadata_allowlists: null,
       metadata: {},
@@ -929,6 +931,7 @@ export function createNativeRuntime(options) {
     token: credentials.token,
     queue,
     workspaceId: credentials.workspaceId,
+    profileKey: credentials.profileKey,
     fetchImpl: options.fetchImpl,
     captureTimeoutMs: options.captureTimeoutMs,
     recallTimeoutMs: options.recallTimeoutMs,

@@ -419,3 +419,18 @@ test("plugin registers tools and supplements on hosts that support them", () => 
   plugin.register({ ...api, pluginConfig: { ...api.pluginConfig, registerTools: false, corpusSupplement: false, promptSupplement: false }, registerTool() { none.tools += 1; }, registerMemoryCorpusSupplement() { none.tools += 1; }, registerMemoryPromptSupplement() { none.tools += 1; } });
   assert.equal(none.tools, 0);
 });
+
+
+test("the capture profile from the credential file is sent when a session starts", async () => {
+  const { adapter, client } = makeRuntime();
+  client.profileKey = "trusted-internal";
+  adapter.sessionStart(envelope("session_start", { session_id: "prof-1", session_key: "agent:main:prof" }));
+  await settled(adapter);
+  assert.equal(brain.state.starts.at(-1).profile_key, "trusted-internal");
+  const dir = mkdtempSync(join(tmpdir(), "albert-prof-"));
+  const file = join(dir, "credentials.env");
+  writeFileSync(file, JSON.stringify({ ALBERT_CAPTURE_TOKEN: "t", ALBERT_CAPTURE_QUEUE_KEY: QUEUE_KEY, ALBERT_CAPTURE_PROFILE: "trusted-internal" }), { mode: 0o600 });
+  assert.equal(loadCredentials(file).profileKey, "trusted-internal");
+  writeFileSync(file, JSON.stringify({ ALBERT_CAPTURE_TOKEN: "t", ALBERT_CAPTURE_QUEUE_KEY: QUEUE_KEY }), { mode: 0o600 });
+  assert.equal(loadCredentials(file).profileKey, "safe-default");
+});

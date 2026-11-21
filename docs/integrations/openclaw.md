@@ -23,9 +23,9 @@ not use an unversioned VCS URL or a floating branch. Before production use,
 verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.5
-python -m pip hash albert_memory-0.4.5-py3-none-any.whl
-gh attestation verify albert_memory-0.4.5-py3-none-any.whl --repo JIGGAI/albert
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.6
+python -m pip hash albert_memory-0.4.6-py3-none-any.whl
+gh attestation verify albert_memory-0.4.6-py3-none-any.whl --repo JIGGAI/albert
 python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 
@@ -67,11 +67,15 @@ albert-capture install --api-url https://brain.example.com
 albert-capture doctor --smoke
 ```
 
+Add `--profile trusted-internal` for an internal agent whose own conclusions should be
+recalled as verified facts (the default `safe-default` keeps assistant outcomes
+untrusted); see the capture profiles section of [API_AND_MCP.md](../API_AND_MCP.md).
+
 The token is read by hidden prompt. Albert stores it in an owned `0600` file and
 configures OpenClaw with a non-secret wrapper path. The token is never placed in
 arguments, process environment, stdout, or logs.
 
-## Transport: native (default since 0.4.5) or adapter
+## Transport: native (default since 0.4.6) or adapter
 
 The plugin that `albert-capture install` registers in OpenClaw has two transports,
 selected by `plugins.entries.albert-memory.config.transport`:
@@ -96,7 +100,7 @@ Native transport settings (all optional): `credentialsFile` (written by the inst
 `captureTimeoutMs` (1500), `outageCooldownMs` (30000). The recall block is omitted
 entirely when the Brain returns nothing, so an empty workspace costs no tokens.
 
-### Agent tools and memory-core integration (0.4.5)
+### Agent tools and memory-core integration (0.4.6)
 
 With the native transport the plugin also gives the agent explicit memory operations and
 plugs into OpenClaw's own memory surface, all in-process:
