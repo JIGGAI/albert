@@ -138,6 +138,7 @@ def _apply(
             "evolution_id": str(evolution.id),
             "evolution_decision": evolution.decision,
             "evolution_citations": evolution.citations,
+            "freshness_at": _as_utc(evolution.effective_from).isoformat(),
             "quarantined": False,
             "quarantine_reviewed": evolution.reviewed_at is not None,
         }

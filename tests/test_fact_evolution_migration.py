@@ -60,3 +60,4 @@ def test_fact_evolution_migration_indexes_round_trip(tmp_path: Path) -> None:
 
     _alembic(project_root, database, "upgrade", "head")
     assert _fact_evolution_indexes(database) == EXPECTED_INDEXES
+    _alembic(project_root, database, "check")

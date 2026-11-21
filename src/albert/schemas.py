@@ -21,6 +21,8 @@ class ProfileAssertionRead(BaseModel):
     confidence: float
     sensitivity: Literal["public", "internal", "confidential", "restricted"]
     citations: list[UUID]
+    decay_multiplier: float = 1.0
+    decay_reason: str = "fresh"
 
 
 class StandingProfileRead(BaseModel):
@@ -198,6 +200,67 @@ class FactEvolutionHistory(BaseModel):
     count: int
     history_digest: str
     decisions: list[FactEvolutionRead]
+
+
+class DecayRule(BaseModel):
+    freshness_days: float = Field(default=30, ge=0)
+    half_life_days: float = Field(default=90, gt=0)
+    retention_days: float = Field(default=365, ge=0)
+    stale_state: Literal["mark", "demote"] = "demote"
+    protected: bool = False
+
+    @model_validator(mode="after")
+    def validate_retention(self):  # type: ignore[no-untyped-def]
+        if self.retention_days < self.freshness_days:
+            raise ValueError("retention_days must be at least freshness_days")
+        return self
+
+
+class DecayPolicyWrite(BaseModel):
+    rules: dict[str, DecayRule] = Field(min_length=1)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class DecayPolicyRollback(BaseModel):
+    version: int = Field(ge=1)
+
+
+class DecayPolicyRead(BaseModel):
+    id: UUID
+    workspace_id: UUID | None
+    version: int
+    rules: dict[str, DecayRule]
+    active: bool
+    rollback_of_version: int | None
+    created_by_principal_id: UUID
+    created_at: datetime
+
+
+class DecayRecompute(BaseModel):
+    as_of: datetime | None = None
+    policy_version: int | None = Field(default=None, ge=1)
+
+
+class DecayStateRead(BaseModel):
+    memory_id: UUID
+    policy_version: int
+    rule_class: str
+    freshness_at: datetime
+    evaluated_at: datetime
+    age_days: float
+    score_multiplier: float
+    stale: bool
+    protected: bool
+    reason: str
+
+
+class DecayRunRead(BaseModel):
+    policy_version: int
+    evaluated_at: datetime
+    evaluated: int
+    stale: int
+    protected: int
+    states: list[DecayStateRead]
 
 
 def _require_visible_text(value: str | None) -> str | None:

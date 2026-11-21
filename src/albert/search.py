@@ -14,13 +14,19 @@ from sqlalchemy.orm import Session
 from albert.config import get_settings
 from albert.embeddings import get_embedder
 from albert.graph_store import get_graph_store
-from albert.models import Memory, MemoryChunk
+from albert.models import DecayState, Memory, MemoryChunk
 from albert.recorder import cap_candidates, current_recorder, span
 from albert.schemas import SearchHit, SearchRequest, SearchResponse
 from albert.scope import in_workspace
 
 RRF_K = 60
 logger = logging.getLogger("albert.search")
+
+
+def _iso_utc(value: datetime) -> str:
+    return (
+        value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    ).isoformat()
 
 
 def _scope_conditions(
@@ -416,6 +422,34 @@ def hybrid_search(
                 ):
                     scores[key] += 1.0 / (RRF_K + 1)
                     contributions[key]["branch_preference"] = round(1.0 / (RRF_K + 1), 6)
+        memory_ids = {hit.memory_id for hit in hits.values() if hit.memory_id is not None}
+        decay_states = (
+            {
+                state.memory_id: state
+                for state in session.scalars(
+                    select(DecayState).where(
+                        DecayState.organization_id == organization_id,
+                        DecayState.memory_id.in_(memory_ids),
+                    )
+                )
+            }
+            if memory_ids
+            else {}
+        )
+        for key, hit in hits.items():
+            state = decay_states.get(hit.memory_id)
+            if state is None:
+                continue
+            scores[key] *= state.score_multiplier
+            contributions[key]["decay_multiplier"] = state.score_multiplier
+            hit.metadata["decay"] = {
+                "policy_version": state.policy_version,
+                "multiplier": state.score_multiplier,
+                "stale": state.stale,
+                "protected": state.protected,
+                "reason": state.reason,
+                "evaluated_at": _iso_utc(state.evaluated_at),
+            }
         ordered = sorted(hits, key=lambda key: scores[key], reverse=True)
         ordered = [key for key in ordered if not hits[key].metadata.get("quarantined")][
             : request.limit
@@ -434,6 +468,7 @@ def hybrid_search(
                     "kind": key.split(":", 1)[0],
                     "rank": rank,
                     "rrf": contributions[key],
+                    "decay": hits[key].metadata.get("decay"),
                     "backends": backend_names[key],
                 }
                 for rank, key in enumerate(ordered, start=1)
