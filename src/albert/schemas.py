@@ -21,6 +21,8 @@ class ProfileAssertionRead(BaseModel):
     confidence: float
     sensitivity: Literal["public", "internal", "confidential", "restricted"]
     citations: list[UUID]
+    decay_multiplier: float = 1.0
+    decay_reason: str = "fresh"
 
 
 class StandingProfileRead(BaseModel):
@@ -42,6 +44,103 @@ class ProfileMaterializationStatus(BaseModel):
     source_digest: str | None = None
     assertion_count: int = 0
     built_at: datetime | None = None
+
+
+class ProfileBucketPolicyWrite(BaseModel):
+    expected_version: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    buckets: dict[str, list[str]] = Field(min_length=1, max_length=32)
+
+    @field_validator("buckets")
+    @classmethod
+    def validate_buckets(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for bucket, memory_types in value.items():
+            if not bucket or len(bucket) > 64 or not bucket.replace("-", "").isalnum():
+                raise ValueError("bucket names must be short alphanumeric slugs")
+            cleaned = sorted({item.strip().lower() for item in memory_types if item.strip()})
+            if not cleaned or any(len(item) > 64 for item in cleaned):
+                raise ValueError("each bucket requires bounded memory types")
+            normalized[bucket] = cleaned
+        return normalized
+
+
+class ProfileBucketPolicyRead(BaseModel):
+    version: int
+    buckets: dict[str, list[str]]
+    actor_principal_id: UUID | None = None
+    created_at: datetime | None = None
+
+
+class ProfilePrincipalSummary(BaseModel):
+    principal_id: UUID
+    workspace_id: UUID | None
+    name: str
+    principal_type: str
+    materialized: bool
+    assertion_count: int
+    built_at: datetime | None
+
+
+class ProfilePrincipalPage(BaseModel):
+    items: list[ProfilePrincipalSummary]
+    total: int
+    offset: int
+    limit: int
+
+
+class ProfileAssertionAdminRead(BaseModel):
+    id: UUID
+    principal_id: UUID
+    bucket: str
+    value: str
+    valid_from: datetime
+    valid_until: datetime | None
+    trust: str
+    confidence: float
+    sensitivity: str
+    citations: list[UUID]
+    version: int
+    decision_state: str
+    suppressed: bool
+
+
+class ProfileAssertionPage(BaseModel):
+    items: list[ProfileAssertionAdminRead]
+    total: int
+    offset: int
+    limit: int
+
+
+class ProfileAssertionMutation(BaseModel):
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    value: str | None = Field(default=None, min_length=1, max_length=50_000)
+
+
+class ProfileAssertionHistoryRead(BaseModel):
+    id: UUID
+    assertion_id: UUID
+    action: str
+    version: int
+    prior_value: str
+    new_value: str
+    valid_from: datetime
+    valid_until: datetime | None
+    trust: str
+    confidence: float
+    sensitivity: str
+    decision_state: str
+    citations: list[UUID]
+    actor_principal_id: UUID
+    created_at: datetime
+
+
+class ProfileAssertionHistoryPage(BaseModel):
+    items: list[ProfileAssertionHistoryRead]
+    total: int
+    offset: int
+    limit: int
 
 
 class FactEvolutionCreate(BaseModel):
@@ -101,6 +200,67 @@ class FactEvolutionHistory(BaseModel):
     count: int
     history_digest: str
     decisions: list[FactEvolutionRead]
+
+
+class DecayRule(BaseModel):
+    freshness_days: float = Field(default=30, ge=0)
+    half_life_days: float = Field(default=90, gt=0)
+    retention_days: float = Field(default=365, ge=0)
+    stale_state: Literal["mark", "demote"] = "demote"
+    protected: bool = False
+
+    @model_validator(mode="after")
+    def validate_retention(self):  # type: ignore[no-untyped-def]
+        if self.retention_days < self.freshness_days:
+            raise ValueError("retention_days must be at least freshness_days")
+        return self
+
+
+class DecayPolicyWrite(BaseModel):
+    rules: dict[str, DecayRule] = Field(min_length=1)
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class DecayPolicyRollback(BaseModel):
+    version: int = Field(ge=1)
+
+
+class DecayPolicyRead(BaseModel):
+    id: UUID
+    workspace_id: UUID | None
+    version: int
+    rules: dict[str, DecayRule]
+    active: bool
+    rollback_of_version: int | None
+    created_by_principal_id: UUID
+    created_at: datetime
+
+
+class DecayRecompute(BaseModel):
+    as_of: datetime | None = None
+    policy_version: int | None = Field(default=None, ge=1)
+
+
+class DecayStateRead(BaseModel):
+    memory_id: UUID
+    policy_version: int
+    rule_class: str
+    freshness_at: datetime
+    evaluated_at: datetime
+    age_days: float
+    score_multiplier: float
+    stale: bool
+    protected: bool
+    reason: str
+
+
+class DecayRunRead(BaseModel):
+    policy_version: int
+    evaluated_at: datetime
+    evaluated: int
+    stale: int
+    protected: int
+    states: list[DecayStateRead]
 
 
 def _require_visible_text(value: str | None) -> str | None:

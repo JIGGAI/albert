@@ -398,6 +398,68 @@ class ProfileAssertion(Base):
     confidence: Mapped[float] = mapped_column(Float)
     sensitivity: Mapped[str] = mapped_column(String(32), index=True)
     citations: Mapped[list[str]] = mapped_column(JSON)
+    decay_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    decay_reason: Mapped[str] = mapped_column(String(100), default="fresh")
+    assertion_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    decision_state: Mapped[str] = mapped_column(String(24), default="derived")
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ProfileBucketPolicy(Base, TimestampMixin):
+    """Immutable version of an organization/workspace profile bucket policy."""
+
+    __tablename__ = "profile_bucket_policies"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "workspace_scope", "version"),
+        UniqueConstraint("organization_id", "workspace_scope", "idempotency_key"),
+        Index("ix_profile_bucket_policies_scope", "organization_id", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    workspace_scope: Mapped[str] = mapped_column(String(36))
+    version: Mapped[int] = mapped_column(Integer)
+    buckets: Mapped[dict[str, list[str]]] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    actor_principal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("principals.id", ondelete="RESTRICT")
+    )
+
+
+class ProfileAssertionHistory(Base, TimestampMixin):
+    """Actor-attributed append-only correction/suppression history."""
+
+    __tablename__ = "profile_assertion_history"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "idempotency_key"),
+        Index("ix_profile_assertion_history_scope", "organization_id", "principal_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    assertion_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    assertion_key: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(24))
+    version: Mapped[int] = mapped_column(Integer)
+    prior_value: Mapped[str] = mapped_column(Text)
+    new_value: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trust: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float)
+    sensitivity: Mapped[str] = mapped_column(String(32), index=True)
+    decision_state: Mapped[str] = mapped_column(String(24))
+    citations: Mapped[list[str]] = mapped_column(JSON)
+    actor_principal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("principals.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    request_digest: Mapped[str] = mapped_column(String(64))
 
 
 class FactEvolution(Base, TimestampMixin):
@@ -450,6 +512,57 @@ class FactEvolution(Base, TimestampMixin):
         ForeignKey("principals.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DecayPolicy(Base, TimestampMixin):
+    """Immutable version of tenant-scoped retrieval aging policy."""
+
+    __tablename__ = "decay_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "workspace_scope", "version", name="uq_decay_policy_version"
+        ),
+        Index("ix_decay_policies_scope", "organization_id", "workspace_id", "active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    workspace_scope: Mapped[str] = mapped_column(String(36))
+    version: Mapped[int] = mapped_column(Integer)
+    rules: Mapped[dict[str, Any]] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by_principal_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    rollback_of_version: Mapped[int | None] = mapped_column(Integer)
+
+
+class DecayState(Base, TimestampMixin):
+    """Rebuildable effective decay state; canonical memory content is untouched."""
+
+    __tablename__ = "decay_states"
+    __table_args__ = (
+        UniqueConstraint("memory_id", name="uq_decay_states_memory"),
+        Index("ix_decay_states_scope", "organization_id", "workspace_id", "stale"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("decay_policies.id", ondelete="CASCADE"), index=True
+    )
+    policy_version: Mapped[int] = mapped_column(Integer)
+    rule_class: Mapped[str] = mapped_column(String(64))
+    freshness_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    age_days: Mapped[float] = mapped_column(Float)
+    score_multiplier: Mapped[float] = mapped_column(Float)
+    stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    protected: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(String(100))
 
 
 class MemoryChunk(Base):
