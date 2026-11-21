@@ -280,6 +280,7 @@ def _client_from_environment() -> tuple[CaptureClient, CursorState]:
         os.environ.get("ALBERT_CAPTURE_QUEUE_PATH", "~/.cursor/albert/capture.db")
     ).expanduser()
     scope = os.environ.get("ALBERT_CAPTURE_SCOPE", "cursor:default")
+    profile_key = os.environ.get("ALBERT_CAPTURE_PROFILE", "safe-default") or "safe-default"
     timeout = max(0.1, min(5.0, float(os.environ.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
     recall_timeout = max(0.1, min(4.5, float(os.environ.get("ALBERT_RECALL_TIMEOUT", "4.0"))))
     queue = EncryptedQueue(queue_path, queue_key, scope)
@@ -295,6 +296,7 @@ def _client_from_environment() -> tuple[CaptureClient, CursorState]:
         local_event_classes=CURSOR_EVENTS,
         client=http,
         recall_timeout=recall_timeout,
+        profile_key=profile_key,
     )
     return client, CursorState(queue_path.with_suffix(".cursor-state.db"))
 

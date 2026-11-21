@@ -11,6 +11,9 @@ albert-claude-lifecycle install --api-url https://brain.example
 albert-claude-lifecycle doctor --smoke
 ```
 
+Add `--profile trusted-internal` when this Claude Code's own conclusions should be
+recalled as verified facts; the default keeps assistant outcomes untrusted.
+
 Then start a new Claude Code session: plain `claude` loads Albert.
 
 The token is collected with a hidden prompt. It is never accepted as an

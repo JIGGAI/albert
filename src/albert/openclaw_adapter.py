@@ -283,6 +283,7 @@ def _client_from_environment() -> tuple[CaptureClient, OpenClawState, str | None
         environment.get("ALBERT_CAPTURE_QUEUE_PATH", "~/.openclaw/albert/capture.db")
     ).expanduser()
     scope = environment.get("ALBERT_CAPTURE_SCOPE", "openclaw:default")
+    profile_key = environment.get("ALBERT_CAPTURE_PROFILE", "safe-default") or "safe-default"
     timeout = max(0.1, min(5.0, float(environment.get("ALBERT_CAPTURE_TIMEOUT", "1.0"))))
     recall_timeout = max(0.1, min(4.5, float(environment.get("ALBERT_RECALL_TIMEOUT", "4.0"))))
     queue = EncryptedQueue(queue_path, queue_key, scope)
@@ -298,6 +299,7 @@ def _client_from_environment() -> tuple[CaptureClient, OpenClawState, str | None
         local_event_classes=OPENCLAW_EVENTS,
         client=http,
         recall_timeout=recall_timeout,
+        profile_key=profile_key,
     )
     return (
         client,

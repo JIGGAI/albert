@@ -151,7 +151,7 @@ def _package_version() -> str:
     try:
         return importlib.metadata.version("albert-memory")
     except importlib.metadata.PackageNotFoundError:
-        return "0.4.5"
+        return "0.4.6"
 
 
 def _verify_manifest(
@@ -413,8 +413,24 @@ def _write_private(path: Path, content: str, mode: int) -> None:
     os.chmod(path, mode)
 
 
+CAPTURE_PROFILES = ("safe-default", "trusted-internal")
+
+
+def validate_profile(profile: str | None) -> str:
+    value = (profile or "safe-default").strip()
+    if value not in CAPTURE_PROFILES:
+        choices = ", ".join(CAPTURE_PROFILES)
+        raise InstallError(f"unknown capture profile {value!r}; choose one of {choices}")
+    return value
+
+
 def _credentials_text(
-    api_url: str, token: str, queue_key: str, queue_path: Path, workspace_id: str | None
+    api_url: str,
+    token: str,
+    queue_key: str,
+    queue_path: Path,
+    workspace_id: str | None,
+    profile: str = "safe-default",
 ) -> str:
     values = {
         "ALBERT_API_URL": api_url.rstrip("/"),
@@ -425,6 +441,8 @@ def _credentials_text(
     }
     if workspace_id:
         values["ALBERT_WORKSPACE_ID"] = workspace_id
+    if profile != "safe-default":
+        values["ALBERT_CAPTURE_PROFILE"] = profile
     return json.dumps(values, sort_keys=True) + "\n"
 
 
@@ -506,7 +524,9 @@ def install_openclaw(
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
     cloud_metadata: dict[str, object] | None = None,
     package_version: str | None = None,
+    profile: str = "safe-default",
 ) -> None:
+    profile = validate_profile(profile)
     version = _detect_openclaw(runner)
     installed_package_version = package_version or _package_version()
     try:
@@ -549,7 +569,7 @@ def install_openclaw(
         staged = InstallPaths(staging)
         _write_private(
             staged.credentials,
-            _credentials_text(api_url, token, queue_key, paths.queue, workspace_id),
+            _credentials_text(api_url, token, queue_key, paths.queue, workspace_id, profile),
             0o600,
         )
         _write_private(staged.wrapper, _wrapper_text(paths.credentials), 0o700)
@@ -1269,6 +1289,11 @@ def connect_command(
 def install_command(
     api_url: str = typer.Option(..., "--api-url", help="Direct self-hosted or managed Brain URL."),
     workspace_id: str | None = typer.Option(None, "--workspace-id"),
+    profile: str = typer.Option(
+        "safe-default",
+        "--profile",
+        help="Capture profile: safe-default (assistant outcomes untrusted) or trusted-internal.",
+    ),
 ) -> None:
     """Install the first ready adapter target (OpenClaw)."""
     try:
@@ -1278,6 +1303,7 @@ def install_command(
             token=token,
             workspace_id=workspace_id,
             paths=_default_paths(),
+            profile=profile,
         )
         typer.echo("Albert Memory installed for OpenClaw; live capture and recall passed.")
     except InstallError as exc:

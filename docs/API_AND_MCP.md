@@ -230,6 +230,16 @@ publish a profile without the `user_goal` override. Adapters recall with
 `trust_policy: label_untrusted`: untrusted memories are included, marked
 `[untrusted]`, and ranked below verified ones.
 
+A second built-in profile, **`trusted-internal`**, is identical to `safe-default`
+except that `assistant_outcome`, `selected_tool_outcome`, `decision`, `correction`
+and `failure_summary` are also `verified`, so what an internal agent concluded ranks
+with what its operator typed. Session bookkeeping events stay untrusted. Use it only
+where every participant is a trusted operator; a public-facing channel keeps
+`safe-default`. Both built-ins are readable at `GET /v1/capture/profiles/{key}` and
+neither can be published over. Installers select it with `--profile trusted-internal`
+(`albert-capture install`, `albert-claude-lifecycle install`); adapters read
+`ALBERT_CAPTURE_PROFILE` from the credential file.
+
 **Provenance.** A session and its events can carry where they came from
 (client, agent, project, repository remote, branch, ref, commit, task, run).
 Albert normalizes it before storage: the repository remote is kept only as a
