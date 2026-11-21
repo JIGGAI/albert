@@ -109,7 +109,12 @@ def _write_private(path: Path, content: str, mode: int) -> None:
 
 
 def _credential_text(
-    api_url: str, token: str, queue_key: str, queue_path: Path, workspace_id: str | None
+    api_url: str,
+    token: str,
+    queue_key: str,
+    queue_path: Path,
+    workspace_id: str | None,
+    profile: str = "safe-default",
 ) -> str:
     values = {
         "ALBERT_API_URL": api_url.rstrip("/"),
@@ -120,6 +125,8 @@ def _credential_text(
     }
     if workspace_id:
         values["ALBERT_WORKSPACE_ID"] = workspace_id
+    if profile != "safe-default":
+        values["ALBERT_CAPTURE_PROFILE"] = profile
     return json.dumps(values, sort_keys=True) + "\n"
 
 
@@ -278,6 +285,7 @@ def install_claude(
     api_url: str,
     token: str,
     workspace_id: str | None,
+    profile: str = "safe-default",
     paths: ClaudeInstallPaths,
     runner: Runner = _run,
     brain_check: Callable[[str, str, str, str | None], None] | None = None,
@@ -327,7 +335,7 @@ def install_claude(
     try:
         _write_private(
             staged.credentials,
-            _credential_text(api_url, token, queue_key, paths.queue, workspace_id),
+            _credential_text(api_url, token, queue_key, paths.queue, workspace_id, profile),
             0o600,
         )
         _write_private(staged.adapter, _adapter_text(paths.credentials), 0o700)
@@ -496,8 +504,15 @@ def install_command(
     workspace_id: str | None = typer.Option(None, "--workspace-id"),
     token_stdin: bool = typer.Option(False, "--token-stdin"),
     token_fd: int | None = typer.Option(None, "--token-fd", min=0),
+    profile: str = typer.Option(
+        "safe-default",
+        "--profile",
+        help="Capture profile: safe-default (assistant outcomes untrusted) or trusted-internal.",
+    ),
 ) -> None:
     try:
+        if profile not in ("safe-default", "trusted-internal"):
+            raise InstallError("unknown capture profile; choose safe-default or trusted-internal")
         if token_stdin and token_fd is not None:
             raise InstallError("choose only one private token input mode")
         if token_fd is not None:
@@ -514,6 +529,7 @@ def install_command(
             token=token.strip(),
             workspace_id=workspace_id,
             paths=_default_paths(),
+            profile=profile,
         )
         typer.echo("Albert Memory installed; start a new Claude Code session.")
     except (InstallError, OSError) as exc:

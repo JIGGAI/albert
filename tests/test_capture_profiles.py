@@ -320,3 +320,35 @@ async def test_profile_event_source_trust_overrides_per_class(client: httpx.Asyn
     assert outcome.status_code == 201, outcome.text
     assert goal.json()["source_trust"] == "verified"
     assert outcome.json()["source_trust"] == "untrusted"
+
+
+async def test_trusted_internal_built_in_profile(client: httpx.AsyncClient) -> None:
+    # readable like a published profile, without a row in the table
+    response = await client.get("/v1/capture/profiles/trusted-internal")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["profile_key"] == "trusted-internal"
+    assert body["event_source_trust"]["assistant_outcome"] == "verified"
+    assert body["event_source_trust"]["user_goal"] == "verified"
+    assert body["source_trust"] == "untrusted"  # session bookkeeping stays untrusted
+    assert sorted(body["allowed_event_classes"]) == sorted(
+        (await client.get("/v1/capture/profiles/safe-default")).json()["allowed_event_classes"]
+    )
+    # reserved: cannot be published over
+    taken = await client.post("/v1/capture/profiles", json=_profile("trusted-internal"))
+    assert taken.status_code == 422
+    # an assistant outcome captured under it is verified
+    started = await _start(client, "trusted-internal")
+    stored = await client.post(
+        f"/v1/capture/sessions/{started['id']}/events",
+        json=_event("assistant_outcome", content="The bike is a 2019 Yamaha MT-07."),
+    )
+    assert stored.status_code == 201, stored.text
+    assert stored.json()["source_trust"] == "verified"
+    # and the same event under safe-default stays untrusted
+    default = await _start(client, "safe-default")
+    stored = await client.post(
+        f"/v1/capture/sessions/{default['id']}/events",
+        json=_event("assistant_outcome", content="The bike is a 2019 Yamaha MT-07."),
+    )
+    assert stored.json()["source_trust"] == "untrusted"

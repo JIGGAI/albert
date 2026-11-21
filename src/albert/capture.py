@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -122,6 +123,59 @@ def _default_policy() -> CapturePolicy:
     )
 
 
+def _trusted_internal_policy() -> CapturePolicy:
+    """Built-in profile for internal agents whose outcomes are the point.
+
+    Identical to ``safe-default`` except that what the agent concluded, decided,
+    corrected or observed from its tools is treated as verified, so those memories
+    rank with the user's own statements. Use it only where every participant is a
+    trusted operator; a public-facing channel keeps ``safe-default``.
+    """
+    base = _default_policy()
+    return CapturePolicy(
+        **{
+            **base.__dict__,
+            "profile_key": "trusted-internal",
+            "event_source_trust": {
+                "user_goal": "verified",
+                "assistant_outcome": "verified",
+                "selected_tool_outcome": "verified",
+                "decision": "verified",
+                "correction": "verified",
+                "failure_summary": "verified",
+            },
+        }
+    )
+
+
+BUILT_IN_PROFILES: dict[str, Callable[[], CapturePolicy]] = {
+    "safe-default": _default_policy,
+    "trusted-internal": _trusted_internal_policy,
+}
+
+
+def _built_in_read(policy: CapturePolicy) -> CaptureProfileRead:
+    """Present a built-in profile through the same read model as a published one."""
+    return CaptureProfileRead(
+        id=uuid5(NAMESPACE_URL, f"albert:capture-profile:{policy.profile_key}"),
+        profile_key=policy.profile_key,
+        version=policy.version,
+        workspace_id=None,
+        allowed_event_classes=sorted(policy.allowed_event_classes),
+        metadata_allowlists=policy.metadata_allowlists,
+        event_bounds=policy.event_bounds,
+        sensitivity_floor=policy.sensitivity_floor,
+        source_trust=policy.source_trust,
+        retention_days=policy.retention_days,
+        raw_body_policy=policy.raw_body_policy,
+        secret_policy=policy.secret_policy,
+        derivative_policy=policy.derivative_policy,
+        deny_reasons=policy.deny_reasons,
+        event_source_trust=dict(policy.event_source_trust),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
 def _profile_policy(value: CaptureProfile) -> CapturePolicy:
     return CapturePolicy(
         profile_key=value.profile_key,
@@ -196,8 +250,9 @@ def _workspace(session: Session, auth: AuthContext, requested: UUID | None) -> U
 def _latest_policy(
     session: Session, auth: AuthContext, workspace_id: UUID | None, profile_key: str
 ) -> CapturePolicy:
-    if profile_key == "safe-default":
-        return _default_policy()
+    built_in = BUILT_IN_PROFILES.get(profile_key)
+    if built_in is not None:
+        return built_in()
     profile = session.scalar(
         select(CaptureProfile)
         .where(
@@ -533,8 +588,8 @@ def create_profile(
     session: Session = Depends(get_session),
 ) -> CaptureProfileRead:
     auth.require("capture.system")
-    if data.profile_key == "safe-default":
-        raise HTTPException(status_code=422, detail="safe-default is reserved")
+    if data.profile_key in BUILT_IN_PROFILES:
+        raise HTTPException(status_code=422, detail=f"{data.profile_key} is reserved")
     workspace_id = _workspace(session, auth, data.workspace_id)
     latest = session.scalar(
         select(CaptureProfile)
@@ -602,6 +657,9 @@ def get_profile(
     session: Session = Depends(get_session),
 ) -> CaptureProfileRead:
     auth.require("capture.write")
+    built_in = BUILT_IN_PROFILES.get(profile_key)
+    if built_in is not None:
+        return _built_in_read(built_in())
     resolved_workspace = _workspace(session, auth, workspace_id)
     profile = session.scalar(
         select(CaptureProfile)
