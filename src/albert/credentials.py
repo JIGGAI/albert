@@ -558,11 +558,21 @@ def manifest(token: str, session: Session = Depends(get_session)) -> dict:
     return _manifest(_open_link(session, token), token)
 
 
-@onboard_router.post("/{token}/redeem", status_code=201)
-def redeem(token: str, payload: Redeem, session: Session = Depends(get_session)) -> dict:
+def redeem_link(
+    session: Session,
+    token: str,
+    *,
+    agent_name: str,
+    capabilities: list[str] | None,
+) -> tuple[APIKey, str, ConnectionLink]:
+    """Claim a connection link once and mint the scoped key it promised.
+
+    Shared by the /onboard redeem route and the OAuth connector front. Raises the
+    same HTTPExceptions the route reports; the caller owns the response shape.
+    """
     link = _open_link(session, token)
     granted = set(link.capabilities or [])
-    requested = sorted(granted if payload.capabilities is None else set(payload.capabilities))
+    requested = sorted(granted if capabilities is None else set(capabilities))
     if not requested or not set(requested) <= granted:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -591,7 +601,7 @@ def redeem(token: str, payload: Redeem, session: Session = Depends(get_session))
         session,
         organization_id=link.organization_id,
         workspace_id=link.workspace_id,
-        name=payload.agent_name,
+        name=agent_name,
         capabilities=requested,
     )
     session.execute(
@@ -611,6 +621,15 @@ def redeem(token: str, payload: Redeem, session: Session = Depends(get_session))
         detail={"api_key_id": str(key.id), "capabilities": requested},
     )
     session.commit()
+    return key, raw, link
+
+
+@onboard_router.post("/{token}/redeem", status_code=201)
+def redeem(token: str, payload: Redeem, session: Session = Depends(get_session)) -> dict:
+    key, raw, _link = redeem_link(
+        session, token, agent_name=payload.agent_name, capabilities=payload.capabilities
+    )
+    requested = sorted(key.capabilities or [])
     config = get_settings()
     return {
         "agent": {"id": str(key.principal_id), "name": payload.agent_name},

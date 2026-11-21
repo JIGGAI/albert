@@ -114,6 +114,36 @@ class ConnectionLink(Base, TimestampMixin):
     )
 
 
+class OAuthClient(Base, TimestampMixin):
+    """An OAuth client registered dynamically (RFC 7591) to use the MCP server."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    client_name: Mapped[str] = mapped_column(String(200))
+    client_uri: Mapped[str | None] = mapped_column(String(500))
+    redirect_uris: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class OAuthAuthorizationCode(Base, TimestampMixin):
+    """A pending authorization code and the sealed credential it will release once."""
+
+    __tablename__ = "oauth_authorization_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
+    client_id: Mapped[str] = mapped_column(String(500), index=True)
+    redirect_uri: Mapped[str] = mapped_column(String(2000))
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    scope: Mapped[str | None] = mapped_column(String(200))
+    resource: Mapped[str | None] = mapped_column(String(2000))
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="SET NULL")
+    )
+    credential: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class Episode(Base, TimestampMixin):
     __tablename__ = "episodes"
     __table_args__ = (

@@ -23,9 +23,9 @@ not use an unversioned VCS URL or a floating branch. Before production use,
 verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.3
-python -m pip hash albert_memory-0.4.3-py3-none-any.whl
-gh attestation verify albert_memory-0.4.3-py3-none-any.whl --repo JIGGAI/albert
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.4
+python -m pip hash albert_memory-0.4.4-py3-none-any.whl
+gh attestation verify albert_memory-0.4.4-py3-none-any.whl --repo JIGGAI/albert
 python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 
@@ -71,7 +71,7 @@ The token is read by hidden prompt. Albert stores it in an owned `0600` file and
 configures OpenClaw with a non-secret wrapper path. The token is never placed in
 arguments, process environment, stdout, or logs.
 
-## Transport: native (default since 0.4.3) or adapter
+## Transport: native (default since 0.4.4) or adapter
 
 The plugin that `albert-capture install` registers in OpenClaw has two transports,
 selected by `plugins.entries.albert-memory.config.transport`:

@@ -35,6 +35,7 @@ from albert.fact_evolution import (
 )
 from albert.graph_store import get_graph_store
 from albert.models import Episode
+from albert.oauth import router as oauth_router
 from albert.portability import export_bundle, import_bundle
 from albert.profile_admin import (
     list_assertions,
@@ -153,6 +154,7 @@ app.include_router(console_map_router)
 app.include_router(console_ops_router)
 app.include_router(settings_router)
 app.include_router(onboard_router)
+app.include_router(oauth_router)
 
 
 @app.get("/v1/decay/policy", response_model=DecayPolicyRead, tags=["decay"])

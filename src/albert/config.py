@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Handed to agents that redeem a connection link; set both to the addresses
     # agents actually reach, not loopback, when they run elsewhere.
     public_mcp_url: str = "http://localhost:8081/mcp"
+    # Public HTTPS origin that serves /oauth/*, /.well-known/* and the MCP endpoint, for
+    # example https://brain.example.com. Unset keeps the OAuth connector front disabled.
+    oauth_issuer: str | None = None
     log_level: str = "INFO"
 
     embedding_provider: Literal["hashing", "sentence-transformers", "openai-compatible"] = "hashing"

@@ -3,7 +3,7 @@
 **Shared memory for AI agents that's safe to trust: self-hosted, multi-tenant, and built so untrusted content can't steer your agents.**
 
 [![CI](https://github.com/JIGGAI/albert/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JIGGAI/albert/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.4.3-blue)
+![Version](https://img.shields.io/badge/version-0.4.4-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-22%20tools-5A45FF)
@@ -548,6 +548,7 @@ memory rather than stuck. Setup per host: [integration handbook](docs/integratio
 | [Providers](docs/PROVIDERS.md) | Embedding and classification models |
 | [Security](docs/SECURITY.md) | Trust boundaries, the memory-safety pass, keys, sensitivity, what the console can see |
 | [Integration handbook](docs/integrations/README.md) | Connecting Claude Code, Codex, Cursor, OpenClaw, REST clients |
+| [claude.ai connector](docs/integrations/claude-ai-connector.md) | Adding Albert to claude.ai, Claude Desktop and mobile as an OAuth-protected remote MCP connector |
 | [TypeScript SDK](docs/integrations/typescript-sdk.md) | Typed server/browser clients, compatibility, retries, and credential boundaries |
 | [Automatic-memory release gate](docs/AUTOMATIC_MEMORY_RELEASE.md) | Supported hosts, SLOs, rollback, beta limits, release evidence |
 | [Status](docs/STATUS.md) | What is done, and what is not |
