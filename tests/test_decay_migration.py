@@ -27,6 +27,7 @@ def test_decay_migration_round_trip(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     database = tmp_path / "decay-migration.sqlite3"
     _alembic(project_root, database, "upgrade", "0019")
+    _alembic(project_root, database, "upgrade", "head")
     _alembic(project_root, database, "check")
     with sqlite3.connect(database) as connection:
         tables = {

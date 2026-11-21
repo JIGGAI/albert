@@ -151,7 +151,7 @@ def _package_version() -> str:
     try:
         return importlib.metadata.version("albert-memory")
     except importlib.metadata.PackageNotFoundError:
-        return "0.4.3"
+        return "0.4.4"
 
 
 def _verify_manifest(

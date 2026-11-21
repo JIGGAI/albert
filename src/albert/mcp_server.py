@@ -23,8 +23,30 @@ mcp = MCPServer(
 _request_api_key: ContextVar[str | None] = ContextVar("albert_mcp_request_api_key", default=None)
 
 
+def _oauth_issuer() -> str:
+    """Public origin of the OAuth front (ALBERT_OAUTH_ISSUER); empty when the connector is off."""
+    return os.environ.get("ALBERT_OAUTH_ISSUER", "").rstrip("/")
+
+
+def _protected_resource_metadata() -> dict[str, Any]:
+    issuer = _oauth_issuer()
+    return {
+        "resource": os.environ.get("ALBERT_PUBLIC_MCP_URL", f"{issuer}/mcp"),
+        "authorization_servers": [issuer],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["memory"],
+        "resource_name": "Albert memory",
+    }
+
+
 class ForwardBearerAuth:
-    """Require an Albert bearer key and make it available to the REST adapter."""
+    """Require an Albert bearer key and make it available to the REST adapter.
+
+    With ALBERT_OAUTH_ISSUER set, an unauthenticated request gets the RFC 9728 pointer
+    (``WWW-Authenticate: Bearer resource_metadata=...``) that lets claude.ai and
+    Claude Code discover the OAuth front, and the resource metadata document itself is
+    served here too, so a deployment without path routing still works.
+    """
 
     def __init__(self, app):  # type: ignore[no-untyped-def]
         self.app = app
@@ -33,14 +55,27 @@ class ForwardBearerAuth:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        issuer = _oauth_issuer()
+        path = scope.get("path", "")
+        if issuer and scope.get("method") == "GET" and (
+            path == "/.well-known/oauth-protected-resource"
+            or path.startswith("/.well-known/oauth-protected-resource/")
+        ):
+            await JSONResponse(_protected_resource_metadata())(scope, receive, send)
+            return
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         authorization = headers.get(b"authorization", b"").decode("latin-1")
         scheme, _, value = authorization.partition(" ")
         if scheme.casefold() != "bearer" or not value:
+            challenge = "Bearer"
+            if issuer:
+                challenge = (
+                    f'Bearer resource_metadata="{issuer}/.well-known/oauth-protected-resource"'
+                )
             response = JSONResponse(
                 {"detail": "Bearer API key required"},
                 status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": challenge},
             )
             await response(scope, receive, send)
             return

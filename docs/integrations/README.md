@@ -10,6 +10,7 @@ to use memory safely in day-to-day work.
    - [Codex](codex.md)
    - [Claude Desktop and Claude Code MCP](claude-desktop.md)
    - [Claude Code automatic memory](claude-code.md)
+   - [claude.ai connector: web, Desktop and mobile over OAuth](claude-ai-connector.md)
    - [Cursor](cursor.md)
    - [OpenClaw](openclaw.md)
    - [Direct REST clients](rest-client.md)
