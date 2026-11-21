@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
-import { createNativeRuntime } from "./native.js";
+import { ALBERT_TOOL_NAMES, createAlbertTools, createCorpusSupplement, createNativeRuntime, promptSupplement } from "./native.js";
 
 const MAX_OUTPUT_BYTES = 20_000;
 const MAX_SUMMARY_CHARACTERS = 4_000;
@@ -95,6 +95,22 @@ function registerNativeTransport(api, config) {
     if (current) current.client.flush().catch(() => {});
   }, 30_000);
   flushTimer.unref?.();
+
+  // Agent-facing tools (albert_search / albert_remember / albert_get), the memory-core corpus
+  // supplement (memory_search also returns Albert hits) and a short prompt supplement. Each is
+  // optional and skipped on hosts that lack the API.
+  if (config.registerTools !== false && typeof api.registerTool === "function") {
+    api.registerTool(
+      { contextVersion: 2, create: (ctx) => createAlbertTools(ensureRuntime, { agentId: ctx?.agentId }) },
+      { names: [...ALBERT_TOOL_NAMES] },
+    );
+  }
+  if (config.corpusSupplement !== false && typeof api.registerMemoryCorpusSupplement === "function") {
+    api.registerMemoryCorpusSupplement(createCorpusSupplement(ensureRuntime));
+  }
+  if (config.promptSupplement !== false && typeof api.registerMemoryPromptSupplement === "function") {
+    api.registerMemoryPromptSupplement(promptSupplement);
+  }
 
   api.on("session_start", (event, ctx) => {
     const current = ensureRuntime();

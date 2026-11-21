@@ -84,10 +84,10 @@ def cloud_contract(
     adapter = {
         "artifact_sha256": "a" * 64,
         "artifact_signature": f"github-oidc-dsse:sha256:{'a' * 64}",
-        "artifact_url": "https://releases.example.com/albert-memory-0.4.4.whl",
+        "artifact_url": "https://releases.example.com/albert-memory-0.4.5.whl",
         "family": family,
         "package": "albert-memory",
-        "package_version": "0.4.4",
+        "package_version": "0.4.5",
     }
     now = datetime.now(UTC)
     manifest: dict[str, object] = {
@@ -194,7 +194,7 @@ def test_install_is_private_and_never_places_credentials_in_commands(tmp_path: P
     install(paths, runner)
 
     assert paths.marker.exists() and paths.wrapper.exists()
-    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.4"
+    assert json.loads(paths.marker.read_text())["package_version"] == "0.4.5"
     assert stat_mode(paths.credentials) == 0o600
     assert stat_mode(paths.wrapper) == 0o700
     assert all(
@@ -444,14 +444,14 @@ def test_signed_cloud_connect_redeems_in_memory_and_persists_only_safe_metadata(
         paths=paths,
         runner=runner,
         trust=trust,
-        package_version="0.4.4",
+        package_version="0.4.5",
         http=client,
     )
 
     values = json.loads(paths.credentials.read_text())
     marker = json.loads(paths.marker.read_text())
     assert values["ALBERT_CAPTURE_TOKEN"] == credential
-    assert marker["package_version"] == "0.4.4"
+    assert marker["package_version"] == "0.4.5"
     assert marker["cloud"] == {
         "brain_id": "brain-1",
         "connection_id": "connection-1",
@@ -513,7 +513,7 @@ def test_connect_failure_restores_predecessor_and_compensates_only_replacement(
             paths=paths,
             runner=failing,
             trust=trust,
-            package_version="0.4.4",
+            package_version="0.4.5",
             http=httpx.Client(transport=httpx.MockTransport(handler)),
         )
 
@@ -532,7 +532,7 @@ def test_manifest_rejects_tampering_and_untrusted_release():
             link_url=link,
             family="openclaw",
             trust=trust,
-            package_version="0.4.4",
+            package_version="0.4.5",
         )
 
     _, clean_manifest, clean_trust = cloud_contract()
@@ -566,7 +566,7 @@ def test_manifest_requires_bearer_authorization_scheme():
             link_url=link,
             family="openclaw",
             trust=trust,
-            package_version="0.4.4",
+            package_version="0.4.5",
         )
 
 
@@ -823,12 +823,12 @@ def test_manifest_is_bound_to_the_host_family_it_was_issued_for():
     link, manifest, trust = cloud_contract(family="claude-code")
 
     _verify_manifest(
-        manifest, link_url=link, family="claude-code", trust=trust, package_version="0.4.4"
+        manifest, link_url=link, family="claude-code", trust=trust, package_version="0.4.5"
     )
     for other in ("openclaw", "codex"):
         with pytest.raises(InstallError, match="provenance"):
             _verify_manifest(
-                manifest, link_url=link, family=other, trust=trust, package_version="0.4.4"
+                manifest, link_url=link, family=other, trust=trust, package_version="0.4.5"
             )
 
 
@@ -856,5 +856,5 @@ def test_manifest_reload_contract_must_match_the_shipped_host_target():
 
     with pytest.raises(InstallError, match="endpoint binding"):
         _verify_manifest(
-            manifest, link_url=link, family="codex", trust=trust, package_version="0.4.4"
+            manifest, link_url=link, family="codex", trust=trust, package_version="0.4.5"
         )

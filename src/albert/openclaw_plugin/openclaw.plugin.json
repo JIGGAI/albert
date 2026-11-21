@@ -2,9 +2,18 @@
   "id": "albert-memory",
   "name": "Albert Memory",
   "description": "Bounded cited recall and minimized lifecycle capture for OpenClaw.",
-  "categories": ["memory"],
+  "categories": [
+    "memory"
+  ],
   "activation": {
     "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "albert_get",
+      "albert_remember",
+      "albert_search"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -12,7 +21,10 @@
     "properties": {
       "transport": {
         "type": "string",
-        "enum": ["native", "adapter"],
+        "enum": [
+          "native",
+          "adapter"
+        ],
         "default": "native",
         "description": "native: recall and capture from inside the gateway process; adapter: spawn albert-openclaw-adapter per hook (legacy)."
       },
@@ -54,6 +66,21 @@
         "maximum": 600000,
         "default": 30000,
         "description": "After two consecutive recall failures, skip recall for this long (native transport)."
+      },
+      "registerTools": {
+        "type": "boolean",
+        "default": true,
+        "description": "Register albert_search, albert_remember and albert_get as agent tools (native transport)."
+      },
+      "corpusSupplement": {
+        "type": "boolean",
+        "default": true,
+        "description": "Let OpenClaw's memory_search/memory_get also return Albert memories (native transport)."
+      },
+      "promptSupplement": {
+        "type": "boolean",
+        "default": true,
+        "description": "Add a short Albert guidance section to the memory prompt (native transport)."
       },
       "command": {
         "type": "string",

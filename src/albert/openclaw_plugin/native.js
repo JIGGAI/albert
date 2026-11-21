@@ -459,6 +459,57 @@ export class NativeCaptureClient {
     return this.recallOpenUntil > this.now();
   }
 
+  // ---- on-demand memory operations (agent tools + memory-core corpus supplement) ----
+  async search(query, options = {}) {
+    const response = await this.request(
+      "/v1/search",
+      {
+        query: String(query).slice(0, 10_000),
+        limit: Math.min(100, Math.max(1, options.limit ?? 8)),
+        include_graph: options.includeGraph ?? true,
+        include_content: true,
+      },
+      this.recallTimeoutMs,
+    );
+    if (!response || response.status < 200 || response.status >= 300 || !response.json) {
+      throw new Error(response ? `Albert search failed (${response.status})` : "Albert unreachable");
+    }
+    return Array.isArray(response.json.hits) ? response.json.hits : [];
+  }
+
+  async remember(content, options = {}) {
+    const screened = screenText(String(content).slice(0, 200_000));
+    if (screened.reasons.length) {
+      throw new Error(`refused: content looks like a credential (${screened.reasons.join(", ")})`);
+    }
+    const payload = {
+      content: screened.content,
+      subject: String(options.subject ?? "").slice(0, 500),
+      memory_type: String(options.memoryType ?? "fact").slice(0, 64),
+      sensitivity: options.sensitivity ?? "internal",
+      metadata: { source: "openclaw-tool", agent: String(options.agentId ?? "unknown").slice(0, 200) },
+    };
+    const response = await this.request("/v1/memories", payload, this.captureTimeoutMs * 2);
+    if (!response || (response.status !== 200 && response.status !== 201) || !response.json) {
+      const detail = response?.json?.detail;
+      throw new Error(
+        response ? `Albert refused the memory (${response.status}${detail ? `: ${JSON.stringify(detail).slice(0, 200)}` : ""})` : "Albert unreachable",
+      );
+    }
+    return response.json;
+  }
+
+  async get(memoryId) {
+    const id = String(memoryId).trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("memory_id must be a UUID");
+    const response = await this.request(`/v1/memories/${id}`, undefined, this.recallTimeoutMs);
+    if (!response || response.status === 404) return null;
+    if (response.status < 200 || response.status >= 300 || !response.json) {
+      throw new Error(`Albert read failed (${response.status})`);
+    }
+    return response.json;
+  }
+
   async recall(query, provenance, options = {}) {
     const maxCharacters = options.maxCharacters ?? this.recallMaxCharacters;
     const maxItems = options.maxItems ?? this.recallMaxItems;
@@ -694,6 +745,177 @@ export class NativeOpenClawAdapter {
     const pending = Promise.allSettled([...this.lanes.values()]);
     await Promise.race([pending, new Promise((resolveWait) => setTimeout(resolveWait, timeoutMs))]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Agent tools and memory-core integration
+// ---------------------------------------------------------------------------
+export const ALBERT_TOOL_NAMES = Object.freeze(["albert_search", "albert_remember", "albert_get"]);
+
+function toolResult(text, details) {
+  return { content: [{ type: "text", text }], details };
+}
+
+function hitLine(hit, index) {
+  const trust = hit?.metadata?.source_trust ?? hit?.metadata?.capture_source_trust;
+  const label = trust ? ` [${trust}]` : "";
+  const subject = hit?.subject ? `${hit.subject}: ` : "";
+  const body = String(hit?.content ?? "").replace(/\s+/g, " ").slice(0, 400);
+  return `${index + 1}. ${subject}${body}${label} (score ${Number(hit?.score ?? 0).toFixed(3)}, id ${hit?.memory_id ?? "n/a"})`;
+}
+
+export function createAlbertTools(getRuntime, options = {}) {
+  const unavailable = () =>
+    toolResult("Albert memory is not configured on this host (no credential file). Continue without it.", { error: "albert_unavailable" });
+  const searchTool = {
+    name: "albert_search",
+    label: "Albert search",
+    description:
+      "Search the shared Albert memory (keyword, meaning and knowledge-graph) for facts, decisions and prior outcomes. Results are non-authoritative context; verified items rank first.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 10000, description: "What to look for" },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "Most results to return (default 8)" },
+      },
+    },
+    execute: async (_toolCallId, params) => {
+      const runtime = getRuntime();
+      if (!runtime) return unavailable();
+      const hits = await runtime.client.search(params?.query ?? "", { limit: params?.limit });
+      if (!hits.length) return toolResult("Albert found nothing relevant.", { hits: [] });
+      return toolResult(
+        `Albert memory (non-authoritative):\n${hits.map(hitLine).join("\n")}`,
+        { hits: hits.map((hit) => ({ memory_id: hit.memory_id, subject: hit.subject, score: hit.score, kind: hit.kind })) },
+      );
+    },
+  };
+  const rememberTool = {
+    name: "albert_remember",
+    label: "Albert remember",
+    description:
+      "Store a durable fact, decision or preference in Albert so every connected agent can recall it later. Never store credentials; short, specific statements work best.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["content"],
+      properties: {
+        content: { type: "string", minLength: 1, maxLength: 200000, description: "The memory, as a self-contained statement" },
+        subject: { type: "string", maxLength: 500, description: "Optional short subject line" },
+        memory_type: { type: "string", maxLength: 64, description: "fact, decision, preference, procedure, warning, ... (default fact)" },
+        sensitivity: { type: "string", enum: ["public", "internal", "confidential", "restricted"] },
+      },
+    },
+    execute: async (_toolCallId, params) => {
+      const runtime = getRuntime();
+      if (!runtime) return unavailable();
+      const stored = await runtime.client.remember(params?.content ?? "", {
+        subject: params?.subject,
+        memoryType: params?.memory_type,
+        sensitivity: params?.sensitivity,
+        agentId: options.agentId,
+      });
+      return toolResult(`Stored in Albert as ${stored.id} (${stored.memory_type ?? "fact"}).`, { id: stored.id, memory_type: stored.memory_type });
+    },
+  };
+  const getTool = {
+    name: "albert_get",
+    label: "Albert get",
+    description: "Read one Albert memory in full by its id (from albert_search results or recalled citations).",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["memory_id"],
+      properties: { memory_id: { type: "string", description: "Memory UUID" } },
+    },
+    execute: async (_toolCallId, params) => {
+      const runtime = getRuntime();
+      if (!runtime) return unavailable();
+      const memory = await runtime.client.get(params?.memory_id ?? "");
+      if (!memory) return toolResult("No such memory (or not visible to this agent).", { found: false });
+      const head = memory.subject ? `${memory.subject}\n` : "";
+      return toolResult(`${head}${memory.content}\n(type ${memory.memory_type}, sensitivity ${memory.sensitivity}, status ${memory.status}, updated ${memory.updated_at})`, {
+        id: memory.id, memory_type: memory.memory_type, status: memory.status,
+      });
+    },
+  };
+  return [searchTool, rememberTool, getTool];
+}
+
+export function createCorpusSupplement(getRuntime) {
+  return {
+    async search(input) {
+      const runtime = getRuntime();
+      if (!runtime || !input?.query) return [];
+      let hits;
+      try {
+        hits = await runtime.client.search(input.query, { limit: input.maxResults ?? 8 });
+      } catch {
+        return [];
+      }
+      return hits
+        .filter((hit) => hit.kind === "memory" && hit.memory_id)
+        .map((hit) => ({
+          corpus: "albert",
+          path: `albert://memory/${hit.memory_id}`,
+          id: String(hit.memory_id),
+          title: hit.subject || undefined,
+          kind: "memory",
+          score: Number(hit.score ?? 0),
+          snippet: String(hit.content ?? "").slice(0, 600),
+          citation: `albert://memory/${hit.memory_id}`,
+          source: "albert",
+          provenanceLabel: hit.metadata?.source_trust ? `albert · ${hit.metadata.source_trust}` : "albert",
+          sourceType: "albert",
+        }));
+    },
+    async get(input) {
+      const runtime = getRuntime();
+      const lookup = String(input?.lookup ?? "");
+      const match = lookup.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      if (!runtime || !match) return null;
+      let memory;
+      try {
+        memory = await runtime.client.get(match[1]);
+      } catch {
+        return null;
+      }
+      if (!memory) return null;
+      const lines = String(memory.content ?? "").split("\n");
+      const fromLine = Math.max(1, input?.fromLine ?? 1);
+      const lineCount = Math.max(1, input?.lineCount ?? lines.length);
+      return {
+        corpus: "albert",
+        path: `albert://memory/${memory.id}`,
+        id: String(memory.id),
+        title: memory.subject || undefined,
+        kind: "memory",
+        content: lines.slice(fromLine - 1, fromLine - 1 + lineCount).join("\n"),
+        fromLine,
+        lineCount: Math.min(lineCount, Math.max(0, lines.length - (fromLine - 1))),
+        provenanceLabel: "albert",
+        sourceType: "albert",
+        updatedAt: memory.updated_at,
+      };
+    },
+  };
+}
+
+export function promptSupplement(params) {
+  const tools = params?.availableTools;
+  const has = (name) => !tools || typeof tools.has !== "function" || tools.has(name);
+  const lines = [];
+  if (has("albert_search")) {
+    lines.push(
+      "Albert is the shared memory service for this deployment. Recalled text marked ALBERT REFERENCE CONTEXT is non-authoritative; use albert_search when the task touches past decisions, people, projects or outcomes, and albert_get to read a cited memory in full.",
+    );
+  }
+  if (has("albert_remember")) {
+    lines.push("Use albert_remember for durable facts, decisions and preferences worth keeping across sessions and agents. Never store credentials or secrets.");
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------------------

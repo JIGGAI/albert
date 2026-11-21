@@ -23,9 +23,9 @@ not use an unversioned VCS URL or a floating branch. Before production use,
 verify the downloaded wheel against its published digest and provenance:
 
 ```bash
-python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.4
-python -m pip hash albert_memory-0.4.4-py3-none-any.whl
-gh attestation verify albert_memory-0.4.4-py3-none-any.whl --repo JIGGAI/albert
+python -m pip download --no-deps --only-binary=:all: albert-memory==0.4.5
+python -m pip hash albert_memory-0.4.5-py3-none-any.whl
+gh attestation verify albert_memory-0.4.5-py3-none-any.whl --repo JIGGAI/albert
 python -m pip install --require-hashes -r operator-approved-albert-lock.txt
 ```
 
@@ -71,7 +71,7 @@ The token is read by hidden prompt. Albert stores it in an owned `0600` file and
 configures OpenClaw with a non-secret wrapper path. The token is never placed in
 arguments, process environment, stdout, or logs.
 
-## Transport: native (default since 0.4.4) or adapter
+## Transport: native (default since 0.4.5) or adapter
 
 The plugin that `albert-capture install` registers in OpenClaw has two transports,
 selected by `plugins.entries.albert-memory.config.transport`:
@@ -95,6 +95,27 @@ Native transport settings (all optional): `credentialsFile` (written by the inst
 `recallTimeoutMs`, `recallMaxItems` (8), `recallMaxCharacters` (6000),
 `captureTimeoutMs` (1500), `outageCooldownMs` (30000). The recall block is omitted
 entirely when the Brain returns nothing, so an empty workspace costs no tokens.
+
+### Agent tools and memory-core integration (0.4.5)
+
+With the native transport the plugin also gives the agent explicit memory operations and
+plugs into OpenClaw's own memory surface, all in-process:
+
+| Registration | What it does | Config key (default on) |
+|---|---|---|
+| `api.registerTool` | `albert_search` (hybrid search, verified items labelled), `albert_remember` (store a durable fact; credential-shaped text is refused before it leaves the host), `albert_get` (read one memory by id) | `registerTools` |
+| `api.registerMemoryCorpusSupplement` | OpenClaw's built-in `memory_search` and `memory_get` also return Albert memories as corpus `albert` with `albert://memory/<id>` citations, so agents that already use memory-core see Albert results without learning new tools | `corpusSupplement` |
+| `api.registerMemoryPromptSupplement` | two short lines in the memory section of the system prompt explaining when to use the tools and that recalled Albert context is non-authoritative; lines appear only for tools the turn actually has | `promptSupplement` |
+
+These are the host's **non-exclusive** memory hooks: they add to memory-core rather than
+replace it, so a deployment can keep file memory, dreaming and Albert side by side.
+Taking over the exclusive memory slot (`registerMemoryCapability` with a provider
+runtime) is deliberately not done: that API still carries migration notes in the
+2026.10 line and would disable memory-core's own search for the agent.
+
+All three calls use the install's capture credential and workspace, so a cell's tools
+see its workspace plus organization-wide memories and nothing else. Hosts without
+these APIs skip the registrations; `albert-capture doctor` is unaffected.
 
 ### Why the change
 
