@@ -36,6 +36,14 @@ from albert.fact_evolution import (
 from albert.graph_store import get_graph_store
 from albert.models import Episode
 from albert.portability import export_bundle, import_bundle
+from albert.profile_admin import (
+    list_assertions,
+    list_history,
+    list_principals,
+    mutate_assertion,
+    read_policy,
+    write_policy,
+)
 from albert.profiles import profile_status, read_profile, rebuild_profile
 from albert.provenance import normalize_provenance
 from albert.recorder import CANDIDATE_LIMIT, cap_candidates, current_recorder, span
@@ -67,7 +75,14 @@ from albert.schemas import (
     MemoryRead,
     MemorySafetyReview,
     MemoryUpdate,
+    ProfileAssertionAdminRead,
+    ProfileAssertionHistoryPage,
+    ProfileAssertionMutation,
+    ProfileAssertionPage,
+    ProfileBucketPolicyRead,
+    ProfileBucketPolicyWrite,
     ProfileMaterializationStatus,
+    ProfilePrincipalPage,
     RelationshipCreate,
     RelationshipRead,
     SearchRequest,
@@ -182,6 +197,90 @@ def read_memory_decay(
     session: Session = Depends(get_session),
 ) -> DecayStateRead:
     return read_decay_state(session, auth, memory_id)
+
+
+@app.get("/v1/profile-admin/policy", response_model=ProfileBucketPolicyRead, tags=["profiles"])
+def get_profile_policy(
+    auth: AuthContext = Depends(authenticate), session: Session = Depends(get_session)
+) -> ProfileBucketPolicyRead:
+    return read_policy(session, auth)
+
+
+@app.put("/v1/profile-admin/policy", response_model=ProfileBucketPolicyRead, tags=["profiles"])
+def put_profile_policy(
+    data: ProfileBucketPolicyWrite,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileBucketPolicyRead:
+    return write_policy(session, auth, data)
+
+
+@app.get("/v1/profile-admin/principals", response_model=ProfilePrincipalPage, tags=["profiles"])
+def get_profile_principals(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfilePrincipalPage:
+    return list_principals(session, auth, offset, limit)
+
+
+@app.get(
+    "/v1/profile-admin/principals/{principal_id}/assertions",
+    response_model=ProfileAssertionPage,
+    tags=["profiles"],
+)
+def get_profile_assertions(
+    principal_id: UUID,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileAssertionPage:
+    return list_assertions(session, auth, principal_id, offset, limit)
+
+
+@app.get(
+    "/v1/profile-admin/principals/{principal_id}/history",
+    response_model=ProfileAssertionHistoryPage,
+    tags=["profiles"],
+)
+def get_profile_history(
+    principal_id: UUID,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileAssertionHistoryPage:
+    return list_history(session, auth, principal_id, offset, limit)
+
+
+@app.post(
+    "/v1/profile-admin/assertions/{assertion_id}/correct",
+    response_model=ProfileAssertionAdminRead,
+    tags=["profiles"],
+)
+def correct_profile_assertion(
+    assertion_id: UUID,
+    data: ProfileAssertionMutation,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileAssertionAdminRead:
+    return mutate_assertion(session, auth, assertion_id, data, "correct")
+
+
+@app.post(
+    "/v1/profile-admin/assertions/{assertion_id}/suppress",
+    response_model=ProfileAssertionAdminRead,
+    tags=["profiles"],
+)
+def suppress_profile_assertion(
+    assertion_id: UUID,
+    data: ProfileAssertionMutation,
+    auth: AuthContext = Depends(authenticate),
+    session: Session = Depends(get_session),
+) -> ProfileAssertionAdminRead:
+    return mutate_assertion(session, auth, assertion_id, data, "suppress")
 
 
 @app.get("/v1/profile", response_model=StandingProfileRead, tags=["profiles"])

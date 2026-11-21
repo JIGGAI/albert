@@ -26,7 +26,7 @@ def _alembic(project_root: Path, database: Path, *arguments: str) -> None:
 def test_decay_migration_round_trip(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     database = tmp_path / "decay-migration.sqlite3"
-    _alembic(project_root, database, "upgrade", "0018")
+    _alembic(project_root, database, "upgrade", "0019")
     _alembic(project_root, database, "check")
     with sqlite3.connect(database) as connection:
         tables = {
@@ -36,7 +36,7 @@ def test_decay_migration_round_trip(tmp_path: Path) -> None:
         assert {"decay_policies", "decay_states"}.issubset(tables)
         columns = {row[1] for row in connection.execute("PRAGMA table_info('profile_assertions')")}
         assert {"decay_multiplier", "decay_reason"}.issubset(columns)
-    _alembic(project_root, database, "downgrade", "0017")
+    _alembic(project_root, database, "downgrade", "0018")
     with sqlite3.connect(database) as connection:
         assert (
             connection.execute(

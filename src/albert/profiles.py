@@ -17,6 +17,7 @@ from albert.models import (
     Memory,
     Principal,
     ProfileAssertion,
+    ProfileBucketPolicy,
     ProfileMaterialization,
     utcnow,
 )
@@ -122,12 +123,14 @@ def _view_digest(schema_version: str, rows: list[ProfileAssertion]) -> str:
 
 
 def _derive(
-    records: list[Memory], decay_states: dict[UUID, DecayState]
+    records: list[Memory],
+    buckets: dict[str, list[str]],
+    schema_version: str,
+    decay_states: dict[UUID, DecayState],
 ) -> tuple[list[dict[str, object]], str]:
-    settings = get_settings()
     bucket_for_type = {
         memory_type: bucket
-        for bucket, memory_types in settings.profile_buckets.items()
+        for bucket, memory_types in buckets.items()
         for memory_type in memory_types
     }
     grouped: dict[tuple[str, str], dict[str, object]] = {}
@@ -200,14 +203,14 @@ def _derive(
             assertion["decay_multiplier"] = decay_multiplier
             assertion["decay_reason"] = decay_reason
 
-    bucket_order = {name: index for index, name in enumerate(settings.profile_buckets)}
+    bucket_order = {name: index for index, name in enumerate(buckets)}
     assertions = sorted(
         grouped.values(),
         key=lambda item: (bucket_order[str(item["bucket"])], str(item["value"]).casefold()),
     )
     digest_payload = {
-        "schema_version": settings.profile_schema_version,
-        "buckets": settings.profile_buckets,
+        "schema_version": schema_version,
+        "buckets": buckets,
         "sources": sorted(source_rows, key=lambda row: str(row["id"])),
     }
     digest = hashlib.sha256(
@@ -221,6 +224,30 @@ def rebuild_profile(
 ) -> StandingProfileRead:
     principal = _target(session, auth, principal_id, "profile.rebuild")
     settings = get_settings()
+    policies = session.scalars(
+        select(ProfileBucketPolicy)
+        .where(
+            ProfileBucketPolicy.organization_id == principal.organization_id,
+            ProfileBucketPolicy.workspace_scope.in_(
+                [_workspace_scope(principal.workspace_id), "organization"]
+            ),
+        )
+        .order_by(ProfileBucketPolicy.version.desc())
+    ).all()
+    policy = next(
+        (
+            row
+            for row in policies
+            if row.workspace_scope == _workspace_scope(principal.workspace_id)
+        ),
+        next((row for row in policies if row.workspace_scope == "organization"), None),
+    )
+    buckets = policy.buckets if policy is not None else settings.profile_buckets
+    schema_version = (
+        f"{settings.profile_schema_version}.policy-{policy.version}"
+        if policy is not None
+        else settings.profile_schema_version
+    )
     with span("profile.materialize", principal_id=str(principal.id)) as handle:
         records = _canonical_memories(session, principal)
         memory_ids = [memory.id for memory in records]
@@ -234,21 +261,35 @@ def rebuild_profile(
             if memory_ids
             else {}
         )
-        assertions, digest = _derive(records, decay_states)
+        assertions, digest = _derive(records, buckets, schema_version, decay_states)
         materialization = _materialization(session, principal)
+        overrides: dict[str, tuple[str, int, str, bool]] = {}
         if materialization is None:
             materialization = ProfileMaterialization(
                 organization_id=principal.organization_id,
                 workspace_id=principal.workspace_id,
                 workspace_scope=_workspace_scope(principal.workspace_id),
                 principal_id=principal.id,
-                schema_version=settings.profile_schema_version,
-                bucket_config=settings.profile_buckets,
+                schema_version=schema_version,
+                bucket_config=buckets,
                 source_digest=digest,
             )
             session.add(materialization)
             session.flush()
         else:
+            for previous in session.scalars(
+                select(ProfileAssertion).where(
+                    ProfileAssertion.materialization_id == materialization.id,
+                    ProfileAssertion.decision_state != "derived",
+                )
+            ):
+                if previous.assertion_key:
+                    overrides[previous.assertion_key] = (
+                        previous.value,
+                        previous.version,
+                        previous.decision_state,
+                        previous.suppressed,
+                    )
             session.execute(
                 delete(ProfileAssertion).where(
                     ProfileAssertion.materialization_id == materialization.id
@@ -256,6 +297,18 @@ def rebuild_profile(
             )
             session.flush()
         for ordinal, item in enumerate(assertions):
+            assertion_key = hashlib.sha256(
+                json.dumps(
+                    {"bucket": item["bucket"], "citations": item["citations"]},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            override = overrides.get(assertion_key)
+            if override is not None:
+                item["value"], version, decision_state, suppressed = override
+            else:
+                version, decision_state, suppressed = 1, "derived", False
             session.add(
                 ProfileAssertion(
                     materialization_id=materialization.id,
@@ -263,11 +316,15 @@ def rebuild_profile(
                     workspace_id=principal.workspace_id,
                     principal_id=principal.id,
                     ordinal=ordinal,
+                    assertion_key=assertion_key,
+                    version=version,
+                    decision_state=decision_state,
+                    suppressed=suppressed,
                     **item,
                 )
             )
-        materialization.schema_version = settings.profile_schema_version
-        materialization.bucket_config = settings.profile_buckets
+        materialization.schema_version = schema_version
+        materialization.bucket_config = buckets
         materialization.source_digest = digest
         materialization.assertion_count = len(assertions)
         materialization.built_at = utcnow()
@@ -303,6 +360,7 @@ def _render_profile(
         .where(
             ProfileAssertion.materialization_id == materialization.id,
             ProfileAssertion.sensitivity.in_(allowed),
+            ProfileAssertion.suppressed.is_(False),
         )
         .order_by(ProfileAssertion.ordinal)
     ).all()
@@ -354,6 +412,7 @@ def profile_status(
         .where(
             ProfileAssertion.materialization_id == materialization.id,
             ProfileAssertion.sensitivity.in_(auth.allowed_sensitivities()),
+            ProfileAssertion.suppressed.is_(False),
         )
         .order_by(ProfileAssertion.ordinal)
     ).all()
