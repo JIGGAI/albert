@@ -15,7 +15,7 @@ again by meaning, by keyword and by relationship, and you get a live console
 that shows every memory, how it connects to the others, and exactly why a
 search returned what it did.
 
-![The memory map: clusters of related memories with one open in the reading pane](docs/images/console-map.png)
+![The memory map: scoped filters, named clusters and links between related memories](docs/images/console-map.png)
 
 ## Highlights
 
@@ -336,10 +336,11 @@ docs/                 guides (see below)
 
 ## The console
 
-Six screens. Five are read-only views fed by the flight recorder; Settings
-issues credentials and manages workspaces. The side menu shows what the
-console's key can see, and every view can be narrowed to one workspace (plus
-the organization-wide memories it shares) or to the shared memories alone.
+Ten top-level pages. Eight are observational views; **Workspaces** and
+**Settings** are the administrative pages. The side menu shows the organization
+or workspace scope the console's key can see. Data views can be narrowed to one
+workspace (plus the organization-wide memories it shares), all visible
+workspaces, or the shared memories alone.
 
 **Live** streams every request and job as it happens. **Replay** opens any one
 of them as a waterfall of its steps, with the candidates each backend returned
@@ -354,7 +355,7 @@ question: who is using memory, what does it hold, are searches finding things,
 is the knowledge graph being built, and is the service healthy. Each is its own
 page in the side menu; the console opens on Agents.
 
-![Retrieval quality: which backend earns the hits, which searches found nothing](docs/images/console-operations.png)
+![Retrieval quality: run an operator search, compare backend contribution and inspect misses and latency](docs/images/console-retrieval.png)
 
 **Backends** shows which graph store and graph builder are in use, proves the
 store is reachable, and gives the exact steps to switch.
@@ -363,8 +364,9 @@ store is reachable, and gives the exact steps to switch.
 its memories become organization-wide, move to another workspace, or are
 forgotten.
 
-**Settings** issues least-privilege API keys and one-time connection links, each held to a workspace or the whole
-organization and never wider than the console's own key.
+**Settings** issues least-privilege API keys and one-time connection links. Each
+credential is held to one workspace or the whole organization and can never be
+wider than the console's own key.
 
 ![Backends: stores and builders with live status and how to turn each on](docs/images/console-backends.png)
 
